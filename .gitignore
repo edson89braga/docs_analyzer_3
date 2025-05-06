@@ -1,0 +1,75 @@
+# Diretórios e arquivos específicos do Python
+
+__pycache__/
+
+*.py[cod]
+*$py.class
+*.so
+
+.Python
+
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Ambiente virtual
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Poetry
+.pytest_cache/
+.coverage
+
+# Arquivos de IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+
+# Diretórios específicos deste projeto (opcional)
+persistent_profile_main/
+logs/
+!logs/.gitkeep
+
+# Arquivos de log
+*.log
+*.txt
+
+# Outros:
+*.pdf
+*.docx
+*.xlsx
+*.bat
+*.db
+*.tmp
+
+credentials_fb.json
