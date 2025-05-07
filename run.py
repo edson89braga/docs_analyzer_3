@@ -1,6 +1,5 @@
 '''
 TODO:
-2) flet_ui: Incrementar objetos em theme.py, layout.py e components.py;
 3) flet_ui: Criar LoginPage e CredentialsDialog;
 4) Refazer plano operacional de tarefas baseado nos novos módulos;
 5) Deletar Repo docs_analyzer_2;

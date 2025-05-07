@@ -815,7 +815,7 @@ class CardWithHeader(ft.Card):
         header_title_weight: ft.FontWeight = ft.FontWeight.BOLD,
         header_padding: Union[None, ft.PaddingValue] = ft.padding.symmetric(horizontal=16, vertical=8),
         card_elevation: Optional[float] = 2,
-        card_margin: Union[None, ft.MarginValue] = 5,
+        card_margin: Union[None, ft.PaddingValue] = 5,
         expand: Union[None, bool, int] = None,
         # ... outros parâmetros de ft.Card
         **kwargs
@@ -838,7 +838,7 @@ class CardWithHeader(ft.Card):
             ),
             bgcolor=header_bgcolor,
             padding=header_padding,
-            border_radius=ft.border_radius.only(top_left=self.border_radius.top_left if self.border_radius else 5, top_right=self.border_radius.top_right if self.border_radius else 5)
+            #border_radius=ft.border_radius.only(top_left=self.border_radius.top_left if self.border_radius else 5, top_right=self.border_radius.top_right if self.border_radius else 5)
         )
 
         self.main_content = content
@@ -983,7 +983,7 @@ class KeyValueDisplay(ft.Column):
                         ft.Text(f"{key}:", style=self._key_style),
                         ft.SelectionArea( # Permite seleção se habilitado
                             content=ft.Text(str(value), style=self._value_style),
-                            disabled=not value_selectable
+                            #disabled=not value_selectable
                         ) if value_selectable else ft.Text(str(value), style=self._value_style)
                     ],
                     spacing=5, # Espaço entre chave e valor
@@ -1107,8 +1107,8 @@ class SearchableDropdown(ft.Column):
 
         self.dropdown_container = ft.Container(
             content=self.filtered_options_list,
-            bgcolor=ft.theme.DEFAULT_COLORS["surface"], # Cor de fundo padrão
-            border=ft.border.all(1, ft.theme.DEFAULT_COLORS["outline"]),
+            bgcolor=ft.Colors.SURFACE, # Cor de fundo padrão
+            border=ft.border.all(1, ft.Colors.OUTLINE),
             border_radius=5,
             margin=ft.margin.only(top=-5), # Sobrepõe um pouco o TextField
             visible=False, # Começa invisível
