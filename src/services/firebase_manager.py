@@ -12,6 +12,10 @@ from typing import Optional, Dict, Any, List, Set
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
 
+'''
+TODO: Avaliar arquitetura necessária para usar Firebase com SDKs de Usuários em vez de Admin SDK.
+'''
+
 @with_proxy()
 def inicializar_firebase():
     """

@@ -1,3 +1,5 @@
+# src/core/pdf_processor.py:
+
 import nltk, pdfplumber, re, os
 
 from nltk.corpus import stopwords
@@ -9,9 +11,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from src.core.utils import timing_decorator, count_tokens, reduce_text_to_limit, get_string_intervalos
+from src.utils import timing_decorator, count_tokens, reduce_text_to_limit, get_string_intervalos
 
-from config.logger import LoggerSetup
+from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
 
 # Baixar corpora de nltk para legibilidade
@@ -189,25 +191,25 @@ class TextAnalyzer:
     # Métodos comparativos:............................................
 
     def return_similar_pages(self, indice_a_comparar:int, similarity_matrix, limiar=0.87):
-            """
-            Identifica páginas semelhantes com base em uma matriz de similaridade.
-            
-            :param indice_a_comparar: Índice da página base para comparação
-            :param similarity_matrix: Matriz de similaridade entre as páginas
-            :param limiar: Limiar de similaridade para considerar páginas semelhantes (padrão: 0.87)
-            :return: Lista de índices das páginas semelhantes
-            """
-            # Objetivo: Filtrar páginas redundantes (considerando limiar de similaridade > 0.87)
-            # TODO: obter tamanho do grupo a partir da similarity_matrix, dispensando o argumento tamanho_do_grupo
-            tamanho_do_grupo = similarity_matrix.shape[0]
-            semelhantes = []
-            i = indice_a_comparar
-            for j in range(tamanho_do_grupo):
-                if i == j: 
-                    continue
-                if similarity_matrix[i][j] > limiar:
-                    semelhantes.append(j)
-            return semelhantes
+        """
+        Identifica páginas semelhantes com base em uma matriz de similaridade.
+        
+        :param indice_a_comparar: Índice da página base para comparação
+        :param similarity_matrix: Matriz de similaridade entre as páginas
+        :param limiar: Limiar de similaridade para considerar páginas semelhantes (padrão: 0.87)
+        :return: Lista de índices das páginas semelhantes
+        """
+        # Objetivo: Filtrar páginas redundantes (considerando limiar de similaridade > 0.87)
+        # TODO: obter tamanho do grupo a partir da similarity_matrix, dispensando o argumento tamanho_do_grupo
+        tamanho_do_grupo = similarity_matrix.shape[0]
+        semelhantes = []
+        i = indice_a_comparar
+        for j in range(tamanho_do_grupo):
+            if i == j: 
+                continue
+            if similarity_matrix[i][j] > limiar:
+                semelhantes.append(j)
+        return semelhantes
 
     # Métodos principais da classe:....................................
 
@@ -337,3 +339,66 @@ class TextAnalyzer:
 
         return str_paginas_consideradas, texto_acumulado
 
+'''
+def process_pdf(pdf_path, indice_paginas=None):
+    print(f'Processando PDF {os.path.basename(pdf_path)}')
+    start_time = time()
+
+    tp_pages_text = extract_texts_from_pdf(pdf_path, indice_paginas=indice_paginas)
+    tp_pages_text = [(ind, preprocess_text_1(texto)) for ind, texto in tp_pages_text] 
+
+    dict_dados_pages = {}
+    if not indice_paginas:
+        pages_text = [preprocess_text_2(texto) for _, texto in tp_pages_text] 
+        similarity_matrix = analise_similaridade(pages_text)
+        tf_idf_scores = analise_frequencia_palavras(pages_text)
+        
+        for ind, text in tp_pages_text:
+            semelhantes = return_similar_pages(len(pages_text), ind, similarity_matrix)
+            inteligível = is_intelligible(text, ind=ind)
+            dict_dados_pages[ind] = {'texto':text, 
+                                'inteligível': inteligível, 
+                                'tamanho': count_unique_words(text), 
+                                'tf_idf_score': round(tf_idf_scores[ind], 4), 
+                                'semelhantes': semelhantes }
+
+        indices_pgs_relevantes, ininteligiveis = ordenar_paginas_relevantes(dict_dados_pages)
+        dict_pgs_relevantes = {k: v['texto'] for k, v in dict_dados_pages.items() if k in indices_pgs_relevantes}
+    else:
+        for ind, text in tp_pages_text:
+            dict_dados_pages[ind] = text
+
+        indices_pgs_relevantes = indice_paginas
+        dict_pgs_relevantes = dict_dados_pages
+        ininteligiveis = []
+
+    end_time = time()  # Marca o tempo de término
+    tempo_de_processamento = f"Tempo de processamento do arquivo: {end_time - start_time:.2f}s"
+    return dict_pgs_relevantes, indices_pgs_relevantes, ininteligiveis, tempo_de_processamento
+
+def agrupar_textos_por_prioridade(dict_pgs_relevantes, indices_pgs_relevantes, limite_token, modelo_ia):
+    total_tokens = 0
+    indices_considerado = []
+    for page in indices_pgs_relevantes:
+        texto = dict_pgs_relevantes.get(page, "")
+        indices_considerado.append(page)
+        len_texto = count_tokens(modelo_ia, texto)
+    
+        # Verifica se o texto do grupo cabe no limite
+        if total_tokens + len_texto <= limite_token:
+            total_tokens += len_texto
+        else:
+            # Completa o restante do limite com parte do texto, se houver espaço
+            dict_pgs_relevantes[page] = reduzir_texto_para_limite(texto, limite_token-total_tokens, modelo_ia) # texto_parcial
+            print(f'Texto reduzido na página {page+1}.')
+            break  # Sai do loop ao atingir o limite
+
+    str_paginas_consideradas = get_string_intervalos(indices_considerado, incrementa_1=True)
+
+    texto_acumulado = ""
+    for ind in sorted(indices_considerado):
+        texto_acumulado += f" {dict_pgs_relevantes[ind]}"
+
+    return str_paginas_consideradas, texto_acumulado
+
+'''
