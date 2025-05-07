@@ -3,16 +3,17 @@
 Define o tema visual, cores, fontes e estilos reutilizáveis para a aplicação Flet.
 """
 import flet as ft
+from datetime import datetime
 
 # --- Paleta de Cores Principal (Exemplo - Azul) ---
 # Você pode definir suas cores hexadecimais aqui ou usar as pré-definidas do Flet
-SEED_COLOR = ft.colors.BLUE_700 # Cor base para gerar o esquema de cores
+SEED_COLOR = ft.Colors.BLUE_700 # Cor base para gerar o esquema de cores
 
 # --- Cores Semânticas Adicionais (se necessário) ---
-COLOR_SUCCESS = ft.colors.GREEN_600
-COLOR_WARNING = ft.colors.ORANGE_500
-COLOR_ERROR = ft.colors.RED_600
-COLOR_INFO = ft.colors.LIGHT_BLUE_500
+COLOR_SUCCESS = ft.Colors.GREEN_600
+COLOR_WARNING = ft.Colors.ORANGE_500
+COLOR_ERROR = ft.Colors.RED_600
+COLOR_INFO = ft.Colors.LIGHT_BLUE_500
 
 # --- Definições de Espaçamento e Padding ---
 PADDING_XS = 2
@@ -40,8 +41,8 @@ APP_THEME = ft.Theme(
     use_material3=True,
     # Você pode sobrescrever elementos específicos do tema aqui, se desejar:
     # appbar_theme=ft.AppBarTheme(
-    #     background_color=ft.colors.BLUE_GREY_800,
-    #     foregroundColor=ft.colors.WHITE
+    #     background_color=ft.Colors.BLUE_GREY_800,
+    #     foregroundColor=ft.Colors.WHITE
     # ),
     # text_theme=ft.TextTheme(
     #     title_large=TITLE_LARGE, # Usando o estilo definido acima
@@ -61,3 +62,39 @@ APP_DARK_THEME = ft.Theme(
 # --- Outras Configurações de Estilo Globais ---
 # Exemplo: Configuração padrão para bordas de TextField
 # INPUT_BORDER_STYLE = ft.InputBorder.OUTLINE
+
+APP_YEAR = datetime.now().year
+
+APP_PRIMARY_COLOR = ft.Colors.BLUE_GREY_700
+
+# Cores de Material Design (exemplo)
+PRIMARY = APP_PRIMARY_COLOR # Pode ser referenciada diretamente como PRIMARY
+SURFACE_VARIANT = ft.colors.BLUE_GREY_100
+ON_SURFACE = ft.colors.BLACK87
+
+# Função básica de configuração de tema
+def configure_theme(page: ft.Page):
+    """Configura o tema claro e escuro básico para a aplicação."""
+    page.theme_mode = ft.ThemeMode.LIGHT
+    page.theme = ft.Theme(
+        color_scheme=ft.ColorScheme(
+            primary=APP_PRIMARY_COLOR,
+            primary_container=ft.Colors.with_opacity(0.1, APP_PRIMARY_COLOR),
+            # Você pode adicionar outras cores do esquema aqui
+        ),
+        # Exemplo de tema para controles específicos, se necessário
+        # control_theme=ft.ControlTheme(
+        #     padding=PADDING_M # Padding padrão para controles
+        # )
+    )
+    page.dark_theme = ft.Theme(
+        color_scheme=ft.ColorScheme(
+            primary=ft.Colors.BLUE_GREY_300, # Uma cor primária mais clara para o tema escuro
+            primary_container=ft.Colors.with_opacity(0.1, ft.Colors.BLUE_GREY_300),
+            # ... outras cores do esquema para o tema escuro
+        ),
+        # control_theme=ft.ControlTheme(
+        #     padding=PADDING_M
+        # )
+    )
+    # print("Tema configurado a partir de src/flet_ui/theme.py")

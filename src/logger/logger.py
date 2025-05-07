@@ -195,7 +195,7 @@ class CloudLogHandler(logging.Handler):
                 else:
                     print(f"Falha final no upload para CloudStorage após {CLOUD_LOGGER_MAX_RETRIES} tentativas.")
                     # --- Backup Local ---
-                    backup_dir = Path("logs_backup")
+                    backup_dir = log_dir / "logs_backup"
                     backup_dir.mkdir(exist_ok=True)
                     backup_file = backup_dir / f"cloud_fail_{username_full}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
                     try:

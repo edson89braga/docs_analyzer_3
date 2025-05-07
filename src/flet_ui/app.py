@@ -34,36 +34,18 @@ def main(page: ft.Page):
     # page.client_data = {}
             
     # --- Definição dos Elementos Persistentes do Layout ---
-    app_bar = create_app_bar(page)
+    app_bar = create_app_bar(page, APP_TITLE)
     
-    # Cria a NavigationRail (será passada para o router para atualização)
-    navigation_rail = create_navigation_rail(page, page.route or "/") # Usa "/" se page.route for None inicial
-    
-    # Container para o conteúdo dinâmico que será atualizado pelo router
-    content_container = ft.Container(
-        content=ft.ProgressRing(), # Mostra um loading inicial
-        expand=True,
-        padding=theme.PADDING_L # Padding geral para a área de conteúdo
-    )
-
     # --- Conectar o Roteador ---
     # Passa o content_container e navigation_rail para a função route_change
-    page.on_route_change = lambda route_event: route_change(page, content_container, navigation_rail, route_event.route)
+    page.on_route_change = lambda route_event: route_change(page, route_event.route)
     # page.on_view_pop não é mais necessário com esta abordagem, pois não usamos a pilha de Views
 
     # --- Estrutura Principal da Página ---
     page.clean() # Limpa a página
     page.appbar = app_bar # AppBar global
-    page.add(
-        ft.Row(
-            [
-                navigation_rail, # Navegação persistente
-                ft.VerticalDivider(width=1),
-                content_container # Container para o conteúdo dinâmico
-            ],
-            expand=True,
-        )
-    )
+
+    ...
 
     # --- Limpeza ao Fechar (Opcional mas recomendado) ---
     def on_disconnect(e):
@@ -80,8 +62,8 @@ def main(page: ft.Page):
 
     # --- Navegar para a Rota Inicial ---
     # Força a atualização inicial da rota "/" ou a rota atual se já houver uma
-    initial_route = page.route if page.route and page.route != "" and page.route != "/" else "/dashboard"
+    initial_route = page.route if page.route and page.route != "" and page.route != "/" else "/login"
     logger.info(f"Navegando para a rota inicial: {initial_route}")
     page.go(initial_route)
-    # O on_route_change será chamado e preencherá o content_container
+
 

@@ -6,9 +6,9 @@ import flet as ft
 from typing import List, Dict, Any, Optional, Callable
 
 # Importa definições de tema se necessário (ex: para padding ou cores)
-from . import theme
+from src.flet_ui import theme
 
-def create_app_bar(page: ft.Page) -> ft.AppBar:
+def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
     """Cria a AppBar padrão para a aplicação."""
     def toggle_theme_mode(e):
         if page.theme_mode == ft.ThemeMode.LIGHT:
@@ -22,11 +22,11 @@ def create_app_bar(page: ft.Page) -> ft.AppBar:
         page.update()
 
     return ft.AppBar(
-        title=ft.Text("ERP BRG"),
+        title=ft.Text(app_title),
         center_title=False,
         actions=[
              ft.IconButton(
-                ft.icons.BRIGHTNESS_4_OUTLINED,
+                ft.Icons.BRIGHTNESS_4_OUTLINED,
                 tooltip="Mudar tema",
                 on_click=toggle_theme_mode,
                 padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL)
@@ -34,121 +34,87 @@ def create_app_bar(page: ft.Page) -> ft.AppBar:
         ]
     )
 
-# --- Variável Global para o SnackBar ---
-# Inicializa como None, será criada na primeira chamada a show_snackbar
-_global_snackbar_instance: Optional[ft.SnackBar] = None
-
-def show_snackbar(page: ft.Page, message: str, color: str = theme.COLOR_INFO, duration: int = 5000):
-    """
-    Exibe uma mensagem no SnackBar, adicionando-o temporariamente ao overlay.
-
-    Args:
-        page: A instância da página Flet.
-        message: A mensagem a ser exibida.
-        color: A cor de fundo do SnackBar.
-        duration: Duração em milissegundos.
-    """
-    global _global_snackbar_instance
-    
-    # Verifica se o SnackBar global já foi criado e adicionado à página
-    # Usamos page.client_data para rastrear se já foi adicionado à *página atual*
-    snackbar_added_key = "_global_snackbar_added"
-
-    if not page.client_data.get(snackbar_added_key):
-        if _global_snackbar_instance is None:
-            # Cria a instância global na primeira vez
-            _global_snackbar_instance = ft.SnackBar(
-                content=ft.Text(""),
-                duration=duration,
-                show_close_icon = True, # action="OK" Ou "Fechar"
-                action_color=ft.colors.WHITE
-            )
-        # Adiciona a instância global ao overlay da página ATUAL
-        # Fazemos isso apenas uma vez por sessão de página (page)
-        if _global_snackbar_instance not in page.overlay:
-            page.overlay.append(_global_snackbar_instance)
-            page.client_data[snackbar_added_key] = True # Marca como adicionado a esta página
-
-    snackbar = _global_snackbar_instance
-    if not snackbar:
-        print("ERRO: Instância global do SnackBar não está definida!")
-        return # Sai se algo deu errado
-    
-    # Abre o SnackBar
-    snackbar.content.value = message
-    snackbar.bgcolor = color
-    snackbar.duration = duration
-    snackbar.open = True
-    page.update() # Atualiza para efetivamente mostrar
-
-def show_confirmation_dialog(
-    page: ft.Page,
-    title: str,
-    content: ft.Control | str,
-    confirm_text: str = "Confirmar",
-    cancel_text: str = "Cancelar",
-    on_confirm: Optional[Callable[[], None]] = None # Callback se confirmado
-):
-    """Exibe um diálogo de confirmação padrão."""
-    confirm_dialog = None # Declara antes para ser acessível no close_dialog
-
-    def close_dialog(e):
-        confirm_dialog.open = False
-        page.update()
-        page.overlay.remove(confirm_dialog) # Remove do overlay ao fechar
-        if hasattr(e.control, 'data') and e.control.data == "confirm" and on_confirm:
-            on_confirm() # Chama o callback de confirmação
-
-    confirm_dialog = ft.AlertDialog(
-        modal=True,
-        title=ft.Text(title),
-        content=content if isinstance(content, ft.Control) else ft.Text(content),
-        actions=[
-            ft.TextButton(confirm_text, on_click=close_dialog, data="confirm"),
-            ft.TextButton(cancel_text, on_click=close_dialog, data="cancel"),
-        ],
-        actions_alignment=ft.MainAxisAlignment.END,
-    )
-
-    page.overlay.append(confirm_dialog) # Adiciona ao overlay
-    confirm_dialog.open = True
-    page.update() # Abre o diálogo
-
 # Módulos e seus ícones/rotas para a navegação
 # Definido aqui para ser acessível globalmente por este módulo
 icones_navegacao: List[Dict[str, Any]] = [
-    {"label": "Dashboard", "icon": ft.icons.DASHBOARD_OUTLINED, "selected_icon": ft.icons.DASHBOARD, "route": "/dashboard"},
-    #{"label": "Cadastros", "icon": ft.icons.CHECKLIST_OUTLINED, "selected_icon": ft.icons.CHECKLIST_RTL, "route": "/cadastros/materiais"}, 
-    {"label": "Cadastros", "icon": ft.icons.CHECKLIST_OUTLINED, "selected_icon": ft.icons.CHECKLIST_RTL, "route": "/cadastros"},
-    {"label": "Operações", "icon": ft.icons.ADD_BUSINESS_OUTLINED, "selected_icon": ft.icons.ADD_BUSINESS, "route": "/operacoes/compras"}, # Rota base
-    {"label": "Estoque", "icon": ft.icons.INVENTORY_2_OUTLINED, "selected_icon": ft.icons.INVENTORY_2, "route": "/estoque/consultas"},
-    {"label": "Financeiro", "icon": ft.icons.CURRENCY_EXCHANGE_OUTLINED, "selected_icon": ft.icons.CURRENCY_EXCHANGE, "route": "/financeiro/lancamentos"}, # Rota base
-    {"label": "Contabilidade", "icon": ft.icons.ACCOUNT_BALANCE_OUTLINED, "selected_icon": ft.icons.ACCOUNT_BALANCE, "route": "/contabilidade/lancamentos"}, # Rota base
-    {"label": "Configurações", "icon": ft.icons.SETTINGS_OUTLINED, "selected_icon": ft.icons.SETTINGS, "route": "/configuracoes/precos-servicos"}, # Rota base
-    # Objetos de teste:
-    {"label": "Teste DT", "icon": ft.icons.TABLE_CHART_OUTLINED, "selected_icon": ft.icons.TABLE_CHART, "route": "/test-datatable"},
-    {"label": "Teste Sel", "icon": ft.icons.PERSON_SEARCH, "selected_icon": ft.icons.PERSON_SEARCH_SHARP, "route": "/test-selection"},
+    {
+        "label": "Início",
+        "icon": ft.Icons.HOME_OUTLINED,
+        "selected_icon": ft.Icons.HOME,
+        "route": "/home"
+    },
+    {
+        "label": "Perfil",
+        "icon": ft.Icons.ACCOUNT_CIRCLE_OUTLINED,
+        "selected_icon": ft.Icons.ACCOUNT_CIRCLE,
+        "route": "/profile"
+    },
+    {
+        "label": "Produtos",
+        "icon": ft.Icons.CATEGORY_OUTLINED,
+        "selected_icon": ft.Icons.CATEGORY,
+        "route": "/products" # Rota base para a seção de produtos
+    },
+    {
+        "label": "Pedidos",
+        "icon": ft.Icons.SHOPPING_CART_OUTLINED,
+        "selected_icon": ft.Icons.SHOPPING_CART,
+        "route": "/orders" # Rota base para a seção de pedidos
+    },
+    {
+        "label": "Análises",
+        "icon": ft.Icons.INSIGHTS_OUTLINED,
+        "selected_icon": ft.Icons.INSIGHTS,
+        "route": "/analytics" # Rota base para a seção de análises
+    },
+    {
+        "label": "Ajuda",
+        "icon": ft.Icons.HELP_OUTLINE,
+        "selected_icon": ft.Icons.HELP,
+        "route": "/help/faq" # Exemplo de rota direta para uma sub-seção
+    },
+    {
+        "label": "Configurações",
+        "icon": ft.Icons.SETTINGS_OUTLINED,
+        "selected_icon": ft.Icons.SETTINGS,
+        "route": "/settings/application" # Rota base para a seção de configurações
+    },
 ]
 
+# REESCRITA DA SEÇÃO: route_to_base_nav_index
 # Mapeamento inverso para destacar o item correto na NavRail principal
 route_to_base_nav_index: Dict[str, int] = {
-    "/dashboard": 0,
-    "/cadastros": 1, # Rota base
-    "/cadastros/materiais": 1,
-    "/cadastros/crm": 1,
-    "/cadastros/produtos": 1,
-    "/cadastros/pagamentos": 1, 
-    #"/cadastros/financeiro": 1, # Adicionar se/quando criar
-    "/operacoes/compras": 2,
-    # Adicionar sub-rotas de operações se necessário
-    "/estoque/consultas": 3,
-    "/financeiro/lancamentos": 4,
-    "/contabilidade/lancamentos": 5,
-    # Adicionar sub-rotas financeiras
-    "/configuracoes/precos-servicos": 6,
-    # Adicionar sub-rotas de config...
-    "/test-datatable": len(icones_navegacao) - 2, # Ajustar índice
-    "/test-selection": len(icones_navegacao) - 1, # Ajustar índice
+    # Raiz do app, geralmente redireciona para /home ou /dashboard
+    "/": 0, # Mapeia para "Início" (índice 0)
+    "/home": 0,
+
+    "/profile": 1,
+    "/profile/edit": 1,
+    "/profile/security": 1,
+
+    "/products": 2, # Rota base para produtos
+    "/products/list": 2,
+    "/products/new": 2,
+    "/products/categories": 2,
+    "/products/detail/123": 2, # Exemplo com parâmetro
+
+    "/orders": 3, # Rota base para pedidos
+    "/orders/list": 3,
+    "/orders/pending": 3,
+    "/orders/detail/456": 3, # Exemplo com parâmetro
+
+    "/analytics": 4, # Rota base para análises
+    "/analytics/sales": 4,
+    "/analytics/users": 4,
+
+    "/help": 5, # Rota base para ajuda
+    "/help/faq": 5,
+    "/help/contact": 5,
+
+    "/settings": 6, # Rota base para configurações
+    "/settings/application": 6,
+    "/settings/user": 6,
+    "/settings/notifications": 6,
 }
 
 def _find_nav_index_for_route(route: str) -> int:
@@ -226,4 +192,81 @@ def create_navigation_rail(page: ft.Page, selected_route: str) -> ft.NavigationR
         ],
         on_change=navigate
     )
+
+def create_navigation_drawer(page: ft.Page, selected_route: str) -> ft.NavigationDrawer:
+    """Cria a NavigationDrawer."""
+    selected_index = _find_nav_index_for_route(selected_route)
+
+    def navigate_and_close_drawer(e):
+        # target_index = e.control.selected_index # Drawer não tem selected_index no evento on_change
+        # Precisamos encontrar o índice pelo label ou outra propriedade se o evento não der o índice
+        # Para simplificar, vamos assumir que o controle do evento é o NavigationDrawerDestination
+        # e podemos pegar a rota do seu label ou de um atributo data.
+        # Flet pode passar o controle do destino clicado.
+        # No entanto, o `on_change` do NavigationDrawer é mais simples e não retorna o destino clicado.
+        # Uma abordagem mais robusta é usar o `data` de cada destino.
+
+        # A forma mais direta é fechar o drawer e então navegar.
+        # O on_change do drawer em si não é ideal para navegação direta
+        # porque ele dispara antes de um destino ser 'selecionado'
+        # É melhor que cada destino tenha seu próprio on_click.
+        page.drawer.open = False # Fecha o drawer
+        page.update()
+        # A navegação real deve ser feita pelo on_click de cada tile/destino
+
+    # Dentro do Drawer, usamos controles como ft.NavigationDrawerDestination
+    # ou ft.ListTile para criar os itens navegáveis.
+    
+    drawer_destinations = []
+    for i, modulo in enumerate(icones_navegacao):
+        drawer_destinations.append(
+            ft.NavigationDrawerDestination(
+                icon_content=ft.Icon(modulo["icon"]),
+                selected_icon_content=ft.Icon(modulo["selected_icon"]),
+                label=modulo["label"],
+            )
+        )
+        # O NavigationDrawerDestination em si não tem um evento on_click fácil
+        # para navegação direta. Frequentemente se usa ListTile dentro do drawer.
+
+    # Alternativa usando ListTile para melhor controle do clique
+    drawer_tiles = []
+    for i, modulo in enumerate(icones_navegacao):
+        is_selected = (selected_index == i)
+        drawer_tiles.append(
+            ft.ListTile(
+                title=ft.Text(modulo["label"]),
+                leading=ft.Icon(modulo["selected_icon"] if is_selected else modulo["icon"]),
+                on_click=lambda _, route=modulo["route"]: (
+                    setattr(page.drawer, 'open', False), # Fecha o drawer
+                    page.go(route) # Navega
+                ),
+                selected=is_selected,
+                # Para o tema do ListTile selecionado funcionar bem,
+                # você pode precisar envolver o NavigationDrawer em um Container com um tema
+                # ou ajustar o tema global.
+            )
+        )
+
+    return ft.NavigationDrawer(
+        controls=drawer_tiles, # Usando os ListTiles
+        # selected_index=selected_index # Isso ajuda a destacar visualmente
+        # on_change=navigate_and_close_drawer # on_change pode ser usado para outras lógicas
+    )
+
+def create_footer(page: ft.Page) -> ft.BottomAppBar:
+    """Cria um rodapé simples para a aplicação."""
+    return ft.BottomAppBar(
+        content=ft.Row(
+            [
+                ft.Text(f"© {theme.APP_YEAR} ERP BRG. Todos os direitos reservados."),
+                ft.Container(expand=True), # Espaçador
+                ft.TextButton("Suporte"),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN
+        ),
+        bgcolor=ft.Colors.with_opacity(0.05, ft.Colors.ON_SURFACE), # Exemplo de cor
+        padding=ft.padding.symmetric(horizontal=theme.PADDING_M)
+    )
+
 

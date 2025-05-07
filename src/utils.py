@@ -320,3 +320,31 @@ def obter_string_normalizada(string_atual, lista_opções):
     
     return None
 
+### ========================================================================================================
+
+import unicodedata, re
+def normalize_key(text: str) -> str:
+    """
+    Normaliza uma string para ser usada como chave:
+    - Remove acentos.
+    - Converte para minúsculas.
+    - Substitui espaços e caracteres não alfanuméricos por underscore.
+    - Remove underscores duplicados.
+    """
+    if not isinstance(text, str):
+        text = str(text)
+    # Converte para minúsculas
+    text = text.lower()
+    #
+    text = text.replace('(%)', 'percentual')
+    text = text.replace('(kg)', '').strip()
+    if text.endswith('_id'):
+        text = text[:-3]
+    # Remove acentos (compatibilidade NFKD)
+    nfkd_form = unicodedata.normalize('NFKD', text)
+    text = "".join([c for c in nfkd_form if not unicodedata.combining(c)])
+    # Substitui espaços e não alfanuméricos por underscore
+    text = re.sub(r'[^a-z0-9]+', '_', text)
+    # Remove underscores no início/fim e múltiplos underscores
+    text = re.sub(r'_+', '_', text).strip('_')
+    return text

@@ -1,6 +1,5 @@
 '''
 TODO:
-1) Importar firebase_backend do projeto anterior;
 2) flet_ui: Incrementar objetos em theme.py, layout.py e components.py;
 3) flet_ui: Criar LoginPage e CredentialsDialog;
 4) Refazer plano operacional de tarefas baseado nos novos módulos;
@@ -13,15 +12,15 @@ import flet as ft
 # Importa a função 'main' do seu módulo app dentro de flet_ui
 from src.flet_ui.app import main
 
-from src.services.firebase_manager import FirebaseManagerStorage
+from src.services.firebase_manager import FbManagerStorage
 from src.logger.logger import LoggerSetup
 
 APP_USERNAME, APP_VERSION = "UserTest", "0.1.0"  # TODO Import das config do usuário
 
 try:
-    fb_manager = FirebaseManagerStorage() # Pode retornar None se não configurado
+    fb_manager = FbManagerStorage() # Pode retornar None se não configurado
     LoggerSetup.initialize(
-        routine_name="MeuAppPrincipal",
+        routine_name="DocsAnalyzer3",
         fb_manager=fb_manager, # Passe a instância
         username_app=APP_USERNAME,
         version_app=APP_VERSION
