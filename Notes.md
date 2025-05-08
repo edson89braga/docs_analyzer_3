@@ -50,3 +50,5 @@ Em resumo, as principais diferenças entre Firebase Cloud Storage e Cloud Firest
 *   Pense no **Firestore** como um fichário altamente organizado, onde cada ficha (documento) contém informações específicas e você pode procurar rapidamente por fichas que atendam a certos critérios.
 
 Ambos são frequentemente usados juntos em uma aplicação. Por exemplo, você pode armazenar os dados de um perfil de usuário no Firestore (nome, email) e a foto de perfil desse usuário no Storage, guardando apenas o link (URL) para a foto no documento do Firestore.
+
+

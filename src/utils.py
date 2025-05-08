@@ -1,5 +1,5 @@
 import os, keyring
-from src import config_manager
+from rich import print
 
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
@@ -19,6 +19,7 @@ def with_proxy(skip_ssl_verify: bool = True):
     Returns:
         Callable: O decorador real a ser aplicado à função.
     """
+    from src import config_manager
     def decorator(func):
         """O decorador real que envolve a função."""
         @functools.wraps(func)
@@ -171,35 +172,103 @@ def timing_decorator(calc_by_item=False):
             result = func(*args, **kwargs)  # Chama a função decorada
             end_time = time()  # Marca o tempo de término
             total_time = end_time - start_time
+            print('\n')
             logger.info(f"F: {func.__name__} - Tempo execução total : {total_time:.4f}s")
             if calc_by_item and args and type(args) != str and isinstance(args[0], collections.abc.Iterable):
                 logger.info(f"F: {func.__name__} - Tempo p/item - Loops: {len(args[0])} : {total_time/len(args[0]):.4f}s")
+            print('\n')
             return result
         return wrapper
     return decorator
 
-def count_tokens(text):
+def count_tokens(text: str, model_name: str = "gpt-3.5-turbo") -> int:
     """
-    Conta o número de tokens em um texto.
+    Calcula o número de tokens em um texto usando tiktoken.
 
-    :param text: Texto a ser analisado
-    :return: Número de tokens
-    """
-    # Conta o número de tokens usando a lib tiktoken
-    return len(tiktoken.encode(text, verbose=False, add_special_tokens=False))
+    Args:
+        text (str): O texto a ser tokenizado.
+        model_name (str, optional): O nome do modelo para obter o encoding correto.
+                                    Default é "gpt-3.5-turbo".
+                                    Outros comuns: "gpt-4", "text-davinci-003".
+                                    Se o modelo não for encontrado, tenta "cl100k_base".
 
-def reduce_text_to_limit(text_full, token_limit):
+    Returns:
+        int: O número de tokens.
     """
-    Reduz o texto completo para caber no limite de tokens especificado.
+    try:
+        encoding = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        # Se o modelo não for encontrado, usar um encoding padrão como cl100k_base
+        # print(f"Aviso: Modelo '{model_name}' não encontrado para tiktoken. Usando 'cl100k_base'.") # Opcional
+        encoding = tiktoken.get_encoding("cl100k_base")
     
-    :param text_full: Texto completo a ser reduzido
-    :param token_limit: Limite máximo de tokens permitido
-    :return: Texto reduzido que cabe no limite de tokens
+    # O método encode não aceita 'verbose' ou 'add_special_tokens'.
+    # Para controlar tokens especiais, você usaria:
+    # encoding.encode(text, allowed_special={"<|endoftext|>", ...})
+    # encoding.encode(text, disallowed_special=())
+    # Para uma contagem simples, apenas o texto é suficiente.
+    token_integers = encoding.encode(text)
+    return len(token_integers)
+
+def reduce_text_to_limit(text_full: str, token_limit: int, model_name: str = "gpt-3.5-turbo") -> str:
     """
-    tokens = tiktoken.encode(text_full, verbose=False, add_special_tokens=False)
-    if len(tokens) <= token_limit:
+    Reduz o texto completo para caber no limite de tokens especificado,
+    decodificando os tokens de volta para texto.
+
+    Args:
+        text_full (str): Texto completo a ser reduzido.
+        token_limit (int): Limite máximo de tokens permitido para o texto reduzido.
+        model_name (str, optional): O nome do modelo para obter o encoding correto.
+                                    Default é "gpt-3.5-turbo".
+
+    Returns:
+        str: Texto reduzido que (aproximadamente) cabe no limite de tokens,
+             ou o texto original se já estiver dentro do limite.
+    """
+    if not text_full or token_limit <= 0:
+        return ""
+
+    try:
+        # Obter o codificador para o modelo especificado
+        encoding = tiktoken.encoding_for_model(model_name)
+    except KeyError:
+        # Fallback para um encoding comum se o modelo não for encontrado
+        # print(f"Aviso: Modelo '{model_name}' não encontrado para tiktoken. Usando 'cl100k_base' para reduce_text_to_limit.") # Opcional
+        encoding = tiktoken.get_encoding("cl100k_base")
+    
+    # 1. Codificar o texto completo em tokens
+    # Os parâmetros verbose e add_special_tokens não são usados aqui.
+    all_tokens = encoding.encode(text_full)
+    
+    # 2. Verificar se o texto já está dentro do limite
+    if len(all_tokens) <= token_limit:
         return text_full
-    return tiktoken.decode(tokens[:token_limit])
+    
+    # 3. Truncar a lista de tokens para o limite especificado
+    truncated_tokens = all_tokens[:token_limit]
+    
+    # 4. Decodificar os tokens truncados de volta para texto
+    # O método decode pode levantar erros se os tokens truncados formarem uma sequência inválida de UTF-8.
+    # Isso é raro com truncagem simples, mas pode acontecer se você cortar no meio de um caractere multi-byte.
+    # tiktoken lida bem com isso geralmente, mas para robustez, um try-except pode ser adicionado.
+    try:
+        reduced_text = encoding.decode(truncated_tokens)
+    except Exception as e:
+        # print(f"Erro ao decodificar tokens truncados: {e}. Tentando decodificar com substituição de erros.") # Opcional
+        # Tentar decodificar substituindo bytes problemáticos, se necessário (pode não ser ideal para todos os casos)
+        reduced_text = encoding.decode_with_offsets(truncated_tokens)[0] # [0] para pegar o texto
+        # Ou, uma abordagem mais simples é decodificar token por token e juntar,
+        # ou aceitar a perda de um token final se a decodificação falhar.
+        # Para a maioria dos casos de truncagem simples, a decodificação direta funciona.
+        # Se for um problema persistente, pode ser necessário um tratamento mais sofisticado
+        # para garantir que não se corte no meio de uma sequência de bytes de um caractere.
+        # No entanto, tiktoken é geralmente robusto.
+        # Se a decodificação simples falhar, uma estratégia é reduzir o número de tokens em 1 e tentar novamente.
+        # Ex: reduced_text = encoding.decode(truncated_tokens[:-1])
+        # Por ora, vamos manter a decodificação direta.
+        pass # Mantendo o comportamento anterior em caso de erro, mas idealmente logar ou tratar.
+
+    return reduced_text
 
 def print_dict_as_table(data_dict, selected_keys, sort_key=None):
     """

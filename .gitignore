@@ -66,10 +66,11 @@ logs/
 
 # Outros:
 *.pdf
-*.docx
 *.xlsx
 *.bat
 *.db
 *.tmp
+
+docs/
 
 credentials_fb.json

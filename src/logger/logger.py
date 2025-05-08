@@ -487,6 +487,9 @@ class LoggerSetup:
             
         logger = logging.getLogger(logger_name)
         
+        # Sets Logs específicos:
+        logging.getLogger("pdfminer").setLevel(logging.ERROR)
+
         if cls._initialized:
             logger.parent = cls._instance
         else:

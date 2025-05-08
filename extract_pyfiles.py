@@ -28,7 +28,7 @@ def scan_and_consolidate_python_files(output_file='python_files_consolidated.txt
                 continue
                 
             for file in files:
-                if file.endswith('consolidate_python_files.py'):
+                if file.endswith('extract_pyfiles.py'):
                     continue
                 if file.endswith('.py'):
                     file_path = os.path.join(root, file)
