@@ -11,16 +11,13 @@ import flet as ft
 # Importa a função 'main' do seu módulo app dentro de flet_ui
 from src.flet_ui.app import main
 
-from src.services.firebase_manager import FbManagerStorage
 from src.logger.logger import LoggerSetup
 
-APP_USERNAME, APP_VERSION = "UserTest", "0.1.0"  # TODO Import das config do usuário
+APP_USERNAME, APP_VERSION = "UserTest", "0.1.0"  # TODO: Import das config do usuário
 
 try:
-    fb_manager = FbManagerStorage() # Pode retornar None se não configurado
     LoggerSetup.initialize(
-        routine_name="DocsAnalyzer3",
-        fb_manager=fb_manager, # Passe a instância
+        routine_name="DocsAnalyzer3",  # TODO: firebase_client_storage ou fb_manager_storage_admin  ?!! 
         username_app=APP_USERNAME,
         version_app=APP_VERSION
     )

@@ -7,8 +7,9 @@ from cryptography.fernet import Fernet, InvalidToken
 import os
 from typing import Optional
 
-from src.logger.logger import LoggerSetup
-logger = LoggerSetup.get_logger(__name__)
+#from src.logger.logger import LoggerSetup
+#logger = LoggerSetup.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # --- Constantes de Configuração (Centralizadas aqui) ---
 # É importante que estas sejam consistentes com o uso em outros lugares (FirebaseBackend)
@@ -36,8 +37,8 @@ except Exception as e:
 ENCRYPTED_SERVICE_KEY_FILENAME = "firebase_service_key.enc"
 ENCRYPTED_SERVICE_KEY_PATH = os.path.join(APP_DATA_DIR, ENCRYPTED_SERVICE_KEY_FILENAME)
 
-logger.info(f"Credentials Manager usando diretório de dados: {APP_DATA_DIR}")
-logger.info(f"Caminho esperado para chave de serviço criptografada: {ENCRYPTED_SERVICE_KEY_PATH}")
+logger.debug(f"Credentials Manager usando diretório de dados: {APP_DATA_DIR}")
+logger.debug(f"Caminho esperado para chave de serviço criptografada: {ENCRYPTED_SERVICE_KEY_PATH}")
 
 # --- Funções Utilitárias de Credenciais ---
 

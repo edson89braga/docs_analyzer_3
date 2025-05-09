@@ -1,19 +1,19 @@
-import os, shutil, logging, atexit, re
-from sys import version
+import os, shutil, logging, re
 from time import time, sleep
-from threading import Thread, Lock, Event
+
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from rich.logging import RichHandler
 from datetime import datetime, timedelta
-from typing import List, Optional, Any
+from typing import List, Optional, Any, TYPE_CHECKING
 
-from src.settings import (PATH_LOGS, CLOUD_LOGGER_FOLDER, CLOUD_LOGGER_UPLOAD_INTERVAL, CLOUD_LOGGER_MAX_BUFFER_SIZE, 
-CLOUD_LOGGER_MAX_RETRIES, CLOUD_LOGGER_RETRY_DELAY)
+from .cloud_logger_handler import CloudLogHandler, ClientLogUploader, AdminLogUploader
+from src.settings import (PATH_LOGS, CLOUD_LOGGER_FOLDER)
 
-# Cria o diretório de logs se não existir
-log_dir = Path(PATH_LOGS)
-log_dir.mkdir(exist_ok=True)
+if TYPE_CHECKING:
+    from src.services.firebase_client import FirebaseClientStorage
+    from src.services.firebase_manager import FbManagerStorage
+    from .cloud_logger_handler import LogUploaderStrategy
 
 modules_to_log = []
 
@@ -26,244 +26,6 @@ class ModuleFilter(logging.Filter):
     
     def filter(self, record: logging.LogRecord) -> bool:
         return record.module in self.modules
-
-class CloudLogHandler(logging.Handler):
-    """
-    Handler personalizado para enviar logs para o CloudStorage.
-    Gerencia um buffer interno e uma thread para upload periódico/em lote.
-    """
-    
-    # Atributos de classe para gerenciar buffer e thread compartilhados
-    log_buffer = []
-    upload_thread = None
-    stop_thread = False # Flag para controlar a thread de upload
-
-    buffer_lock = Lock()
-    upload_event = Event()
-    _instance = None # Para rastrear a instância única para atexit
-
-    def __init__(self, fb_manager: Any, username_app: str, version_app: str):
-        """
-        Inicializa o Handler.
-
-        Args:
-            fb_manager: Instância do gerenciador de storage (ex: FirebaseManager).
-            username_app: Nome do usuário/aplicação para identificação no log.
-            version_app: Versão da aplicação para identificação no log.
-        """
-        super().__init__()
-        self.fb_manager = fb_manager
-        self.username_app = username_app
-        self.version_app = version_app
-
-        # --- Gerenciamento da Thread e Registro Atexit ---
-        with CloudLogHandler.buffer_lock: # Lock para criação segura da thread
-            if CloudLogHandler.upload_thread is None or not CloudLogHandler.upload_thread.is_alive():
-                CloudLogHandler.stop_thread_flag = False
-                CloudLogHandler.upload_event.clear()
-                # Passa self para que a thread possa chamar métodos da instância se necessário
-                # (embora estejamos usando classmethod para upload agora)
-                CloudLogHandler.upload_thread = Thread(target=self._upload_logs_thread_target, daemon=True)
-                CloudLogHandler.upload_thread.start()
-                print("CloudLogHandler: Thread de upload iniciada.")
-
-            # Registra o método de cleanup da *instância* no atexit, apenas uma vez.
-            if not CloudLogHandler._instance:
-                # _force_upload_on_exit é um método de instância, correto para atexit
-                atexit.register(self._force_upload_on_exit)
-                CloudLogHandler._instance = True
-                print("CloudLogHandler: Método de cleanup registrado no atexit.")
-
-    def emit(self, record: logging.LogRecord):
-        """Adiciona um registro formatado ao buffer e sinaliza para upload se cheio."""
-        # Ignora logs do próprio handler para evitar recursão (opcional)
-        if record.name == __name__:
-             return
-        try:
-            log_message = self.format(record)
-            try:
-                log_message_utf8 = log_message.encode('utf-8', errors='replace').decode('utf-8')
-            except UnicodeError:
-                 log_message_utf8 = repr(log_message) # Fallback extremo
-
-            if not log_message_utf8.strip():
-                return # Ignora mensagens vazias
-
-            with CloudLogHandler.buffer_lock:
-                CloudLogHandler.log_buffer.append(log_message_utf8)
-                buffer_size = len(CloudLogHandler.log_buffer)
-
-            if buffer_size >= CLOUD_LOGGER_MAX_BUFFER_SIZE:
-                CloudLogHandler.upload_event.set() # Sinaliza a thread fora do lock
-
-        except Exception:
-            self.handleError(record) # Usa o tratamento de erro padrão do Handler
-
-    def _upload_logs_thread_target(self):
-        """Método alvo da thread. Aguarda sinal/timeout e dispara upload."""
-        print("CloudLogHandler: Thread de upload rodando.")
-        while not CloudLogHandler.stop_thread_flag:
-            # Espera pelo evento ou pelo timeout
-            signaled = CloudLogHandler.upload_event.wait(CLOUD_LOGGER_UPLOAD_INTERVAL)
-
-            if CloudLogHandler.stop_thread_flag:
-                print("CloudLogHandler: Sinal de parada recebido na thread.")
-                break
-
-            current_logs = []
-            with CloudLogHandler.buffer_lock:
-                if CloudLogHandler.log_buffer:
-                    current_logs = CloudLogHandler.log_buffer[:]
-                    CloudLogHandler.log_buffer.clear()
-
-            # Reseta evento *após* processar, caso tenha sido sinalizado
-            if signaled:
-                CloudLogHandler.upload_event.clear()
-
-            if current_logs:
-                try:
-                    # Chama o método de classe para realizar o upload
-                    CloudLogHandler.upload_logs_batch_static(
-                        current_logs, self.fb_manager, self.username_app, self.version_app
-                    )
-                except Exception as e:
-                    print(f"Erro no upload de logs pela thread: {e}")
-                    # Considerar adicionar logs de volta ao buffer ou salvar localmente aqui também
-                    # Ex: with CloudLogHandler.buffer_lock: CloudLogHandler.log_buffer[:0] = current_logs
-
-        print("CloudLogHandler: Thread de upload encerrada.")
-
-    @classmethod
-    def upload_logs_batch_static(cls, logs_batch: List[str], fb_manager: Any, username_app: str, version_app: str):
-        """
-        (@classmethod) Faz upload de um lote de logs para o CloudStorage com retries.
-
-        Args:
-            logs_batch: Lista de strings de log para upload.
-            fb_manager: Instância do gerenciador de storage.
-            username_app: Nome do usuário/aplicação.
-            version_app: Versão da aplicação.
-
-        Returns:
-            bool: True se o upload foi bem-sucedido, False caso contrário.
-        """
-        if not logs_batch or not fb_manager:
-            return True # Nada a fazer ou sem manager
-
-        # --- Sanitização e Construção do Path ---
-        try:
-            username_pc = os.getlogin()
-        except OSError:
-            username_pc = "unknown_pc" # Fallback
-
-        username_pc_safe = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', username_pc)
-        username_app_safe = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', username_app)
-        # Lógica original de combinação e limpeza
-        username_full = username_pc_safe if (username_app_safe in username_pc_safe) else f"{username_pc_safe}_{username_app_safe}"
-        username_full = re.sub(r'[^\w\s\d_\-\.]', '', username_full)
-        username_full = re.sub(r'\s+', '_', username_full)
-        username_full = re.sub(r'[_\-\.]+', '_', username_full)
-        username_full = re.sub(r'^_|_$', '', username_full).strip() or "default_user"
-
-        log_folder_user = Path(CLOUD_LOGGER_FOLDER) / username_full / version_app
-        log_filename = f"{username_full}_{datetime.now().strftime('%Y-%m-%d')}.txt"
-        cloud_path = log_folder_user / log_filename
-        cloud_path_str = cloud_path.as_posix() # Caminho estilo Unix para storage
-
-        # --- Lógica de Upload com Retry e Append ---
-        log_data_to_upload = ""
-        success = False
-        for attempt in range(CLOUD_LOGGER_MAX_RETRIES):
-            try:
-                try:
-                    existing_data = fb_manager.get_text(cloud_path_str)
-                    if existing_data and not existing_data.endswith("\n"):
-                        existing_data += "\n"
-                except Exception: # Captura falha ao buscar (ex: arquivo não existe)
-                    existing_data = ""
-
-                log_data_to_upload = existing_data + "\n".join(logs_batch) + "\n"
-                fb_manager.upload_text(log_data_to_upload, cloud_path_str)
-                # print(f"CloudLogHandler: Lote de {len(logs_batch)} logs enviado para {cloud_path_str}") # Debug
-                success = True
-                break # Sai do loop de retry
-
-            except Exception as e:
-                print(f"Erro no upload (tentativa {attempt + 1}/{CLOUD_LOGGER_MAX_RETRIES}) para '{cloud_path_str}': {e}")
-                if attempt < CLOUD_LOGGER_MAX_RETRIES - 1:
-                    sleep(CLOUD_LOGGER_RETRY_DELAY)
-                else:
-                    print(f"Falha final no upload para CloudStorage após {CLOUD_LOGGER_MAX_RETRIES} tentativas.")
-                    # --- Backup Local ---
-                    backup_dir = log_dir / "logs_backup"
-                    backup_dir.mkdir(exist_ok=True)
-                    backup_file = backup_dir / f"cloud_fail_{username_full}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-                    try:
-                        with open(backup_file, 'w', encoding='utf-8') as f:
-                            f.write(f"# Falha no upload para: {cloud_path_str}\n")
-                            f.write(f"# Data/Hora da falha: {datetime.now()}\n\n")
-                            f.write("\n".join(logs_batch) + "\n")
-                        print(f"Logs não enviados salvos localmente em: {backup_file}")
-                    except Exception as be:
-                        print(f"Erro crítico ao salvar backup local: {be}")
-                    success = False # Garante que retornará False
-        return success
-
-    def _force_upload_on_exit(self):
-        """Método de instância chamado por atexit para upload final e cleanup."""
-        print("CloudLogHandler: Executando upload final antes de encerrar...")
-
-        # 1. Sinaliza a thread para parar
-        CloudLogHandler.stop_thread_flag = True
-        CloudLogHandler.upload_event.set() # Acorda a thread caso esteja esperando
-
-        # 2. Pega logs restantes do buffer
-        final_logs = []
-        with CloudLogHandler.buffer_lock:
-            if CloudLogHandler.log_buffer:
-                final_logs = CloudLogHandler.log_buffer[:]
-                CloudLogHandler.log_buffer.clear()
-                print(f"CloudLogHandler: {len(final_logs)} logs do buffer para upload final.")
-
-        # 3. Tenta upload final (usa método de classe)
-        if final_logs:
-            try:
-                CloudLogHandler.upload_logs_batch_static(
-                    final_logs, self.fb_manager, self.username_app, self.version_app
-                )
-            except Exception as e:
-                print(f"Erro durante upload final do buffer: {e}")
-                # Considerar salvar localmente aqui também
-
-        # 4. Espera a thread terminar (com timeout)
-        upload_thread = CloudLogHandler.upload_thread # Ref local
-        if upload_thread and upload_thread.is_alive():
-            print("CloudLogHandler: Aguardando thread de upload encerrar...")
-            upload_thread.join(timeout=max(1, CLOUD_LOGGER_UPLOAD_INTERVAL // 2)) # Timeout razoável
-            if upload_thread.is_alive():
-                 print("CloudLogHandler: WARNING - Timeout ao aguardar thread. Pode não ter finalizado.")
-            else:
-                 print("CloudLogHandler: Thread de upload encerrada.")
-
-        print("CloudLogHandler: Processo de encerramento do logger da nuvem concluído.")
-
-    def flush(self):
-        """Força o envio imediato do buffer de logs atual."""
-        current_logs = []
-        with CloudLogHandler.buffer_lock:
-            if CloudLogHandler.log_buffer:
-                current_logs = CloudLogHandler.log_buffer[:]
-                CloudLogHandler.log_buffer.clear()
-
-        if current_logs:
-            try:
-                CloudLogHandler.upload_logs_batch_static(
-                    current_logs, self.fb_manager, self.username_app, self.version_app
-                )
-            except Exception as e:
-                print(f"Erro durante flush manual de logs: {e}")
-                # Decide se adiciona de volta ao buffer ou não
-                # with CloudLogHandler.buffer_lock: CloudLogHandler.log_buffer[:0] = current_logs
 
 class LoggerSetup:
     """Classe responsável pela configuração e setup de loggers."""
@@ -284,7 +46,10 @@ class LoggerSetup:
     _instance: Optional[logging.Logger] = None
     _initialized = False
     _loggers = {}  # Dicionário para rastrear todos os loggers criados
-    _cloud_handler_instance: Optional[CloudLogHandler] = None # Instância única do handler cloud
+
+    _client_uploader_instance: Optional[ClientLogUploader] = None
+    _admin_uploader_instance: Optional[AdminLogUploader] = None
+    _active_cloud_handler_instance: Optional[CloudLogHandler] = None # Para referência
     
     logging.getLogger('httpx').setLevel(logging.WARNING)
     
@@ -315,28 +80,61 @@ class LoggerSetup:
         return handler
 
     @classmethod
-    def _create_cloud_logger_handler(cls, formatter, fb_manager, username_app, version_app, level=logging.INFO):
-        if not fb_manager:
-             print("LoggerSetup: fb_manager não fornecido. Cloud logging desabilitado.")
-             return None
-        # Cria a instância apenas uma vez
-        if cls._cloud_handler_instance is None:
-             try:
-                 print("LoggerSetup: Criando instância do CloudLogHandler...")
-                 cls._cloud_handler_instance = CloudLogHandler(fb_manager, username_app, version_app)
-                 cls._cloud_handler_instance.setLevel(level)
-                 cls._cloud_handler_instance.setFormatter(formatter)
-                 print("LoggerSetup: CloudLogHandler criado com sucesso.")
-             except Exception as e:
-                 print(f"LoggerSetup: Erro ao inicializar CloudLogHandler: {e}. Cloud logging desabilitado.")
-                 cls._cloud_handler_instance = None # Garante estado consistente
+    def _create_cloud_logger_handler(
+        cls,
+        formatter,
+        username_app: str,
+        version_app: str,
+        level=logging.INFO
+    ) -> Optional[CloudLogHandler]:
+        
+        # Decide qual uploader usar ou se cria um handler.
+        # Se o client_uploader tem contexto, priorize-o. Senão, use admin se disponível.
+        uploader_to_use: Optional['LogUploaderStrategy'] = None
+        
+        if cls._client_uploader_instance:
+            uploader_to_use = cls._client_uploader_instance
+            print("LoggerSetup: Usando ClientLogUploader para CloudLogHandler (usuário autenticado).")
+        elif cls._admin_uploader_instance:
+            uploader_to_use = cls._admin_uploader_instance
+            print("LoggerSetup: Usando AdminLogUploader para CloudLogHandler (fallback ou sem usuário).")
+        else:
+            print("WARNING: LoggerSetup: Nenhum uploader (cliente ou admin) configurado/disponível para CloudLogHandler.")
+            return None
 
-        return cls._cloud_handler_instance
+        # Cria uma nova instância do CloudLogHandler com a estratégia decidida
+        # CloudLogHandler não é mais um singleton no LoggerSetup, mas a thread de upload é global.
+        try:
+            cloud_handler = CloudLogHandler(
+                username_app=username_app,
+                version_app=version_app,
+                uploader_strategy=uploader_to_use
+            )
+            cloud_handler.setLevel(level)
+            cloud_handler.setFormatter(formatter)
+            cls._active_cloud_handler_instance = cloud_handler # Guarda a referência da última instância criada
+            print(f"LoggerSetup: CloudLogHandler criado com uploader {uploader_to_use.__class__.__name__}.")
+            return cloud_handler
+        except Exception as e:
+            print(f"ERROR: LoggerSetup: Erro ao criar CloudLogHandler: {e}", exc_info=True)
+            return None
     
+    @classmethod
+    def set_cloud_user_context(cls, user_token: Optional[str], user_id: Optional[str]):
+        """
+        Define o contexto do usuário (token e ID) para o ClientLogUploader.
+        """
+        if cls._client_uploader_instance:
+            cls._client_uploader_instance.set_user_context(user_token, user_id)
+            # Se o CloudLogHandler ativo estiver usando o ClientUploader, ele refletirá a mudança.
+            # Se um novo CloudLogHandler for criado (ex: se o logger for reinicializado),
+            # ele pegará o uploader com o contexto mais recente.
+        else:
+            print("WARNING: ClientLogUploader não inicializado. Contexto do usuário não pode ser definido.")
+
     @classmethod
     def _setup_temporary_logger(cls, logger_name):
         """Configura um logger temporário básico antes da inicialização completa."""
-        global log_dir
         logger = logging.getLogger(logger_name)
         if not logger.handlers:            
             # Adiciona console handler
@@ -345,7 +143,7 @@ class LoggerSetup:
             
             # Adiciona file handler
             file_handler = cls._create_file_handler(
-                log_dir / "Root_temp.log",
+                PATH_LOGS / "Root_temp.log",
                 cls.formatter_detailed, 
                 logging.DEBUG
             )
@@ -377,13 +175,14 @@ class LoggerSetup:
         logger.addFilter(module_filter) 
 
     @classmethod
-    def initialize(cls, 
+    def initialize(cls,
                    routine_name: str,
-                   fb_manager: Any,
                    username_app: str,
                    version_app: str,
-                   modules_to_log: Optional[List[str]] = None, # None para desabilitar filtro
-                   custom_handler: Optional[logging.Handler] = None,) -> None:
+                   firebase_client_storage: Optional['FirebaseClientStorage'] = None,
+                   fb_manager_storage_admin: Optional['FbManagerStorage'] = None,
+                   modules_to_log: Optional[List[str]] = None,
+                   custom_handler: Optional[logging.Handler] = None) -> None:
         """
         Inicializa o logger global. Deve ser chamado uma vez no início do programa.
         
@@ -392,15 +191,23 @@ class LoggerSetup:
             modules_to_log: Lista de módulos para filtrar os logs.
             custom_handler: Handler personalizado para ser adicionado ao logger.
         """   
-        global log_dir
+        global PATH_LOGS
+
+        if firebase_client_storage:
+            cls._client_uploader_instance = ClientLogUploader(firebase_client_storage)
+            print("LoggerSetup: Instância de ClientLogUploader criada.")
+        if fb_manager_storage_admin:
+            cls._admin_uploader_instance = AdminLogUploader(fb_manager_storage_admin)
+            print("LoggerSetup: Instância de AdminLogUploader criada.")
+
         ### file_handler:
         # Cria o nome do arquivo de log com base no nome da rotina
         safe_routine_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in routine_name)
         
         # Cria o nome do arquivo de log com a data atual
         current_date = datetime.now().strftime('%Y-%m-%d')
-        base_log_file = log_dir / f"{safe_routine_name}.log"
-        dated_log_file = log_dir / f"{safe_routine_name}_{current_date}.log"
+        base_log_file = PATH_LOGS / f"{safe_routine_name}.log"
+        dated_log_file = PATH_LOGS / f"{safe_routine_name}_{current_date}.log"
 
         try:
             # Se o arquivo de log existir, renomeia-o para o nome com data
@@ -415,7 +222,7 @@ class LoggerSetup:
             print(f"Erro ao rotacionar arquivo de log: \n{e}")
 
         # --- Limit the number of dated log files ---
-        cls._cleanup_old_log_files(log_dir, safe_routine_name, days_to_keep=7)  # Keep only 7 days of logs
+        cls._cleanup_old_log_files(PATH_LOGS, safe_routine_name, days_to_keep=7)  # Keep only 7 days of logs
 
         # Cria o file_handler com o nome do arquivo de log
         file_handler = cls._create_file_handler(
@@ -444,8 +251,10 @@ class LoggerSetup:
         logger.addHandler(console_handler)
 
         # Adiciona o handler para CloudStorage
-        cloud_log_handler = cls._create_cloud_logger_handler(cls.formatter_detailed, fb_manager, username_app, version_app, level=logging.INFO)
-        logger.addHandler(cloud_log_handler)
+        cloud_log_handler = cls._create_cloud_logger_handler(cls.formatter_detailed, username_app, version_app, level=logging.INFO)
+        if cloud_log_handler:
+            cls._apply_module_filter(cloud_log_handler, modules_to_log)
+            logger.addHandler(cloud_log_handler)
 
         # Adiciona o handler personalizado, se fornecido: Usado para handler que imprime no componente do Flet
         if custom_handler:
@@ -554,14 +363,14 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
         print("Passo 1: Inicializando LoggerSetup...")
         LoggerSetup.initialize(
             routine_name=test_routine_name,
-            fb_manager=fb_manager_instance,
             username_app=test_username,
-            version_app=test_version
+            version_app=test_version,
+            fb_manager_storage_admin=fb_manager_instance,
         )
         print("LoggerSetup inicializado.")
 
         # Guarda a instância do handler para chamar métodos diretamente
-        cloud_handler_instance = LoggerSetup._cloud_handler_instance
+        cloud_handler_instance = LoggerSetup._active_cloud_handler_instance
         if not cloud_handler_instance:
              print("AVISO TESTE: Cloud handler não foi criado. Teste pode não funcionar como esperado.")
              # O teste pode continuar para verificar logs locais, mas a parte da nuvem falhará.
@@ -597,7 +406,7 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
         print("\nPasso 3: Forçando upload final (simulando saída)...")
         if cloud_handler_instance:
             # Chama o método que `atexit` chamaria
-            cloud_handler_instance._force_upload_on_exit()
+            cloud_handler_instance._force_upload_on_exit_static(cloud_handler_instance)
             # Dê um tempo extra para garantir que o upload HTTP possa concluir
             print("Aguardando alguns segundos para o upload completar...")
             sleep(10) # Ajuste conforme necessário (depende da latência)
@@ -665,6 +474,6 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
 # Executar o teste
 # A partir de >>> python -i teste.py
 # from src.services import firebase_manager
-# fb_manager = firebase_manager.FirebaseManagerStorage()
+# fb_manager = firebase_manager.FbManagerStorage()
 # from src.logger.logger import test_cloud_logging
-# test_cloud_logging(test_identifier='TESTE-123', fb_manager_instance=fb_manager)
+# test_cloud_logging(test_identifier='TESTE-456', fb_manager_instance=fb_manager)

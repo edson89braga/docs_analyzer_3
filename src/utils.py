@@ -1,8 +1,9 @@
-import os, keyring
+import os, keyring, logging
 from rich import print
 
-from src.logger.logger import LoggerSetup
-logger = LoggerSetup.get_logger(__name__)
+#from src.logger.logger import LoggerSetup
+#logger = LoggerSetup.get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 import functools, urllib, ssl
 def with_proxy(skip_ssl_verify: bool = True):

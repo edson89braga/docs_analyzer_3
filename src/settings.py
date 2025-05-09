@@ -1,7 +1,7 @@
 # src/config/settings.py
 
-import os
-import logging
+import os, logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,9 @@ CLOUD_LOGGER_MAX_BUFFER_SIZE = 1000  # Tamanho máximo do buffer (número de lin
 CLOUD_LOGGER_MAX_RETRIES = 3         # Número máximo de tentativas de upload
 CLOUD_LOGGER_RETRY_DELAY = 12        # Tempo de espera entre as tentativas (segundos)
 
+PROJECT_ID = "docs-analyzer-a7430"
 FB_STORAGE_BUCKET = "docs-analyzer-a7430.firebasestorage.app"
 #FIREBASE_DB_URL = 'https://app-scripts-sec-default-rtdb.firebaseio.com/'
 
-PATH_LOGS = "logs" # Pasta local onde os logs serão salvos
+PATH_LOGS = Path("logs") # Pastas locais
+PATH_LOGS.mkdir(exist_ok=True) 

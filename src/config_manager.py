@@ -7,9 +7,6 @@ from typing import Dict, Any, Optional
 # Importa APP_NAME para consistência (ou definir centralmente no futuro)
 from .services.credentials_manager import APP_NAME
 
-from src.logger.logger import LoggerSetup
-logger = LoggerSetup.get_logger(__name__)
-
 # Constantes Keyring Proxy -> rótulos fixos para uso no keyring
 PROXY_KEYRING_SERVICE = f"{APP_NAME}_Proxy"
 PROXY_ENABLED_USER = "proxy_enabled"
@@ -29,6 +26,9 @@ def get_proxy_settings() -> Optional[Dict[str, Any]]:
         Optional[Dict[str, Any]]: Dicionário com 'enabled', 'ip', 'port', 'username',
                                   ou {'enabled': False} se não configurado/erro.
     """
+    from src.logger.logger import LoggerSetup
+    logger = LoggerSetup.get_logger(__name__)
+
     logger.debug(f"Buscando config proxy (sem senha) do Keyring (Service: {PROXY_KEYRING_SERVICE})")
     config = {'proxy_enabled': False, 'password_saved': False, 'ip': None, 'port': None, 'username': None}
     try:
@@ -65,6 +65,9 @@ def save_proxy_settings(config: Dict[str, Any]) -> bool:
     Returns:
         bool: True se sucesso, False caso contrário.
     """
+    from src.logger.logger import LoggerSetup
+    logger = LoggerSetup.get_logger(__name__)
+
     logger.info(f"Salvando config proxy no Keyring (Service: {PROXY_KEYRING_SERVICE})")
     try:
         # Salva enabled, ip, port, username (como antes)
