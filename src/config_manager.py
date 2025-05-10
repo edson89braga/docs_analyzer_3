@@ -36,7 +36,7 @@ def get_proxy_settings() -> Optional[Dict[str, Any]]:
         config['proxy_enabled'] = enabled_str is not None and enabled_str.lower() in ('true', '1')
         pwd_saved_str = keyring.get_password(PROXY_KEYRING_SERVICE, PROXY_PASSWORD_SAVED_USER)
         config['password_saved'] = pwd_saved_str is not None and pwd_saved_str.lower() in ('true', '1')
-        logger.info(f"Proxy settings: Enabled={config['proxy_enabled']}")
+        logger.debug(f"Proxy settings: Enabled={config['proxy_enabled']}")
 
         if config['proxy_enabled']:
             config['ip'] = keyring.get_password(PROXY_KEYRING_SERVICE, PROXY_IP_USER)

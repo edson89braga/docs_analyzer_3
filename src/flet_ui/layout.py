@@ -10,6 +10,7 @@ from src.flet_ui import theme
 
 def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
     """Cria a AppBar padrão para a aplicação."""
+    
     def toggle_theme_mode(e):
         if page.theme_mode == ft.ThemeMode.LIGHT:
             page.theme_mode = ft.ThemeMode.DARK
@@ -21,17 +22,47 @@ def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
         # page.appbar.bgcolor = ... # Se o tema não atualizar automaticamente
         page.update()
 
+    # Recupera o nome do usuário para exibir na AppBar, se logado
+    user_display_name = page.session.get("auth_display_name") or \
+                        (page.client_storage.get("auth_display_name") if page.client_storage else None)
+    
+    user_greeting_or_empty = []
+    if user_display_name:
+        user_greeting_or_empty.append(
+            ft.Text(f"Olá, {user_display_name.split(' ')[0]}", # Pega o primeiro nome
+                    size=14,
+                    font_family="Roboto", # Garante uma fonte consistente
+                    weight=ft.FontWeight.NORMAL,
+                    opacity=0.8, # Um pouco mais sutil
+                    italic=True) 
+        )
+        user_greeting_or_empty.append(ft.Container(width=10)) # Pequeno espaçador
+
+    app_bar_actions = [
+        *user_greeting_or_empty, # Desempacota a lista (pode ser vazia)
+        ft.IconButton(
+            ft.icons.BRIGHTNESS_4_OUTLINED, # Ícone para tema
+            tooltip="Mudar tema",
+            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+            on_click=toggle_theme_mode,
+        ),
+        ft.PopupMenuButton(
+            tooltip="Opções do Usuário",
+            icon=ft.icons.ACCOUNT_CIRCLE_OUTLINED,
+            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+            items=[
+                ft.PopupMenuItem(text="Meu Perfil", icon=ft.icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")), # Rota de perfil
+                ft.PopupMenuItem(text="Configurações", icon=ft.icons.SETTINGS_OUTLINED, on_click=lambda _: page.go("/settings")), # Rota de configurações
+                ft.PopupMenuItem(),  # Divisor
+                ft.PopupMenuItem(text="Sair", icon=ft.icons.LOGOUT, on_click=lambda _: handle_logout(page)) # Ação de Logout
+            ]
+        )
+    ]
+
     return ft.AppBar(
         title=ft.Text(app_title),
         center_title=False,
-        actions=[
-             ft.IconButton(
-                ft.Icons.BRIGHTNESS_4_OUTLINED,
-                tooltip="Mudar tema",
-                on_click=toggle_theme_mode,
-                padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL)
-             )
-        ]
+        actions=app_bar_actions
     )
 
 # Módulos e seus ícones/rotas para a navegação
@@ -269,4 +300,38 @@ def create_footer(page: ft.Page) -> ft.BottomAppBar:
         padding=ft.padding.symmetric(horizontal=theme.PADDING_M)
     )
 
+from src.logger.logger import LoggerSetup # Adicionado
+_logger_layout = LoggerSetup.get_logger(__name__)
 
+def handle_logout(page: ft.Page):
+    """Limpa o estado de autenticação e redireciona para a tela de login."""
+    user_id_logged_out = page.session.get("auth_user_id") or \
+                         (page.client_storage.get("auth_user_id") if page.client_storage else "Desconhecido")
+    _logger_layout.info(f"Usuário {user_id_logged_out} deslogando.")
+
+    # Limpa do client_storage se existir
+    if page.client_storage:
+        if page.client_storage.contains_key("auth_id_token"): # Verifica antes de remover
+            page.client_storage.remove("auth_id_token")
+        if page.client_storage.contains_key("auth_user_id"):
+            page.client_storage.remove("auth_user_id")
+        if page.client_storage.contains_key("auth_user_email"):
+            page.client_storage.remove("auth_user_email")
+        if page.client_storage.contains_key("auth_display_name"):
+            page.client_storage.remove("auth_display_name")
+        _logger_layout.debug("Dados de autenticação removidos do client_storage (se existiam).")
+    
+    keys_to_remove_session = ["auth_id_token", "auth_user_id", "auth_user_email", "auth_display_name"]
+    for key in keys_to_remove_session:
+        if page.session.contains_key(key):
+            page.session.remove(key) 
+    _logger_layout.debug("Dados de autenticação removidos da sessão Flet.")
+    
+    LoggerSetup.set_cloud_user_context(None, None) # Limpa contexto do logger de nuvem
+    _logger_layout.info("Contexto do logger de nuvem limpo.")
+    
+    page.go("/login")
+    # Opcional: Mostrar um snackbar de logout bem-sucedido na página de login
+    # Isso é um pouco mais complexo porque o snackbar precisa ser mostrado *após* o redirecionamento.
+    # Uma forma seria passar um parâmetro na rota: page.go("/login?logout=true")
+    # E a view de login verificaria esse parâmetro para mostrar o snackbar.

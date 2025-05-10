@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Any, TYPE_CHECKING
 
 from .cloud_logger_handler import CloudLogHandler, ClientLogUploader, AdminLogUploader
-from src.settings import (PATH_LOGS, CLOUD_LOGGER_FOLDER)
+from src.settings import (PATH_LOGS, CLOUD_LOGGER_FOLDER, APP_VERSION)
 
 if TYPE_CHECKING:
     from src.services.firebase_client import FirebaseClientStorage
@@ -83,8 +83,6 @@ class LoggerSetup:
     def _create_cloud_logger_handler(
         cls,
         formatter,
-        username_app: str,
-        version_app: str,
         level=logging.INFO
     ) -> Optional[CloudLogHandler]:
         
@@ -106,8 +104,6 @@ class LoggerSetup:
         # CloudLogHandler não é mais um singleton no LoggerSetup, mas a thread de upload é global.
         try:
             cloud_handler = CloudLogHandler(
-                username_app=username_app,
-                version_app=version_app,
                 uploader_strategy=uploader_to_use
             )
             cloud_handler.setLevel(level)
@@ -177,8 +173,6 @@ class LoggerSetup:
     @classmethod
     def initialize(cls,
                    routine_name: str,
-                   username_app: str,
-                   version_app: str,
                    firebase_client_storage: Optional['FirebaseClientStorage'] = None,
                    fb_manager_storage_admin: Optional['FbManagerStorage'] = None,
                    modules_to_log: Optional[List[str]] = None,
@@ -251,7 +245,7 @@ class LoggerSetup:
         logger.addHandler(console_handler)
 
         # Adiciona o handler para CloudStorage
-        cloud_log_handler = cls._create_cloud_logger_handler(cls.formatter_detailed, username_app, version_app, level=logging.INFO)
+        cloud_log_handler = cls._create_cloud_logger_handler(cls.formatter_detailed, level=logging.INFO)
         if cloud_log_handler:
             cls._apply_module_filter(cloud_log_handler, modules_to_log)
             logger.addHandler(cloud_log_handler)
@@ -348,7 +342,6 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
 
     # --- Configuração do Teste ---
     test_routine_name = f"TestRoutine_{test_identifier}"
-    test_username = f"TestUser_{test_identifier}"
     test_version = "0.0.1-test"
     # Mensagens únicas para procurar no log baixado
     log_marker_info = f"[INFO_TEST_MARKER_{test_identifier}]"
@@ -363,8 +356,6 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
         print("Passo 1: Inicializando LoggerSetup...")
         LoggerSetup.initialize(
             routine_name=test_routine_name,
-            username_app=test_username,
-            version_app=test_version,
             fb_manager_storage_admin=fb_manager_instance,
         )
         print("LoggerSetup inicializado.")
@@ -379,14 +370,13 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
         # Replicando a lógica de path do CloudLogHandler.upload_logs_batch_static
         username_pc = os.getlogin() if os.name != 'posix' else os.getenv('USER', 'unknown_posix') # Adaptação simples getlogin
         username_pc_safe = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', username_pc)
-        username_app_safe = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', test_username)
-        username_full = username_pc_safe if (username_app_safe in username_pc_safe) else f"{username_pc_safe}_{username_app_safe}"
+        username_full = username_pc_safe 
         username_full = re.sub(r'[^\w\s\d_\-\.]', '', username_full)
         username_full = re.sub(r'\s+', '_', username_full)
         username_full = re.sub(r'[_\-\.]+', '_', username_full)
         username_full = re.sub(r'^_|_$', '', username_full).strip() or "default_user"
 
-        log_folder_user = Path(CLOUD_LOGGER_FOLDER) / username_full / test_version
+        log_folder_user = Path(CLOUD_LOGGER_FOLDER) / username_full / APP_VERSION
         log_filename = f"{username_full}_{datetime.now().strftime('%Y-%m-%d')}.txt"
         cloud_path = log_folder_user / log_filename
         expected_cloud_path_str = cloud_path.as_posix()

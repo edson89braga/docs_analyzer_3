@@ -25,7 +25,7 @@ DEFAULT_LLM_SERVICE = "openai" # Exemplo
 
 # (Pode adicionar mais configurações conforme necessário)
 
-APP_TITLE = "IA AssiStente - Análise de Documentos - COR/SR/PF/SP"
+APP_TITLE = "IA Assistente - Análise de Documentos - COR/SR/PF/SP"
 
 CLOUD_LOGGER_FOLDER = "logs/"        # Pasta no CloudStorage
 CLOUD_LOGGER_UPLOAD_INTERVAL = 120   # Tempo de intervalo entre uploads (segundos)

@@ -156,7 +156,7 @@ class FirebaseClientStorage:
 
         # Constrói o caminho completo no bucket, isolando por usuário
         full_storage_path = f"users/{user_id}/{storage_path_suffix.lstrip('/')}"
-        self.logger.info(f"Tentando upload de texto para Storage: {full_storage_path}")
+        self.logger.debug(f"Tentando upload de texto para Storage: {full_storage_path}")
 
         try:
             self._make_storage_request(
@@ -167,7 +167,7 @@ class FirebaseClientStorage:
                 content_type="text/plain; charset=utf-8",
                 params={"uploadType": "media", "name": full_storage_path} # 'name' aqui é o caminho completo
             )
-            self.logger.info(f"Texto enviado com sucesso para Storage: {full_storage_path}")
+            self.logger.debug(f"Texto enviado com sucesso para Storage: {full_storage_path}")
             return True
         except Exception as e:
             self.logger.error(f"Falha no upload de texto para Storage ({full_storage_path}): {e}")
@@ -200,7 +200,7 @@ class FirebaseClientStorage:
                 params={"alt": "media"} # Para obter o conteúdo do arquivo
             )
             content = response.text # requests decodifica automaticamente com base no charset (ou utf-8)
-            self.logger.info(f"Texto obtido com sucesso do Storage: {full_storage_path}")
+            self.logger.debug(f"Texto obtido com sucesso do Storage: {full_storage_path}")
             return content
         except requests.exceptions.HTTPError as http_err:
             if http_err.response.status_code == 404:
@@ -826,8 +826,6 @@ def test_firebase_clients():
     from src.logger.logger import LoggerSetup
     LoggerSetup.initialize(
         routine_name="DocsAnalyzer3",  
-        username_app='UserTest',
-        version_app='VersionTest',
         firebase_client_storage = storage_client
     )
     LoggerSetup.set_cloud_user_context(user_token, user_id)
@@ -1134,6 +1132,16 @@ def test_firebase_auth():
         test_logger.warning("Nenhum usuário autenticado (ID Token ausente). Teste de exclusão de conta pulado.")
 
     print("\n--- Teste Interativo de FbManagerAuth Concluído ---")
+    '''
+    Teste de Permissão negada:
+    storage_client = FirebaseClientStorage()
+    fb_auth_manager = FbManagerAuth()
+    user_auth_data = fb_auth_manager.authenticate_user_get_all_data('edson.bragga@gmail.com', 'teste...')
+    full_storage_path = "users/other_path/teste.txt"
+    text_content = 'texto teste'
+    self=storage_client
+    self._make_storage_request(...
+    '''
 
 # test_firebase_clients()
 # test_firebase_auth()

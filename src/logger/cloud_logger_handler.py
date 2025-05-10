@@ -6,7 +6,7 @@ from pathlib import Path
 from time import sleep
 
 from src.settings import (PATH_LOGS, CLOUD_LOGGER_FOLDER, CLOUD_LOGGER_UPLOAD_INTERVAL, CLOUD_LOGGER_MAX_BUFFER_SIZE, 
-CLOUD_LOGGER_MAX_RETRIES, CLOUD_LOGGER_RETRY_DELAY)
+CLOUD_LOGGER_MAX_RETRIES, CLOUD_LOGGER_RETRY_DELAY, APP_VERSION)
 
 from src.services.firebase_client import FirebaseClientStorage
 from src.services.firebase_manager import FbManagerStorage
@@ -45,32 +45,6 @@ class ClientLogUploader(LogUploaderStrategy):
         if not self.client_storage or not self._current_user_token or not self._current_user_id:
             self.logger.warning("ClientLogUploader: Contexto de usuário ou cliente ausente para get_existing_logs.")
             return ""
-        
-        # O storage_path_suffix é relativo a users/{uid}/
-        # base_log_folder já contém o username_full e version_app
-        # Ex: base_log_folder = CLOUD_LOGGER_FOLDER / username_full / version_app
-        #     log_filename = username_full_YYYY-MM-DD.txt
-        # Precisamos remover a parte "users/{uid}/" que é adicionada por upload_text_user
-        # O path completo no bucket seria: users/{uid}/{base_log_folder_sem_users_uid_prefixo}/{log_filename}
-        # No entanto, o client_storage.get_text_user espera o path *após* users/{uid}
-        
-        # Correção: client_storage espera o path relativo à pasta do usuário.
-        # base_log_folder é CLOUD_LOGGER_FOLDER / username_full / version_app
-        # Se CLOUD_LOGGER_FOLDER é "logs_app", e username_full é "pcuser_appuser",
-        # e version_app é "v1", então o path no bucket será:
-        # users/UID_DO_USUARIO/logs_app/pcuser_appuser/v1/pcuser_appuser_data.txt
-        # O que get_text_user precisa é: "logs_app/pcuser_appuser/v1/pcuser_appuser_data.txt"
-        
-        # `base_log_folder` é como `logs/username_app/version_app`
-        # `log_filename` é `username_app_data.txt`
-        # O `storage_path_suffix` para `get_text_user` deve ser `base_log_folder_relativa / log_filename`
-        # onde `base_log_folder_relativa` é `CLOUD_LOGGER_FOLDER / username_full / version_app`
-        # mas `CLOUD_LOGGER_FOLDER` já está no `base_log_folder`.
-        
-        # Simplificando: o `storage_path_suffix` deve ser o path a partir de `users/{uid}/`
-        # Se `base_log_folder` é `logs_gerais/NomeUsuarioApp/VersaoApp`
-        # e `log_filename` é `NomeUsuarioApp_Data.txt`,
-        # então o `storage_path_suffix_for_client` seria `logs_gerais/NomeUsuarioApp/VersaoApp/NomeUsuarioApp_Data.txt`
         
         path_suffix = (base_log_folder / log_filename).as_posix()
 
@@ -142,13 +116,9 @@ class CloudLogHandler(logging.Handler):
 
     # Informações da aplicação e uploader agora são de instância
     def __init__(self,
-                 username_app: str,
-                 version_app: str,
                  uploader_strategy: LogUploaderStrategy, # Estratégia de upload injetada
                  level=logging.INFO):
         super().__init__(level=level)
-        self.username_app = username_app
-        self.version_app = version_app
         self.uploader = uploader_strategy # Uploader strategy
         logger = logging.getLogger(__name__)
         self.logger = logger
@@ -163,7 +133,7 @@ class CloudLogHandler(logging.Handler):
                 CloudLogHandler.upload_thread = Thread(target=CloudLogHandler._upload_logs_thread_target_static,
                                                        args=(self,), daemon=True)
                 CloudLogHandler.upload_thread.start()
-                logger.info("CloudLogHandler: Thread de upload global iniciada.")
+                logger.debug("CloudLogHandler: Thread de upload global iniciada.")
 
             if not CloudLogHandler._atexit_registered:
                 atexit.register(CloudLogHandler._force_upload_on_exit_static, self) # Passa a instância
@@ -200,7 +170,7 @@ class CloudLogHandler(logging.Handler):
     def _upload_logs_thread_target_static(handler_instance: 'CloudLogHandler'):
         """Método alvo da thread. Aguarda sinal/timeout e dispara upload."""
         logger = logging.getLogger(__name__)
-        logger.info("CloudLogHandler: Thread de upload (estática, com instância) rodando.")
+        logger.debug("CloudLogHandler: Thread de upload (estática, com instância) rodando.")
         while not CloudLogHandler.stop_thread_flag:
             signaled = CloudLogHandler.upload_event.wait(CLOUD_LOGGER_UPLOAD_INTERVAL)
             if CloudLogHandler.stop_thread_flag:
@@ -211,17 +181,29 @@ class CloudLogHandler(logging.Handler):
             with CloudLogHandler.buffer_lock:
                 if CloudLogHandler.log_buffer:
                     current_logs_batch = CloudLogHandler.log_buffer[:]
-                    CloudLogHandler.log_buffer.clear()
+                    # CloudLogHandler.log_buffer.clear()
             
             if signaled: CloudLogHandler.upload_event.clear()
 
             if current_logs_batch:
+                upload_completed_successfully = False
                 try:
-                    # Usa o uploader da instância do handler passada
-                    handler_instance._perform_upload(current_logs_batch)
+                    upload_completed_successfully = handler_instance._perform_upload(current_logs_batch)
+
+                    if upload_completed_successfully:
+                        with CloudLogHandler.buffer_lock: # Limpa o buffer SÓ SE teve sucesso
+                            if CloudLogHandler.log_buffer and CloudLogHandler.log_buffer[:len(current_logs_batch)] == current_logs_batch:
+                                    CloudLogHandler.log_buffer = CloudLogHandler.log_buffer[len(current_logs_batch):]
+                            else: # Se o buffer mudou enquanto processava, seja mais cuidadoso (raro)
+                                    logger.warning("CloudLogHandler: Buffer modificado durante upload. Limpeza pode ser imprecisa.")
+                                    CloudLogHandler.log_buffer.clear() # Fallback para limpar tudo
+                    # Se não teve sucesso (upload_completed_successfully é False),
+                    # os logs permanecem no CloudLogHandler.log_buffer para a próxima tentativa.
+                    # A lógica de backup local dentro de _perform_upload já cuida dos casos de falha real.
+
                 except Exception as e:
                     logger.error(f"Erro no upload de logs pela thread (estática): {e}", exc_info=True)
-        logger.info("CloudLogHandler: Thread de upload (estática) encerrada.")
+        logger.debug("CloudLogHandler: Thread de upload (estática) encerrada.")
 
     def _perform_upload(self, logs_batch: List[str]) -> bool:
         """Método de instância que usa a estratégia de upload configurada."""
@@ -233,60 +215,70 @@ class CloudLogHandler(logging.Handler):
         except OSError:
             username_pc = "unknown_pc"
         
-        username_pc_safe = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', username_pc)
-        username_app_safe = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', self.username_app) # Usa da instância
-        username_full = username_pc_safe if (username_app_safe in username_pc_safe) else f"{username_pc_safe}_{username_app_safe}"
+        username_full = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', username_pc)
         username_full = re.sub(r'[^\w\s\d_\-\.]', '', username_full).strip()
         username_full = re.sub(r'\s+', '_', username_full).strip('_') or "default_user"
          # Correção regex para múltiplos underscores/hífens/pontos
         username_full = re.sub(r'[_.-]+', '_', username_full)
 
-
-        # O base_log_folder agora é relativo ao CLOUD_LOGGER_FOLDER
-        # e não inclui o 'users/{uid}' que o client uploader espera.
-        # O `base_log_folder` é o que vai *depois* de `users/{uid}/` para o cliente,
-        # ou o que vai *depois* do bucket para o admin.
-        # Para o ClientUploader, o path no bucket será: `users/{uid}/{CLOUD_LOGGER_FOLDER}/{username_full}/{version_app}/{log_filename}`
-        # Para o AdminUploader, o path no bucket será: `{CLOUD_LOGGER_FOLDER}/{username_full}/{version_app}/{log_filename}`
-        #
-        # Vamos definir `base_log_folder_for_strategy` que é o caminho DENTRO do "diretório" do CLOUD_LOGGER_FOLDER
-        # e o `log_filename_for_strategy`.
-        # O `uploader.upload_logs` receberá estes dois.
-        
-        # `base_log_folder_in_cloud` é o caminho a partir da raiz do bucket (para admin)
-        # ou a partir de `users/{uid}/` (para cliente).
-        # Se CLOUD_LOGGER_FOLDER = "app_logs"
-        # base_log_folder_in_cloud = Path("app_logs") / username_full / self.version_app
-        base_log_folder_in_cloud = Path(CLOUD_LOGGER_FOLDER) / username_full / self.version_app
+        base_log_folder_in_cloud = Path(CLOUD_LOGGER_FOLDER) / username_full / APP_VERSION
         log_filename_in_cloud = f"{username_full}_{datetime.now().strftime('%Y-%m-%d')}.txt"
         
         full_cloud_path_info_for_backup = (base_log_folder_in_cloud / log_filename_in_cloud).as_posix()
 
-
         success = False
-        for attempt in range(CLOUD_LOGGER_MAX_RETRIES):
-            try:
-                if self.uploader.upload_logs(logs_batch, base_log_folder_in_cloud, log_filename_in_cloud):
-                    self.logger.info(f"CloudLogHandler: Lote de {len(logs_batch)} logs enviado via {self.uploader.__class__.__name__} para pasta base {base_log_folder_in_cloud}")
-                    success = True
-                    break
-                else: # Uploader retornou False explicitamente
-                    self.logger.warning(f"CloudLogHandler: Tentativa {attempt + 1} de upload falhou (uploader retornou False).")
-            except Exception as e:
-                self.logger.error(f"CloudLogHandler: Exceção na tentativa {attempt + 1} de upload via {self.uploader.__class__.__name__}: {e}", exc_info=True)
-            
-            if not success and attempt < CLOUD_LOGGER_MAX_RETRIES - 1:
-                sleep(CLOUD_LOGGER_RETRY_DELAY)
+        initial_upload_attempt_failed_gracefully = False
+
+        # Verifica se o uploader é o ClientLogUploader e se ele tem contexto
+        can_attempt_client_upload = isinstance(self.uploader, ClientLogUploader) and \
+                                    self.uploader._current_user_token and \
+                                    self.uploader._current_user_id
+
+        if isinstance(self.uploader, ClientLogUploader) and not can_attempt_client_upload:
+            self.logger.info(f"CloudLogHandler: ClientUploader selecionado, mas sem contexto de usuário. Upload adiado.")
+            initial_upload_attempt_failed_gracefully = True # Indica que não devemos fazer retries ou backup agressivo
+            # Não retorna True aqui, pois pode haver um fallback para AdminUploader
+            # Se não houver fallback, os logs ficarão no buffer.
+
+        if not initial_upload_attempt_failed_gracefully: # Só tenta upload real se não for um "adiamento" do cliente
+            for attempt in range(CLOUD_LOGGER_MAX_RETRIES):
+                try:
+                    upload_successful_this_attempt = False
+                    if isinstance(self.uploader, ClientLogUploader):
+                        if can_attempt_client_upload:
+                            upload_successful_this_attempt = self.uploader.upload_logs(logs_batch, base_log_folder_in_cloud, log_filename_in_cloud)
+                        # else: não tenta, já tratado por initial_upload_attempt_failed_gracefully
+                    elif isinstance(self.uploader, AdminLogUploader): # Se for AdminUploader, sempre tenta
+                        upload_successful_this_attempt = self.uploader.upload_logs(logs_batch, base_log_folder_in_cloud, log_filename_in_cloud)
+                    else: # Estratégia desconhecida
+                        self.logger.error(f"CloudLogHandler: Estratégia de uploader desconhecida: {self.uploader.__class__.__name__}")
+                        break # Sai do loop de retentativas
+
+                    if upload_successful_this_attempt:
+                        self.logger.info(f"CloudLogHandler: Lote de {len(logs_batch)} logs enviado via {self.uploader.__class__.__name__} para pasta base {base_log_folder_in_cloud}")
+                        success = True
+                        break
+                    else:
+                        self.logger.warning(f"CloudLogHandler: Tentativa {attempt + 1} de upload falhou (uploader {self.uploader.__class__.__name__} retornou False).")
+                except Exception as e:
+                    self.logger.error(f"CloudLogHandler: Exceção na tentativa {attempt + 1} de upload via {self.uploader.__class__.__name__}: {e}", exc_info=True)
+                
+                if not success and attempt < CLOUD_LOGGER_MAX_RETRIES - 1:
+                    sleep(CLOUD_LOGGER_RETRY_DELAY)
         
-        if not success:
+        # Só faz backup se a tentativa de upload realmente falhou (não se foi adiada por falta de contexto do cliente)
+        if not success and not initial_upload_attempt_failed_gracefully:
             self.logger.error(f"CloudLogHandler: Falha final no upload para CloudStorage via {self.uploader.__class__.__name__}.")
             self._backup_logs_local(logs_batch, full_cloud_path_info_for_backup)
+        elif initial_upload_attempt_failed_gracefully and not success:
+            self.logger.info("CloudLogHandler: Upload via cliente adiado, logs permanecem no buffer.")
+            pass
         return success  
 
     def _backup_logs_local(self, logs_batch: List[str], cloud_path_info: str):
         backup_dir = PATH_LOGS / "logs_backup_cloud_failed"
         backup_dir.mkdir(exist_ok=True)
-        backup_file = backup_dir / f"cloud_fail_{self.username_app}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        backup_file = backup_dir / f"cloud_fail_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         try:
             with open(backup_file, 'w', encoding='utf-8') as f:
                 f.write(f"# Falha no upload para nuvem. Uploader: {self.uploader.__class__.__name__}\n")
@@ -321,12 +313,12 @@ class CloudLogHandler(logging.Handler):
         upload_thread = CloudLogHandler.upload_thread
         if upload_thread and upload_thread.is_alive():
             # ... (lógica de join como antes)
-            logger.info("CloudLogHandler: Aguardando thread de upload (estática) encerrar...")
+            logger.debug("CloudLogHandler: Aguardando thread de upload (estática) encerrar...")
             upload_thread.join(timeout=max(1, CLOUD_LOGGER_UPLOAD_INTERVAL // 2))
             if upload_thread.is_alive():
                 logger.warning("CloudLogHandler: WARNING - Timeout ao aguardar thread (estática).")
             else:
-                logger.info("CloudLogHandler: Thread de upload (estática) encerrada.")
+                logger.debug("CloudLogHandler: Thread de upload (estática) encerrada.")
         logger.info("CloudLogHandler: Processo de encerramento do logger da nuvem (estático) concluído.")
 
     def flush(self):

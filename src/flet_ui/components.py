@@ -27,23 +27,21 @@ def show_snackbar(page: ft.Page, message: str, color: str = theme.COLOR_INFO, du
     global _global_snackbar_instance
     
     # Verifica se o SnackBar global já foi criado e adicionado à página
-    # Usamos page.client_data para rastrear se já foi adicionado à *página atual*
     snackbar_added_key = "_global_snackbar_added"
-
-    if not page.client_data.get(snackbar_added_key):
-        if _global_snackbar_instance is None:
-            # Cria a instância global na primeira vez
-            _global_snackbar_instance = ft.SnackBar(
-                content=ft.Text(""),
-                duration=duration,
-                show_close_icon = True, # action="OK" Ou "Fechar"
-                action_color=ft.Colors.WHITE
-            )
-        # Adiciona a instância global ao overlay da página ATUAL
-        # Fazemos isso apenas uma vez por sessão de página (page)
-        if _global_snackbar_instance not in page.overlay:
-            page.overlay.append(_global_snackbar_instance)
-            page.client_data[snackbar_added_key] = True # Marca como adicionado a esta página
+    
+    # AttributeError: 'Page' object has no attribute 'client_data'
+    if _global_snackbar_instance is None:
+        # Cria a instância global na primeira vez
+        _global_snackbar_instance = ft.SnackBar(
+            content=ft.Text(""),
+            duration=duration,
+            show_close_icon = True, # action="OK" Ou "Fechar"
+            action_color=ft.Colors.WHITE
+        )
+    # Adiciona a instância global ao overlay da página ATUAL
+    # Fazemos isso apenas uma vez por sessão de página (page)
+    if _global_snackbar_instance not in page.overlay:
+        page.overlay.append(_global_snackbar_instance)
 
     snackbar = _global_snackbar_instance
     if not snackbar:
@@ -410,6 +408,7 @@ class ValidatedTextField(ft.Column):
         # Parâmetros de layout para o ft.Column
         expand: Union[None, bool, int] = None,
         col: Optional[Dict[str, Union[int, float]]] = None,
+        on_submit: Optional[Callable] = None,
         # ... outros parâmetros de ft.TextField ou ft.Column podem ser adicionados
     ):
         super().__init__(spacing=1, expand=expand, col=col) # Pouco espaçamento entre textfield e erro
@@ -429,6 +428,7 @@ class ValidatedTextField(ft.Column):
             read_only=read_only,
             disabled=disabled,
             autofocus=autofocus,
+            on_submit=on_submit,
             on_change=self._handle_change,
             on_blur=self._handle_blur, # Validar também no on_blur
             # error_style=ft.TextStyle(color=theme.COLOR_ERROR) # O Flet já tem um estilo padrão
