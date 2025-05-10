@@ -49,36 +49,6 @@ except Exception as e:
     logging.error("Logger principal falhou ao inicializar. Usando fallback básico.")
     # Não levantar exceção aqui para permitir que a app Flet tente iniciar mesmo assim.
 
-
-# --- Monkey Patching Uvicorn Logging ---
-# Tentar importar DefaultFormatter. Se falhar, o patch não é necessário/possível.
-#try:
-#    from uvicorn.logging import DefaultFormatter
-#
-#    # Criação de uma subclasse segura
-#    class SafeUvicornDefaultFormatter(DefaultFormatter):
-#        def __init__(self, *args, **kwargs):
-#            # Força 'use_colors' para False, independentemente de isatty
-#            kwargs['use_colors'] = False
-#            # Chama o __init__ original, mas com cores desabilitadas
-#            try:
-#                super().__init__(*args, **kwargs)
-#            except TypeError as te:
-#                # Lidar com possíveis mudanças na assinatura do __init__ do uvicorn
-#                logging.warning(f"Potencial incompatibilidade no __init__ do DefaultFormatter: {te}. Tentando inicialização básica.")
-#                # Tenta inicialização mais básica de logging.Formatter
-#                logging.Formatter.__init__(self, *args, **kwargs)
-#    # Substitui a classe original pela nossa versão segura
-#    import uvicorn.logging
-#    uvicorn.logging.DefaultFormatter = SafeUvicornDefaultFormatter
-#    logging.info("Uvicorn DefaultFormatter monkey-patched para desabilitar cores/isatty check.")
-#
-#except ImportError:
-#    logging.warning("Não foi possível importar uvicorn.logging.DefaultFormatter. O monkey patch não será aplicado.")
-#except Exception as patch_err:
-#    logging.error(f"Erro durante o monkey patching do Uvicorn: {patch_err}", exc_info=True)
-# --- Fim do Monkey Patching ---
-
 # Silencia logs de bibliotecas 
 logging.getLogger("flet_core").setLevel(logging.WARNING)
 logging.getLogger("flet_runtime").setLevel(logging.WARNING)
@@ -107,6 +77,6 @@ if __name__ == "__main__":
 
 '''
 TODO:
-Segurança do Token: O idToken tem um tempo de vida (geralmente 1 hora). Para aplicações de longa duração, precisaMOS implementar a lógica de atualização 
-do token usando o refreshToken (que também é retornado por authenticate_user_get_all_data). 
+1) CreateUser: Tratar erro "message": "EMAIL_EXISTS"
+2) Seção Perfil, incluir botão para retornar à página inicial
 '''

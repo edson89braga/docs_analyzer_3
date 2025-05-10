@@ -1,13 +1,15 @@
 # src/services/firebase_client.py
 
-import requests, json, re, secrets, logging
+import requests, json, re, secrets, logging, time
 import urllib.parse
 from datetime import datetime
-from typing import Optional, Dict, Any, List, Union
+from typing import Optional, Dict, Any, List, Union, Callable
 import base64 # Para codificar/decodificar bytes para Firestore bytesValue
 
 from src.settings import PROJECT_ID, FB_STORAGE_BUCKET, FIREBASE_WEB_API_KEY
 from src.utils import with_proxy
+
+from flet import Page as ft_Page
 
 # --- Constantes para APIs REST ---
 FIRESTORE_BASE_URL = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
@@ -696,100 +698,277 @@ class FbManagerAuth:
             return False
 
     @with_proxy()
-    def change_password(self, id_token: str, new_password: str) -> bool:
+    def refresh_id_token(self, refresh_token_str: str) -> Optional[Dict[str, Any]]:
         """
-        Altera a senha do usuário autenticado.
-        """
-        self.logger.info("Tentando alterar senha do usuário autenticado.")
-        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI": return False
+        Atualiza um ID Token usando um Refresh Token.
 
-        rest_api_url = f"{self.identity_toolkit_base_url}:update?key={self.firebase_web_api_key}"
+        Args:
+            refresh_token_str: O refresh token do usuário.
+
+        Returns:
+            Optional[Dict[str, Any]]: Dicionário com os novos tokens ('id_token', 'refresh_token', 
+                                      'expires_in', 'user_id') ou None em falha.
+                                      O Firebase retorna 'id_token' (novo ID token), 
+                                      'refresh_token' (pode ser o mesmo ou um novo),
+                                      'expires_in' (nova duração em segundos),
+                                      'user_id' (o localId do usuário).
+        """
+        self.logger.info("Tentando atualizar ID Token usando Refresh Token.")
+        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
+            self.logger.error("Refresh de token falhou: Firebase Web API Key não configurada.")
+            return None
+        if not refresh_token_str:
+            self.logger.error("Refresh de token falhou: Refresh token não fornecido.")
+            return None
+
+        # A URL para refresh de token é diferente
+        rest_api_url = f"https://securetoken.googleapis.com/v1/token?key={self.firebase_web_api_key}"
         payload = json.dumps({
-            "idToken": id_token,
-            "password": new_password,
-            "returnSecureToken": False # Não precisamos de um novo token aqui
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token_str
         })
         headers = {"Content-Type": "application/json"}
 
         try:
             response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
             response.raise_for_status()
-            self.logger.info("Senha alterada com sucesso.")
-            return True
-        except requests.exceptions.HTTPError as http_err:
-            self.logger.error(f"Erro HTTP ao alterar senha: {http_err.response.status_code} - {http_err.response.text}")
-            return False
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Erro de requisição ao alterar senha: {e}", exc_info=True)
-            return False
+            response_data = response.json() # Contém id_token, refresh_token, expires_in, user_id
 
-    @with_proxy()
-    def update_profile(self, id_token: str, display_name: Optional[str] = None,
-                       photo_url: Optional[str] = None, delete_attributes: Optional[List[str]] = None) -> bool:
+            # Firebase pode retornar 'id_token' ou 'access_token'. O SDK geralmente usa 'id_token'.
+            # A API de refresh token retorna 'id_token' para o novo ID token e 'user_id' para localId.
+            if response_data.get("id_token") and response_data.get("user_id"):
+                self.logger.info(f"ID Token atualizado com sucesso para user ID: {response_data.get('user_id')}")
+                # Adicionar o timestamp de expiração calculado
+                expires_in_seconds = int(response_data.get("expires_in", 3600)) # Default 1 hora
+                response_data["id_token_expires_at"] = time.time() + expires_in_seconds - 60 # -60s de buffer
+                return response_data
+            else:
+                self.logger.error(f"Refresh de token falhou: Resposta não contém 'id_token' ou 'user_id'. Resposta: {response_data}")
+                return None
+        except requests.exceptions.HTTPError as http_err:
+            self.logger.error(f"Erro HTTP ao atualizar token: {http_err.response.status_code} - {http_err.response.text}")
+            # Se o refresh token for inválido/expirado, a API geralmente retorna um erro específico
+            # como TOKEN_EXPIRED ou USER_NOT_FOUND, ou INVALID_REFRESH_TOKEN.
+            # Se isso acontecer, o usuário precisa logar novamente.
+            return None # Indica falha no refresh
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Erro de requisição ao atualizar token: {e}", exc_info=True)
+            return None
+        except Exception as e:
+            self.logger.error(f"Erro inesperado ao atualizar token: {e}", exc_info=True)
+            return None
+
+    def _execute_sensitive_action(
+        self,
+        page: ft_Page, # Necessário para obter tokens da sessão e para o refresh_token_if_needed
+        action_callable: Callable[..., Any], # A função sensível a ser chamada (ex: self.change_password)
+        *args: Any, # Argumentos para a action_callable (ex: new_password para change_password)
+        # **kwargs: Any # Se a action_callable precisar de kwargs, adicione aqui
+    ) -> Any: # Retorna o que a action_callable retornar, ou um erro específico/None
         """
-        Atualiza o perfil do usuário (displayName, photoUrl).
-        `delete_attributes` pode ser ["DISPLAY_NAME", "PHOTO_URL"] para remover campos.
+        Executa uma ação sensível, tratando CREDENTIAL_TOO_OLD_LOGIN_AGAIN com refresh de token.
+        Se o refresh não resolver, indica a necessidade de reautenticação.
+
+        Args:
+            page: A instância da página Flet para acesso à sessão e refresh.
+            action_callable: A função do FbManagerAuth a ser executada (ex: self.change_password).
+                             Esta função DEVE aceitar o id_token como seu PRIMEIRO argumento,
+                             seguido por *args.
+            *args: Argumentos para a action_callable (após o id_token).
+
+        Returns:
+            O resultado da action_callable em sucesso, ou um dicionário de erro específico
+            se a reautenticação for necessária, ou None/False em outras falhas.
         """
-        self.logger.info("Tentando atualizar perfil do usuário.")
-        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI": return False
+        current_id_token = page.session.get("auth_id_token")
+        if not current_id_token:
+            self.logger.error("_execute_sensitive_action: Nenhum ID token na sessão.")
+            # Forçar logout se não há token para uma ação sensível
+            from src.flet_ui.layout import handle_logout # Import tardio
+            handle_logout(page)
+            return {"error": "NO_TOKEN_SESSION_LOGOUT"} # Sinaliza que o logout foi forçado
+
+        max_attempts = 2 # Tentativa inicial + 1 tentativa após refresh
+        for attempt in range(max_attempts):
+            try:
+                self.logger.debug(f"Tentativa {attempt + 1} de executar ação sensível: {action_callable.__name__}")
+                # A action_callable (ex: self.change_password) espera o id_token como primeiro argumento
+                result = action_callable(current_id_token, *args)
+                return result # Sucesso na primeira ou segunda tentativa
+            
+            except requests.exceptions.HTTPError as http_err:
+                if http_err.response and http_err.response.status_code == 400:
+                    try:
+                        error_data = http_err.response.json()
+                        api_error_message = error_data.get("error", {}).get("message")
+                        
+                        if api_error_message == "CREDENTIAL_TOO_OLD_LOGIN_AGAIN":
+                            self.logger.warning(f"Ação sensível falhou com CREDENTIAL_TOO_OLD (tentativa {attempt + 1}).")
+                            if attempt < max_attempts - 1: # Se ainda há tentativas (só tentamos refresh uma vez)
+                                self.logger.info("Tentando refresh forçado do token...")
+                                # Presume que check_and_refresh_token_if_needed está acessível
+                                # Idealmente, passá-lo ou tê-lo em um local comum.
+                                from src.flet_ui.app import check_and_refresh_token_if_needed # Ajuste o caminho se necessário
+                                
+                                if check_and_refresh_token_if_needed(page, force_refresh=True):
+                                    current_id_token = page.session.get("auth_id_token") # Pega o novo token
+                                    if not current_id_token: # Se refresh falhou e deslogou
+                                        self.logger.error("Refresh do token falhou e usuário foi deslogado.")
+                                        return {"error": "REFRESH_FAILED_LOGOUT"}
+                                    self.logger.info("Token atualizado. Repetindo ação sensível.")
+                                    continue # Próxima iteração do loop para tentar novamente
+                                else: # check_and_refresh_token_if_needed retornou False (provavelmente deslogou)
+                                    self.logger.error("Refresh do token falhou (check_and_refresh_token_if_needed retornou False).")
+                                    return {"error": "REFRESH_FAILED_LOGOUT"}
+                            else: # Última tentativa já falhou com CREDENTIAL_TOO_OLD
+                                self.logger.error("Ação sensível falhou com CREDENTIAL_TOO_OLD mesmo após refresh. Reautenticação necessária.")
+                                return {"error": "CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED"}
+                        else: # Outro erro 400
+                            self.logger.error(f"Erro HTTP 400 (não CREDENTIAL_TOO_OLD) na ação sensível: {api_error_message or http_err.response.text}")
+                            return {"error": api_error_message or "HTTP_400_ERROR", "details": error_data if 'error_data' in locals() else http_err.response.text}
+                    except json.JSONDecodeError:
+                        self.logger.error(f"Erro HTTP 400 (resposta não JSON) na ação sensível: {http_err.response.text}")
+                        return {"error": "HTTP_400_NON_JSON", "details": http_err.response.text}
+                else: # Erro HTTP não 400
+                    self.logger.error(f"Erro HTTP {http_err.response.status_code if http_err.response else 'N/A'} na ação sensível: {http_err}", exc_info=True)
+                    raise # Re-levanta outros erros HTTP para serem tratados pelo chamador original
+            
+            except Exception as e: # Outras exceções (RequestException, etc.)
+                self.logger.error(f"Exceção inesperada ao executar ação sensível: {e}", exc_info=True)
+                raise # Re-levanta para tratamento genérico
+
+        # Se sair do loop sem sucesso (improvável com a lógica acima, mas como fallback)
+        self.logger.error("Saiu do loop de tentativas para ação sensível sem um resultado claro.")
+        return {"error": "UNKNOWN_SENSITIVE_ACTION_FAILURE"}
+
+    @with_proxy() # O decorador ainda é útil para a chamada de rede final
+    def _raw_change_password(self, id_token: str, new_password: str) -> Dict[str, Any]: # Renomeado para indicar que é a chamada crua
+        """Chamada API crua para alterar senha. Usado por _execute_sensitive_action."""
+        self.logger.debug(f"API Call: Tentando alterar senha (raw) para token: {id_token[:10]}...")
+        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI": 
+            # _execute_sensitive_action não deve chegar aqui se o token não existir, mas como defesa
+            raise ValueError("Firebase Web API Key não configurada.")
 
         rest_api_url = f"{self.identity_toolkit_base_url}:update?key={self.firebase_web_api_key}"
-        payload_dict = {"idToken": id_token, "returnSecureToken": False}
-        if display_name is not None: # Permite string vazia para limpar se não usar delete_attributes
-            payload_dict["displayName"] = display_name
-        if photo_url is not None:
-            payload_dict["photoUrl"] = photo_url
-        if delete_attributes:
-            payload_dict["deleteAttribute"] = delete_attributes
+        payload = json.dumps({
+            "idToken": id_token,
+            "password": new_password,
+            "returnSecureToken": False 
+        })
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
+        response.raise_for_status() # Deixa _execute_sensitive_action tratar HTTPError
+        self.logger.info("API Call: Senha alterada com sucesso (raw).")
+        return response.json() # Retorna o JSON da resposta (geralmente dados do usuário atualizados ou vazio)
 
-        if len(payload_dict) == 2 and not delete_attributes: # Apenas idToken e returnSecureToken
-            self.logger.info("Nenhuma alteração de perfil solicitada.")
-            return True # Considera sucesso, pois não há o que fazer
+    def change_password(self, page: ft_Page, new_password: str) -> bool: # Agora recebe 'page'
+        """
+        Altera a senha do usuário autenticado, com tratamento de token antigo.
+        """
+        self.logger.info("Interface: Solicitado alteração de senha.")
+        # _execute_sensitive_action espera que a action_callable receba id_token como primeiro arg
+        # e os demais args depois. _raw_change_password já está assim.
+        result = self._execute_sensitive_action(page, self._raw_change_password, new_password)
+        
+        if isinstance(result, dict) and result.get("error"):
+            self.logger.error(f"Falha ao alterar senha: {result.get('error')} - {result.get('details', '')}")
+            if result.get("error") == "CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED":
+                # A UI deve ser notificada para forçar re-login
+                from src.flet_ui.layout import handle_logout # Import tardio
+                from src.flet_ui.components import show_snackbar # Import tardio
+                from src.flet_ui import theme # Import tardio
+                show_snackbar(page, "Sua sessão é muito antiga para esta ação. Por favor, faça login novamente.", color=theme.COLOR_ERROR, duration=7000)
+                handle_logout(page)
+            return False
+        elif isinstance(result, dict): # Sucesso (resposta JSON da API)
+            return True # A API de changePassword retorna dados do usuário ou vazio em sucesso.
+        return False # Falha não tratada explicitamente
+
+    # Similarmente para update_profile e delete_user_account:
+
+    @with_proxy()
+    def _raw_update_profile(self, id_token: str, display_name: Optional[str] = None,
+                            photo_url: Optional[str] = None, delete_attributes: Optional[List[str]] = None) -> Dict[str, Any]:
+        self.logger.debug(f"API Call: Tentando atualizar perfil (raw) para token: {id_token[:10]}...")
+        # ... (lógica da API call como estava em update_profile antes, sem o try/except complexo)
+        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
+            raise ValueError("Firebase Web API Key não configurada.")
+            
+        rest_api_url = f"{self.identity_toolkit_base_url}:update?key={self.firebase_web_api_key}"
+        payload_dict = {"idToken": id_token, "returnSecureToken": False}
+        if display_name is not None: payload_dict["displayName"] = display_name
+        if photo_url is not None: payload_dict["photoUrl"] = photo_url
+        if delete_attributes: payload_dict["deleteAttribute"] = delete_attributes
+
+        if len(payload_dict) <= 2 and not delete_attributes: # Só idToken e returnSecureToken
+             self.logger.info("API Call: Nenhuma alteração de perfil para enviar (raw).")
+             return {"message": "No profile changes to apply."} # Simula uma resposta de sucesso vazia
 
         payload = json.dumps(payload_dict)
         headers = {"Content-Type": "application/json"}
+        response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
+        response.raise_for_status()
+        self.logger.info("API Call: Perfil atualizado com sucesso (raw).")
+        return response.json()
 
-        try:
-            response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
-            response.raise_for_status()
-            self.logger.info("Perfil do usuário atualizado com sucesso.")
+    def update_profile(self, page: ft_Page, display_name: Optional[str] = None,
+                       photo_url: Optional[str] = None, delete_attributes: Optional[List[str]] = None) -> bool:
+        self.logger.info("Interface: Solicitado atualização de perfil.")
+        if display_name is None and photo_url is None and not delete_attributes:
+            self.logger.info("Nenhuma alteração de perfil solicitada na interface.")
+            return True # Considera sucesso
+
+        result = self._execute_sensitive_action(page, self._raw_update_profile, display_name, photo_url, delete_attributes)
+        
+        if isinstance(result, dict) and result.get("error"):
+            self.logger.error(f"Falha ao atualizar perfil: {result.get('error')} - {result.get('details', '')}")
+            if result.get("error") == "CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED":
+                from src.flet_ui.layout import handle_logout
+                from src.flet_ui.components import show_snackbar
+                from src.flet_ui import theme
+                show_snackbar(page, "Sua sessão é muito antiga para esta ação. Por favor, faça login novamente.", color=theme.COLOR_ERROR, duration=7000)
+                handle_logout(page)
+            return False
+        elif isinstance(result, dict): # Sucesso
             return True
-        except requests.exceptions.HTTPError as http_err:
-            self.logger.error(f"Erro HTTP ao atualizar perfil: {http_err.response.status_code} - {http_err.response.text}")
-            return False
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Erro de requisição ao atualizar perfil: {e}", exc_info=True)
-            return False
+        return False
+
 
     @with_proxy()
-    def delete_user_account(self, id_token: str) -> bool:
-        """
-        Exclui a conta do usuário autenticado.
-        """
-        self.logger.info("Tentando excluir conta do usuário autenticado.")
-        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI": return False
+    def _raw_delete_user_account(self, id_token: str) -> Dict[str, Any]:
+        self.logger.debug(f"API Call: Tentando excluir conta (raw) com token: {id_token[:10]}...")
+        # ... (lógica da API call como estava em delete_user_account antes)
+        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
+            raise ValueError("Firebase Web API Key não configurada.")
 
         rest_api_url = f"{self.identity_toolkit_base_url}:delete?key={self.firebase_web_api_key}"
         payload = json.dumps({"idToken": id_token})
         headers = {"Content-Type": "application/json"}
+        response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
+        response.raise_for_status()
+        self.logger.info("API Call: Conta do usuário excluída com sucesso (raw).")
+        return response.json() # Geralmente um JSON vazio {}
 
-        try:
-            response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
-            response.raise_for_status()
-            # A resposta para delete é um JSON vazio {} em sucesso
-            self.logger.info("Conta do usuário excluída com sucesso.")
+    def delete_user_account(self, page: ft_Page) -> bool: # Agora recebe 'page'
+        self.logger.info("Interface: Solicitado exclusão de conta.")
+        result = self._execute_sensitive_action(page, self._raw_delete_user_account)
+        
+        if isinstance(result, dict) and result.get("error"):
+            self.logger.error(f"Falha ao excluir conta: {result.get('error')} - {result.get('details', '')}")
+            if result.get("error") == "CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED":
+                from src.flet_ui.layout import handle_logout
+                from src.flet_ui.components import show_snackbar
+                from src.flet_ui import theme
+                show_snackbar(page, "Sua sessão é muito antiga para esta ação. Por favor, faça login novamente.", color=theme.COLOR_ERROR, duration=7000)
+                handle_logout(page)
+            return False
+        elif isinstance(result, dict): # Sucesso
             return True
-        except requests.exceptions.HTTPError as http_err:
-            self.logger.error(f"Erro HTTP ao excluir conta: {http_err.response.status_code} - {http_err.response.text}")
-            return False
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Erro de requisição ao excluir conta: {e}", exc_info=True)
-            return False
-
+        return False
+    
 
 # --- Imports para a Função de Teste ---
 import getpass
-import time
 from src.services import credentials_manager # Para simular criptografia de API key
 
 def test_firebase_clients():

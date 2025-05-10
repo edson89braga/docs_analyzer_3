@@ -3,7 +3,7 @@
 Define elementos de layout reutilizáveis como AppBar e NavigationRail.
 """
 import flet as ft
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any
 
 # Importa definições de tema se necessário (ex: para padding ou cores)
 from src.flet_ui import theme
@@ -148,6 +148,7 @@ route_to_base_nav_index: Dict[str, int] = {
     "/settings/notifications": 6,
 }
 
+# Método exemplo abaixo; Não utilizado no projeto
 def _find_nav_index_for_route(route: str) -> int:
     """Encontra o índice da NavigationRail para uma dada rota (incluindo sub-rotas)."""
     selected_index = 0 # Default Dashboard
@@ -300,29 +301,43 @@ def create_footer(page: ft.Page) -> ft.BottomAppBar:
         padding=ft.padding.symmetric(horizontal=theme.PADDING_M)
     )
 
+from src.flet_ui.components import hide_loading_overlay
+from src.logger.cloud_logger_handler import ClientLogUploader
 from src.logger.logger import LoggerSetup # Adicionado
 _logger_layout = LoggerSetup.get_logger(__name__)
 
 def handle_logout(page: ft.Page):
     """Limpa o estado de autenticação e redireciona para a tela de login."""
+    hide_loading_overlay(page)
     user_id_logged_out = page.session.get("auth_user_id") or \
                          (page.client_storage.get("auth_user_id") if page.client_storage else "Desconhecido")
     _logger_layout.info(f"Usuário {user_id_logged_out} deslogando.")
 
+    # FLUSH ANTES DE LIMPAR O CONTEXTO DO USUÁRIO
+    if LoggerSetup._active_cloud_handler_instance: # Verifica se o handler foi criado e está ativo
+        uploader_in_use = LoggerSetup._active_cloud_handler_instance.uploader
+        # Só faz flush se o uploader for o ClientLogUploader, pois ele depende do token do usuário
+        # que está prestes a ser removido. O AdminLogUploader pode continuar logando depois.
+        if isinstance(uploader_in_use, ClientLogUploader) and uploader_in_use._current_user_token:
+            _logger_layout.info("Logout: Forçando flush do CloudLogHandler para logs do usuário atual (ClientUploader)...")
+            try:
+                LoggerSetup._active_cloud_handler_instance.flush()
+                _logger_layout.debug("Flush solicitado. O upload ocorrerá em segundo plano.")
+                # Não adicionar time.sleep() aqui, pois o flush é para a thread fazer.
+            except Exception as e_flush:
+                _logger_layout.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
+
     # Limpa do client_storage se existir
+    auth_keys_to_clear = [
+        "auth_id_token", "auth_user_id", "auth_user_email", 
+        "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at" # Adicionar novas chaves
+    ]
     if page.client_storage:
-        if page.client_storage.contains_key("auth_id_token"): # Verifica antes de remover
-            page.client_storage.remove("auth_id_token")
-        if page.client_storage.contains_key("auth_user_id"):
-            page.client_storage.remove("auth_user_id")
-        if page.client_storage.contains_key("auth_user_email"):
-            page.client_storage.remove("auth_user_email")
-        if page.client_storage.contains_key("auth_display_name"):
-            page.client_storage.remove("auth_display_name")
+        for key in auth_keys_to_clear:
+            if page.client_storage.contains_key(key): page.client_storage.remove(key)
         _logger_layout.debug("Dados de autenticação removidos do client_storage (se existiam).")
     
-    keys_to_remove_session = ["auth_id_token", "auth_user_id", "auth_user_email", "auth_display_name"]
-    for key in keys_to_remove_session:
+    for key in auth_keys_to_clear:
         if page.session.contains_key(key):
             page.session.remove(key) 
     _logger_layout.debug("Dados de autenticação removidos da sessão Flet.")

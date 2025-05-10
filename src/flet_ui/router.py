@@ -9,6 +9,7 @@ from .layout import create_app_bar, create_navigation_rail, create_navigation_dr
 from .views.login_view import create_login_view
 from .views.signup_view import create_signup_view 
 from .views.home_view import create_home_view 
+from .views.profile_view import create_profile_view
 
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
@@ -20,6 +21,7 @@ _view_creators = {
     "/login": create_login_view,
     "/signup": create_signup_view, 
     "/home": create_home_view,
+    "/profile": create_profile_view,
 }
 
 # Mapeamento para rotas parametrizadas (usando regex simples)
@@ -151,7 +153,7 @@ def app_router(page: ft.Page, route: str):
     
     page.update()
 
-
+# Método exemplo abaixo; Não utilizado no projeto
 def route_change(page: ft.Page, content_container: ft.Container, navigation_rail: ft.NavigationRail, route: str) -> None:
     """
     Chamado quando a rota da página muda.

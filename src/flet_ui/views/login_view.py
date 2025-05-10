@@ -1,6 +1,7 @@
 # src/flet_ui/views/login_view.py
 
 import flet as ft
+import time
 from typing import Optional, Dict, Any
 
 from src.services.firebase_client import FbManagerAuth # Ajuste o caminho se FbManagerAuth estiver em outro lugar
@@ -84,6 +85,10 @@ def create_login_view(page: ft.Page) -> ft.View:
             if auth_response and auth_response.get("idToken") and auth_response.get("localId"):
                 id_token = auth_response["idToken"]
                 user_id = auth_response["localId"]
+                refresh_token = auth_response.get("refreshToken") 
+                expires_in = int(auth_response.get("expiresIn", 3600)) # Segundos, default 1h
+                id_token_expires_at = time.time() + expires_in - 60 # Timestamp UTC, -60s de buffer
+
                 user_email_from_auth = auth_response.get("email", email) # Email confirmado pela auth
                 display_name = auth_response.get("displayName", user_email_from_auth)
 
@@ -91,25 +96,25 @@ def create_login_view(page: ft.Page) -> ft.View:
                 show_snackbar(page, f"Bem-vindo, {display_name}!", color=theme.COLOR_SUCCESS)
 
                 # Limpar dados de autenticação antigos antes de definir novos
-                if page.client_storage: # Verifica se client_storage está disponível
-                    page.client_storage.remove("auth_id_token")
-                    page.client_storage.remove("auth_user_id")
-                    page.client_storage.remove("auth_user_email")
-                    page.client_storage.remove("auth_display_name")
-                
-                if page.session.contains_key("auth_id_token"):
-                    page.session.remove("auth_id_token")
-                if page.session.contains_key("auth_user_id"):
-                    page.session.remove("auth_user_id")
-                if page.session.contains_key("auth_user_email"):
-                    page.session.remove("auth_user_email")
-                if page.session.contains_key("auth_display_name"):
-                    page.session.remove("auth_display_name")
+                auth_keys_to_clear = [
+                    "auth_id_token", "auth_user_id", "auth_user_email", 
+                    "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at"
+                ]
+
+                if page.client_storage:
+                    for key in auth_keys_to_clear:
+                        if page.client_storage.contains_key(key): page.client_storage.remove(key)
+
+                for key in auth_keys_to_clear:
+                    if page.session.contains_key(key): page.session.remove(key)
 
                 # Armazenar na sessão Flet por padrão
                 _logger.info("Armazenando token e ID do usuário na sessão Flet.")
                 page.session.set("auth_id_token", id_token)
                 page.session.set("auth_user_id", user_id)
+                if refresh_token: 
+                    page.session.set("auth_refresh_token", refresh_token) 
+                page.session.set("auth_id_token_expires_at", id_token_expires_at)
                 page.session.set("auth_user_email", user_email_from_auth)
                 page.session.set("auth_display_name", display_name)
 
@@ -119,6 +124,9 @@ def create_login_view(page: ft.Page) -> ft.View:
                     _logger.info("Opção 'Lembrar de mim' ativa. Armazenando também no client_storage.")
                     page.client_storage.set("auth_id_token", id_token)
                     page.client_storage.set("auth_user_id", user_id)
+                    if refresh_token: 
+                        page.client_storage.set("auth_refresh_token", refresh_token)
+                    page.client_storage.set("auth_id_token_expires_at", id_token_expires_at)
                     page.client_storage.set("auth_user_email", user_email_from_auth)
                     page.client_storage.set("auth_display_name", display_name)
                 elif remember_me_checkbox.value and not page.client_storage:
