@@ -5,6 +5,9 @@ from rich import print
 #logger = LoggerSetup.get_logger(__name__)
 logger = logging.getLogger(__name__)
 
+from src.settings import (PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT, K_PROXY_ENABLED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, 
+                            K_PROXY_PASSWORD, K_PROXY_PASSWORD_SAVED)
+
 import functools, urllib, ssl
 def with_proxy(skip_ssl_verify: bool = True):
     """
@@ -42,11 +45,11 @@ def with_proxy(skip_ssl_verify: bool = True):
                 # Obter configurações do config_manager
                 proxy_config = config_manager.get_proxy_settings()
 
-                if proxy_config and proxy_config.get('proxy_enabled'):
-                    ip = proxy_config.get('ip')
-                    port = proxy_config.get('port')
-                    username = proxy_config.get('username')
-                    password_saved = proxy_config.get('password_saved')
+                if proxy_config.get(K_PROXY_ENABLED):
+                    ip = proxy_config.get(K_PROXY_IP_URL)
+                    port = proxy_config.get(K_PROXY_PORT)
+                    username = proxy_config.get(K_PROXY_USERNAME)
+                    password_saved = proxy_config.get(K_PROXY_PASSWORD_SAVED)
 
                     if not ip or not port:
                         logger.warning("Proxy habilitado mas IP ou Porta não definidos no config_manager. Proxy não será aplicado.")
@@ -55,12 +58,12 @@ def with_proxy(skip_ssl_verify: bool = True):
                         proxy_url_base = f"http://{ip}:{port}"
                         proxy_url_auth = None
 
-                        # Buscar senha somente se houver usuário e indicação de senha salva
-                        if username and password_saved:
+                        # Buscar senha somente se houver usuário, além da habilitação do proxy
+                        if username:
                             try:
                                 password = keyring.get_password(
                                     config_manager.PROXY_KEYRING_SERVICE, # Usar constante do config_manager
-                                    config_manager.PROXY_PASSWORD_USER    # Usar constante do config_manager
+                                    config_manager.K_PROXY_PASSWORD       # Usar constante do config_manager
                                 )
                                 if password:
                                     logger.debug("Senha do proxy recuperada do Keyring.")

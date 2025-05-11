@@ -2,9 +2,9 @@
 """
 Define elementos de layout reutilizáveis como AppBar e NavigationRail.
 """
+from turtle import width
 import flet as ft
-from typing import List, Dict, Any
-
+from typing import List, Dict, Any, Optional
 # Importa definições de tema se necessário (ex: para padding ou cores)
 from src.flet_ui import theme
 
@@ -17,7 +17,7 @@ def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
         elif page.theme_mode == ft.ThemeMode.DARK:
             page.theme_mode = ft.ThemeMode.LIGHT
         else:
-            page.theme_mode = ft.ThemeMode.DARK
+            page.theme_mode = ft.ThemeMode.LIGHT
         # Atualiza a cor da appbar explicitamente se necessário
         # page.appbar.bgcolor = ... # Se o tema não atualizar automaticamente
         page.update()
@@ -38,31 +38,53 @@ def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
         )
         user_greeting_or_empty.append(ft.Container(width=10)) # Pequeno espaçador
 
+    # Botão Home - Adicionado no início das actions para aparecer mais à esquerda possível dentro das actions
+    home_button = ft.IconButton(
+        ft.icons.HOME_OUTLINED,
+        tooltip="Ir para Início",
+        on_click=lambda _: page.go("/home"),
+        padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+        icon_size=40
+    )
+    
     app_bar_actions = [
-        *user_greeting_or_empty, # Desempacota a lista (pode ser vazia)
+        #*user_greeting_or_empty, # Desempacota a lista (pode ser vazia)
+        ft.IconButton(
+            ft.icons.SETTINGS_APPLICATIONS_OUTLINED, 
+            tooltip="Configurações LLM",
+            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+            on_click=lambda _: page.go("/settings/llm"),
+            icon_size=40
+        ),
+        ft.PopupMenuButton(
+            tooltip="Opções do Usuário",
+            icon=ft.icons.ACCOUNT_CIRCLE_OUTLINED,
+            icon_size=40, 
+            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+            items=[
+                ft.PopupMenuItem(text="Meu Perfil", icon=ft.icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")), # Rota de perfil
+                ft.PopupMenuItem(text="Configurar Proxy", icon=ft.icons.VPN_KEY_OUTLINED, on_click=lambda _: show_proxy_settings_dialog(page)),
+                ft.PopupMenuItem(),  # Divisor
+                ft.PopupMenuItem(text="Sair", icon=ft.icons.LOGOUT, on_click=lambda _: handle_logout(page)) # Ação de Logout
+            ]
+        ),
         ft.IconButton(
             ft.icons.BRIGHTNESS_4_OUTLINED, # Ícone para tema
             tooltip="Mudar tema",
             padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
             on_click=toggle_theme_mode,
+            icon_size=40
         ),
-        ft.PopupMenuButton(
-            tooltip="Opções do Usuário",
-            icon=ft.icons.ACCOUNT_CIRCLE_OUTLINED,
-            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
-            items=[
-                ft.PopupMenuItem(text="Meu Perfil", icon=ft.icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")), # Rota de perfil
-                ft.PopupMenuItem(text="Configurações", icon=ft.icons.SETTINGS_OUTLINED, on_click=lambda _: page.go("/settings")), # Rota de configurações
-                ft.PopupMenuItem(),  # Divisor
-                ft.PopupMenuItem(text="Sair", icon=ft.icons.LOGOUT, on_click=lambda _: handle_logout(page)) # Ação de Logout
-            ]
-        )
     ]
+
+    if page.route != "/home": # Só adiciona o botão Home se não estivermos na Home
+        app_bar_actions.insert(0, home_button)
 
     return ft.AppBar(
         title=ft.Text(app_title),
         center_title=False,
-        actions=app_bar_actions
+        actions=app_bar_actions,
+        #bgcolor=theme.SURFACE_VARIANT
     )
 
 # Módulos e seus ícones/rotas para a navegação
@@ -304,14 +326,14 @@ def create_footer(page: ft.Page) -> ft.BottomAppBar:
 from src.flet_ui.components import hide_loading_overlay
 from src.logger.cloud_logger_handler import ClientLogUploader
 from src.logger.logger import LoggerSetup # Adicionado
-_logger_layout = LoggerSetup.get_logger(__name__)
+_logger = LoggerSetup.get_logger(__name__)
 
 def handle_logout(page: ft.Page):
     """Limpa o estado de autenticação e redireciona para a tela de login."""
     hide_loading_overlay(page)
     user_id_logged_out = page.session.get("auth_user_id") or \
                          (page.client_storage.get("auth_user_id") if page.client_storage else "Desconhecido")
-    _logger_layout.info(f"Usuário {user_id_logged_out} deslogando.")
+    _logger.info(f"Usuário {user_id_logged_out} deslogando.")
 
     # FLUSH ANTES DE LIMPAR O CONTEXTO DO USUÁRIO
     if LoggerSetup._active_cloud_handler_instance: # Verifica se o handler foi criado e está ativo
@@ -319,13 +341,13 @@ def handle_logout(page: ft.Page):
         # Só faz flush se o uploader for o ClientLogUploader, pois ele depende do token do usuário
         # que está prestes a ser removido. O AdminLogUploader pode continuar logando depois.
         if isinstance(uploader_in_use, ClientLogUploader) and uploader_in_use._current_user_token:
-            _logger_layout.info("Logout: Forçando flush do CloudLogHandler para logs do usuário atual (ClientUploader)...")
+            _logger.info("Logout: Forçando flush do CloudLogHandler para logs do usuário atual (ClientUploader)...")
             try:
                 LoggerSetup._active_cloud_handler_instance.flush()
-                _logger_layout.debug("Flush solicitado. O upload ocorrerá em segundo plano.")
+                _logger.debug("Flush solicitado. O upload ocorrerá em segundo plano.")
                 # Não adicionar time.sleep() aqui, pois o flush é para a thread fazer.
             except Exception as e_flush:
-                _logger_layout.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
+                _logger.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
 
     # Limpa do client_storage se existir
     auth_keys_to_clear = [
@@ -335,18 +357,197 @@ def handle_logout(page: ft.Page):
     if page.client_storage:
         for key in auth_keys_to_clear:
             if page.client_storage.contains_key(key): page.client_storage.remove(key)
-        _logger_layout.debug("Dados de autenticação removidos do client_storage (se existiam).")
+        _logger.debug("Dados de autenticação removidos do client_storage (se existiam).")
     
     for key in auth_keys_to_clear:
         if page.session.contains_key(key):
             page.session.remove(key) 
-    _logger_layout.debug("Dados de autenticação removidos da sessão Flet.")
+    _logger.debug("Dados de autenticação removidos da sessão Flet.")
     
     LoggerSetup.set_cloud_user_context(None, None) # Limpa contexto do logger de nuvem
-    _logger_layout.info("Contexto do logger de nuvem limpo.")
+    _logger.info("Contexto do logger de nuvem limpo.")
     
     page.go("/login")
     # Opcional: Mostrar um snackbar de logout bem-sucedido na página de login
     # Isso é um pouco mais complexo porque o snackbar precisa ser mostrado *após* o redirecionamento.
     # Uma forma seria passar um parâmetro na rota: page.go("/login?logout=true")
     # E a view de login verificaria esse parâmetro para mostrar o snackbar.
+
+from src.settings import (K_PROXY_ENABLED, K_PROXY_PASSWORD_SAVED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, K_PROXY_PASSWORD, 
+                            PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT)
+from src.config_manager import get_proxy_settings, save_proxy_settings
+from src.flet_ui.components import show_snackbar, ValidatedTextField, ManagedAlertDialog
+
+def show_proxy_settings_dialog(page: ft.Page):
+    _logger.info("Abrindo diálogo de configurações de proxy.")
+
+    def host_validator(value: str) -> Optional[str]:
+        # Validação básica, pode ser melhorada (ex: regex para IP/hostname)
+        if not value: return "O host não pode estar vazio se o proxy estiver habilitado."
+        return None
+
+    def port_validator(value: str) -> Optional[str]:
+        if not value: return "A porta não pode estar vazia se o proxy estiver habilitado."
+        if not value.isdigit() or not (1 <= int(value) <= 65535):
+            return "Porta inválida (deve ser um número entre 1 e 65535)."
+        return None
+
+    # Carregar configurações existentes
+    current_settings = get_proxy_settings() # Retorna um dict ou {'proxy_enabled': False, ...}
+
+    security_warning_text = ft.Text(
+        "Atenção: As configurações de proxy, incluindo o nome de usuário, são salvas localmente neste computador."
+        "Se 'Salvar Senha' estiver marcado, a senha também será armazenada de forma segura no Keyring do sistema operacional."
+        "Se este não é seu computador pessoal, desmarque 'Salvar Senha' ou remova as configurações ao sair.",
+        size=11,
+        italic=True,
+        color=ft.colors.with_opacity(0.7, ft.colors.ON_SURFACE),
+        # width=430 # Para quebrar linha dentro do diálogo
+    )
+
+    proxy_enabled_switch = ft.Switch(
+        label="Habilitar Proxy",
+        value=current_settings.get(K_PROXY_ENABLED, False)
+    )
+    
+    # Usando ValidatedTextField para consistência e melhor feedback de erro
+    proxy_host_field = ValidatedTextField(
+        label="Host do Proxy",
+        value=current_settings.get(K_PROXY_IP_URL, ""), # Usar as constantes do config_manager
+        validator=host_validator,
+        hint_text="ex: 192.168.1.100 ou proxy.empresa.com"
+    )
+    proxy_port_field = ValidatedTextField(
+        label="Porta do Proxy",
+        value=str(current_settings.get(K_PROXY_PORT, "")), # Porta é string no TextField
+        validator=port_validator,
+        keyboard_type=ft.KeyboardType.NUMBER
+    )
+    proxy_user_field = ft.TextField( # Usuário é opcional, não precisa de ValidatedTextField forte
+        label="Usuário do Proxy",
+        value=current_settings.get(K_PROXY_USERNAME, "")
+    )
+    proxy_password_field = ft.TextField(
+        label="Senha do Proxy (deixe em branco se não mudou)",
+        hint_text="Preencha apenas para definir/alterar a senha",
+        password=True,
+        can_reveal_password=True,
+        expand=True
+    )
+    # Checkbox para indicar se a senha deve ser salva (controla o campo 'password_saved')
+    save_password_checkbox = ft.Checkbox(
+        label="Salvar Senha",
+        value=current_settings.get(K_PROXY_PASSWORD_SAVED, False) # Vem do config_manager
+    )
+
+    def on_save_button_click(e):
+        _logger.info("Botão Salvar (proxy) clicado - lógica interna.")
+        is_enabled = proxy_enabled_switch.value
+        host_valid = True
+        port_valid = True
+        if is_enabled:
+            host_valid = proxy_host_field.validate(show_error=True)
+            port_valid = proxy_port_field.validate(show_error=True)
+        else: # Limpa erros se desabilitado
+            proxy_host_field.text_field.error_text = None; proxy_port_field.text_field.error_text = None
+            proxy_host_field.update(); proxy_port_field.update()
+
+        if not host_valid or not port_valid:
+            show_snackbar(page, "Corrija os erros no formulário.", color=theme.COLOR_ERROR)
+            return False # Não fecha o diálogo
+
+        new_settings = { 
+            K_PROXY_ENABLED: is_enabled,
+            K_PROXY_IP_URL: proxy_host_field.value,
+            K_PROXY_PORT: proxy_port_field.value,
+            K_PROXY_USERNAME: proxy_user_field.value,
+            K_PROXY_PASSWORD_SAVED: save_password_checkbox.value
+        }
+        if proxy_password_field.value:
+            new_settings[K_PROXY_PASSWORD] = proxy_password_field.value
+        
+        if save_proxy_settings(new_settings):
+            _logger.info("Configurações de proxy salvas no Keyring.")
+            # Retorna dados para o on_dialog_fully_closed
+            return {"action": "saved", "message": "Configurações de proxy salvas com sucesso!", "color": theme.COLOR_SUCCESS}
+        else:
+            _logger.error("Falha ao salvar configurações de proxy no Keyring.")
+            show_snackbar(page, "Erro ao salvar configurações de proxy.", color=theme.COLOR_ERROR)
+            return False # Não fecha o diálogo
+
+    def on_delete_button_click(e):
+        _logger.info("Botão Remover Tudo (proxy) clicado - lógica interna.")
+        settings_to_delete = { # ... (como antes) ...
+            K_PROXY_ENABLED: False, 
+            K_PROXY_IP_URL: PROXY_URL_DEFAULT, 
+            K_PROXY_PORT: PROXY_PORT_DEFAULT,
+            K_PROXY_USERNAME: "", 
+            K_PROXY_PASSWORD: "", 
+            K_PROXY_PASSWORD_SAVED: False
+        }
+        if save_proxy_settings(settings_to_delete):
+            _logger.info("Configurações de proxy removidas do Keyring.")
+            proxy_enabled_switch.value = False
+            proxy_host_field.value = PROXY_URL_DEFAULT
+            proxy_port_field.value = PROXY_PORT_DEFAULT
+            proxy_user_field.value = ""
+            proxy_password_field.value = ""
+            save_password_checkbox.value = False
+            # Atualizar o conteúdo do diálogo antes de sinalizar para fechar
+            # Se o dialog_proxy_instance estiver acessível aqui (precisaria de ref ou ser parte de uma classe)
+            # Ex: dialog_proxy_instance.content.update()
+            # Por ora, a atualização dos campos será visível na próxima vez que abrir.
+            # Para forçar update antes de fechar, a instância do diálogo é necessária.
+            # No ManagedAlertDialog, o update() é chamado no próprio diálogo.
+            # Para atualizar os campos *visualmente* antes do timer, seria:
+            if dialog_proxy_instance and dialog_proxy_instance.content: # dialog_proxy_instance é a ManagedAlertDialog
+                dialog_proxy_instance.content.update()
+
+            return {"action": "deleted", "message": "Configurações de proxy removidas.", "color": theme.COLOR_INFO}
+        else:
+            _logger.error("Falha ao remover configurações de proxy.")
+            show_snackbar(page, "Erro ao remover configurações de proxy.", color=theme.COLOR_ERROR)
+            return False # Não fecha
+
+    def on_cancel_button_click(e):
+        _logger.info("Botão Cancelar (proxy) clicado.")
+        return {"action": "cancelled"} # Sinaliza para fechar e passar "cancelled"
+    
+    # Callback que executa DEPOIS que o diálogo é totalmente fechado
+    def after_proxy_dialog_closed(result_data: Any):
+        _logger.info(f"Callback after_proxy_dialog_closed chamado com: {result_data}")
+        if isinstance(result_data, dict) and result_data.get("message"):
+            show_snackbar(page, result_data["message"], color=result_data.get("color", theme.COLOR_INFO))
+        elif result_data == "cancelled":
+             _logger.info("Operação de proxy cancelada pelo usuário.")
+        # Aqui você pode adicionar qualquer outra lógica que precise rodar após o diálogo fechar e após a ação principal (salvar/deletar) ter sido concluída.
+
+    actions_list = [
+        ft.ElevatedButton("Cancelar", on_click=on_cancel_button_click, data="cancel_action_completed", width=150),
+        ft.ElevatedButton("Salvar", on_click=on_save_button_click, data="save_action_completed", width=150),
+        ft.ElevatedButton("Remover Tudo", on_click=on_delete_button_click, data="delete_action_completed", tooltip="Limpa todas as configurações de proxy salvas.", width=150)
+        ]
+    
+    dialog_content_column = ft.Column(
+        [ft.Container(content=proxy_enabled_switch, padding=ft.padding.only(bottom=10)),
+        proxy_host_field,
+        proxy_port_field,
+        proxy_user_field,
+        ft.Row([proxy_password_field, save_password_checkbox], expand=True),
+        ft.Divider(height=10, color=ft.colors.TRANSPARENT), # Espaçador
+        security_warning_text
+        ],
+        tight=True, scroll=ft.ScrollMode.ADAPTIVE, width=560
+    )
+    
+    # Instanciar e mostrar o ManagedAlertDialog
+    dialog_proxy_instance = ManagedAlertDialog(
+        page_ref=page,
+        title="Configurações de Proxy",
+        content=dialog_content_column,
+        actions=actions_list,
+        on_dialog_fully_closed=after_proxy_dialog_closed
+        # actions_alignment=ft.MainAxisAlignment.END
+    )
+    dialog_proxy_instance.show()
+

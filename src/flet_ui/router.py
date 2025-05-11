@@ -10,6 +10,7 @@ from .views.login_view import create_login_view
 from .views.signup_view import create_signup_view 
 from .views.home_view import create_home_view 
 from .views.profile_view import create_profile_view
+from .views.llm_settings_view import create_llm_settings_view
 
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
@@ -22,6 +23,7 @@ _view_creators = {
     "/signup": create_signup_view, 
     "/home": create_home_view,
     "/profile": create_profile_view,
+    "/settings/llm": create_llm_settings_view,
 }
 
 # Mapeamento para rotas parametrizadas (usando regex simples)

@@ -19,6 +19,33 @@ if FIREBASE_WEB_API_KEY == "SUA_FIREBASE_WEB_API_KEY_AQUI":
         "Defina-a no arquivo 'src/config/settings.py' ou como variável de ambiente."
     )
 
+
+# --- Constantes de Configuração (Centralizadas aqui) ---
+# É importante que estas sejam consistentes com o uso em outros lugares (FirebaseBackend)
+# Idealmente, seriam carregadas de uma config central, mas por ora definimos aqui.
+APP_NAME = "DocsAnalyzerPF"
+KEYRING_SERVICE_FIREBASE = f"{APP_NAME}_Firebase"
+KEYRING_USER_ENCRYPTION_KEY = "encryption_key" # Chave Fernet
+
+# Calcula o diretório de dados da aplicação
+try:
+    if os.name == 'nt': # Windows
+        APP_DATA_DIR = os.path.join(os.getenv('APPDATA', ''), APP_NAME)
+    elif sys.platform == 'darwin': # macOS
+        APP_DATA_DIR = os.path.join(os.path.expanduser('~/Library/Application Support'), APP_NAME)
+    else: # Linux e outros
+        APP_DATA_DIR = os.path.join(os.path.expanduser('~/.config'), APP_NAME)
+    os.makedirs(APP_DATA_DIR, exist_ok=True) # Garante que exista
+except Exception as e:
+    logger.critical(f"Erro crítico ao determinar/criar o diretório de dados da aplicação: {e}", exc_info=True)
+    # Define um fallback para o diretório atual se tudo mais falhar, mas loga criticamente
+    APP_DATA_DIR = os.path.join(os.getcwd(), f".{APP_NAME}_data")
+    os.makedirs(APP_DATA_DIR, exist_ok=True)
+    logger.warning(f"Usando diretório de dados fallback: {APP_DATA_DIR}")
+    
+ENCRYPTED_SERVICE_KEY_FILENAME = "firebase_service_key.enc"
+ENCRYPTED_SERVICE_KEY_PATH = os.path.join(APP_DATA_DIR, ENCRYPTED_SERVICE_KEY_FILENAME)
+
 # --- Outras Configurações (Podem ser adicionadas futuramente) ---
 APP_VERSION = "0.1.0" # Versão inicial do MVP
 DEFAULT_LLM_SERVICE = "openai" # Exemplo
@@ -39,3 +66,23 @@ FB_STORAGE_BUCKET = "docs-analyzer-a7430.firebasestorage.app"
 
 PATH_LOGS = Path("logs") # Pastas locais
 PATH_LOGS.mkdir(exist_ok=True) 
+
+# Constantes Keyring Proxy -> rótulos fixos para uso no keyring e também no Dict_resultado config_proxy
+PROXY_URL_DEFAULT = 'proxy.dpf.gov.br'
+PROXY_PORT_DEFAULT = '8080'
+PROXY_KEYRING_SERVICE = f"{APP_NAME}_Proxy"
+K_PROXY_ENABLED = "proxy_enabled"
+K_PROXY_PASSWORD_SAVED = "password_saved_proxy"
+K_PROXY_IP_URL = "ip_address"
+K_PROXY_PORT = "port_proxy"
+K_PROXY_USERNAME = "username_proxy"
+K_PROXY_PASSWORD = "password_proxy" 
+
+def show_data_k():
+    keyring = None
+    print(keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED))
+    print(keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_IP_URL))
+    print(keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME))
+    print(keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD))
+    #keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED, 'false')
+

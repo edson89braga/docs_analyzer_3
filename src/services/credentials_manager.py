@@ -1,41 +1,15 @@
 # src/utils/fb_credentials_manager.py
 
-import keyring
-import logging
-import json
+import keyring, logging, json, os
 from cryptography.fernet import Fernet, InvalidToken
-import os
 from typing import Optional
+
+from src.settings import (APP_NAME, APP_DATA_DIR, KEYRING_SERVICE_FIREBASE, KEYRING_USER_ENCRYPTION_KEY, 
+ENCRYPTED_SERVICE_KEY_FILENAME, ENCRYPTED_SERVICE_KEY_PATH)
 
 #from src.logger.logger import LoggerSetup
 #logger = LoggerSetup.get_logger(__name__)
 logger = logging.getLogger(__name__)
-
-# --- Constantes de Configuração (Centralizadas aqui) ---
-# É importante que estas sejam consistentes com o uso em outros lugares (FirebaseBackend)
-# Idealmente, seriam carregadas de uma config central, mas por ora definimos aqui.
-APP_NAME = "DocsAnalyzerPF"
-KEYRING_SERVICE_FIREBASE = f"{APP_NAME}_Firebase"
-KEYRING_USER_ENCRYPTION_KEY = "encryption_key" # Chave Fernet
-
-# Calcula o diretório de dados da aplicação
-try:
-    if os.name == 'nt': # Windows
-        APP_DATA_DIR = os.path.join(os.getenv('APPDATA', ''), APP_NAME)
-    elif sys.platform == 'darwin': # macOS
-        APP_DATA_DIR = os.path.join(os.path.expanduser('~/Library/Application Support'), APP_NAME)
-    else: # Linux e outros
-        APP_DATA_DIR = os.path.join(os.path.expanduser('~/.config'), APP_NAME)
-    os.makedirs(APP_DATA_DIR, exist_ok=True) # Garante que exista
-except Exception as e:
-    logger.critical(f"Erro crítico ao determinar/criar o diretório de dados da aplicação: {e}", exc_info=True)
-    # Define um fallback para o diretório atual se tudo mais falhar, mas loga criticamente
-    APP_DATA_DIR = os.path.join(os.getcwd(), f".{APP_NAME}_data")
-    os.makedirs(APP_DATA_DIR, exist_ok=True)
-    logger.warning(f"Usando diretório de dados fallback: {APP_DATA_DIR}")
-
-ENCRYPTED_SERVICE_KEY_FILENAME = "firebase_service_key.enc"
-ENCRYPTED_SERVICE_KEY_PATH = os.path.join(APP_DATA_DIR, ENCRYPTED_SERVICE_KEY_FILENAME)
 
 logger.debug(f"Credentials Manager usando diretório de dados: {APP_DATA_DIR}")
 logger.debug(f"Caminho esperado para chave de serviço criptografada: {ENCRYPTED_SERVICE_KEY_PATH}")

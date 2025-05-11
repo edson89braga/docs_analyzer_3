@@ -39,6 +39,10 @@ APP_THEME = ft.Theme(
     color_scheme_seed=SEED_COLOR,
     # Use use_material3=True para o design mais recente (recomendado)
     use_material3=True,
+    appbar_theme=ft.AppBarTheme(
+        bgcolor=ft.Colors.BLUE_GREY_100, # Para tema claro
+        foreground_color=ft.Colors.BLACK,
+    ),
     # Você pode sobrescrever elementos específicos do tema aqui, se desejar:
     # appbar_theme=ft.AppBarTheme(
     #     background_color=ft.Colors.BLUE_GREY_800,
@@ -56,6 +60,10 @@ APP_THEME = ft.Theme(
 APP_DARK_THEME = ft.Theme(
     color_scheme_seed=SEED_COLOR, # Pode usar a mesma seed ou outra
     use_material3=True,
+    #appbar_theme=ft.AppBarTheme(
+    #    bgcolor=ft.Colors.BLUE_GREY_800, # Para tema escuro
+    #    foreground_color=ft.Colors.BLACK,
+    #),
     # Customizações específicas para o tema escuro, se necessário
 )
 

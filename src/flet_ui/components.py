@@ -1523,3 +1523,135 @@ class ProgressSteps(ft.Row):
                 self.on_step_change_callback(self._current_step_index, self.steps_data[self._current_step_index])
 
 
+class ManagedAlertDialog(ft.AlertDialog):
+    """
+    Um ft.AlertDialog que gerencia seu fechamento de forma desacoplada
+    e permite executar um callback após o fechamento visual e a execução de uma ação.
+    """
+    def __init__(
+        self,
+        page_ref: ft.Page,
+        title: Optional[Union[str, ft.Control]] = None,
+        content: Optional[ft.Control] = None,
+        actions: Optional[List[ft.Control]] = None, # Botões de ação
+        # Callback a ser executado DEPOIS que o diálogo for completamente fechado
+        # e uma ação interna (se houver) for concluída.
+        # Recebe o 'result_data' do botão que fechou o diálogo.
+        on_dialog_fully_closed: Optional[Callable[[Any], None]] = None,
+        close_delay_seconds: float = 0.15,
+        modal: bool = True,
+        **kwargs 
+    ):
+        # Converte título string para ft.Text se necessário
+        title_control = ft.Text(title) if isinstance(title, str) else title
+
+        super().__init__(
+            title=title_control,
+            content=content,
+            actions=actions, # Os on_click dos botões serão reconfigurados
+            modal=modal,
+            actions_alignment=ft.MainAxisAlignment.END, # Padrão
+            **kwargs
+        )
+        self.page_ref = page_ref
+        self.on_dialog_fully_closed = on_dialog_fully_closed
+        self.close_delay_seconds = close_delay_seconds
+        self._result_data_for_callback: Any = None
+
+        # Reconfigurar os on_click dos botões de ação fornecidos
+        if self.actions:
+            for action_button in self.actions:
+                if isinstance(action_button, (ft.TextButton, ft.ElevatedButton, ft.IconButton)) and \
+                   hasattr(action_button, 'on_click') and action_button.on_click is not None:
+                    
+                    original_button_on_click = action_button.on_click
+                    button_data_attribute = getattr(action_button, 'data', None)
+
+                    # Criar um novo handler que primeiro executa a ação original do botão
+                    # e depois fecha o diálogo.
+                    def create_extended_on_click(orig_click, btn_data):
+                        def extended_handler(e: ft.ControlEvent):
+                            action_result = None
+                            should_close_dialog_after_action = True # Por padrão, fecha
+                            try:
+                                # Executa a lógica original do botão (ex: salvar_configuracoes)
+                                # Essa lógica original pode retornar algo para indicar se o diálogo deve fechar
+                                # ou qual resultado passar para on_dialog_fully_closed.
+                                # Ex: return True (fecha, sucesso), False (não fecha), "dados_especificos" (fecha, passa dados)
+                                action_result = orig_click(e)
+
+                                if isinstance(action_result, bool):
+                                    should_close_dialog_after_action = action_result
+                                    # Se for bool, os dados para o callback principal serão os 'data' do botão
+                                    self._result_data_for_callback = btn_data 
+                                elif action_result is not None: # Se retornou algo que não é bool, usa como dados
+                                    self._result_data_for_callback = action_result
+                                    should_close_dialog_after_action = True # Assume que deve fechar
+                                else: # Se retornou None (ou não retornou nada), usa o 'data' do botão
+                                     self._result_data_for_callback = btn_data
+                                     should_close_dialog_after_action = True
+
+
+                            except Exception as ex_orig_click:
+                                logger.error(f"Erro ao executar ação original do botão '{getattr(action_button, 'text', 'BTN')}': {ex_orig_click}", exc_info=True)
+                                show_snackbar(self.page_ref, f"Erro ao processar ação.", color=theme.COLOR_ERROR)
+                                should_close_dialog_after_action = False # Não fecha se a ação interna deu erro
+
+                            if should_close_dialog_after_action:
+                                self._trigger_close_with_timer()
+                            # Se não deve fechar, o diálogo permanece aberto para o usuário corrigir.
+                        return extended_handler
+
+                    action_button.on_click = create_extended_on_click(original_button_on_click, button_data_attribute)
+                # Adicionar else para botões que não são de ação (ex: ft.Container(expand=True)) se necessário
+                # ou garantir que apenas botões clicáveis sejam processados.
+        self.actions = [ft.Row(
+            [*self.actions],
+            alignment=ft.MainAxisAlignment.SPACE_AROUND
+        )]
+
+    def _trigger_close_with_timer(self):
+        """Fecha visualmente e agenda _finish_close_action."""
+        if self.open:
+            self.open = False
+            self.page_ref.update(self) # Atualiza apenas o diálogo para processar o open=False
+            logger.debug(f"ManagedAlertDialog: Fechamento visual iniciado. Agendando finalização.")
+            threading.Timer(self.close_delay_seconds, self._finish_close_action).start()
+        else:
+             logger.debug("ManagedAlertDialog: _trigger_close_with_timer chamado, mas diálogo já estava fechado.")
+
+
+    def _finish_close_action(self):
+        """Executado pelo timer após o fechamento visual."""
+        logger.debug(f"ManagedAlertDialog: Timer finalizado.")
+        if self in self.page_ref.overlay: # Remove do overlay
+            self.page_ref.overlay.remove(self)
+            # Não chamar page_ref.update() aqui se on_dialog_fully_closed vai fazer (via snackbar etc.)
+
+        if self.on_dialog_fully_closed:
+            try:
+                logger.debug(f"ManagedAlertDialog: Chamando on_dialog_fully_closed com dados: {self._result_data_for_callback}")
+                self.on_dialog_fully_closed(self._result_data_for_callback)
+            except Exception as e:
+                logger.error(f"ManagedAlertDialog: Erro ao executar on_dialog_fully_closed: {e}", exc_info=True)
+                show_snackbar(self.page_ref, "Ocorreu um erro após fechar o diálogo.", color=theme.COLOR_ERROR)
+        elif self in self.page_ref.overlay: # Se foi removido e não há callback, um update pode ser necessário
+             self.page_ref.update()
+
+
+    def show(self):
+        """Adiciona ao overlay (se não estiver) e abre o diálogo."""
+        if self not in self.page_ref.overlay:
+            self.page_ref.overlay.append(self)
+        self.open = True
+        self.page_ref.update() # Atualiza para mostrar/trazer para frente
+        logger.info(f"ManagedAlertDialog '{self.title.value if isinstance(self.title, ft.Text) else ''}' ABERTO.")
+
+    # Método para fechar programaticamente sem passar por um botão (ex: de um callback interno)
+    def close_programmatically(self, result_data_for_callback: Any = None):
+        self._result_data_for_callback = result_data_for_callback
+        self._trigger_close_with_timer()
+
+
+
+

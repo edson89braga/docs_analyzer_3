@@ -75,6 +75,9 @@ if __name__ == "__main__":
         # upload_dir=os.path.abspath("temp_flet_uploads") # Crie este diretório
     )
 
+# >>> python run.py  ou
+# >>> flet run -w run.py
+
 '''
 TODO:
 1) CreateUser: Tratar erro "message": "EMAIL_EXISTS"

@@ -1,20 +1,14 @@
 # src/utils/config_manager.py
 
+import atexit
 import keyring
 import logging
 from typing import Dict, Any, Optional
 
-# Importa APP_NAME para consistência (ou definir centralmente no futuro)
-from .services.credentials_manager import APP_NAME
+from src.settings import (APP_NAME, PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT, PROXY_KEYRING_SERVICE, K_PROXY_ENABLED, K_PROXY_PASSWORD_SAVED, 
+                          K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, K_PROXY_PASSWORD)
 
-# Constantes Keyring Proxy -> rótulos fixos para uso no keyring
-PROXY_KEYRING_SERVICE = f"{APP_NAME}_Proxy"
-PROXY_ENABLED_USER = "proxy_enabled"
-PROXY_PASSWORD_SAVED_USER = "password_saved"
-PROXY_IP_USER = "ip_address"
-PROXY_PORT_USER = "port"
-PROXY_USERNAME_USER = "username"
-PROXY_PASSWORD_USER = "password" 
+''' Se essa backend migrar para nuvem, avaliar como funcionará a sistemática do Save_proxy_settings se necessário'''
 
 # --- Funções de Gerenciamento de Configuração ---
 
@@ -30,30 +24,41 @@ def get_proxy_settings() -> Optional[Dict[str, Any]]:
     logger = LoggerSetup.get_logger(__name__)
 
     logger.debug(f"Buscando config proxy (sem senha) do Keyring (Service: {PROXY_KEYRING_SERVICE})")
-    config = {'proxy_enabled': False, 'password_saved': False, 'ip': None, 'port': None, 'username': None}
-    try:
-        enabled_str = keyring.get_password(PROXY_KEYRING_SERVICE, PROXY_ENABLED_USER)
-        config['proxy_enabled'] = enabled_str is not None and enabled_str.lower() in ('true', '1')
-        pwd_saved_str = keyring.get_password(PROXY_KEYRING_SERVICE, PROXY_PASSWORD_SAVED_USER)
-        config['password_saved'] = pwd_saved_str is not None and pwd_saved_str.lower() in ('true', '1')
-        logger.debug(f"Proxy settings: Enabled={config['proxy_enabled']}")
+    config_start = {K_PROXY_ENABLED: False, 
+              K_PROXY_PASSWORD_SAVED: False, 
+              K_PROXY_IP_URL: PROXY_URL_DEFAULT, 
+              K_PROXY_PORT: PROXY_PORT_DEFAULT, 
+              K_PROXY_USERNAME: None}
+    config = config_start.copy()
 
-        if config['proxy_enabled']:
-            config['ip'] = keyring.get_password(PROXY_KEYRING_SERVICE, PROXY_IP_USER)
-            config['port'] = keyring.get_password(PROXY_KEYRING_SERVICE, PROXY_PORT_USER)
-            config['username'] = keyring.get_password(PROXY_KEYRING_SERVICE, PROXY_USERNAME_USER)            
-            logger.info(f"Proxy details loaded: IP={config.get('ip')}, Port={config.get('port')}, User={config.get('username')}")
-            # Validação básica
-            if not config.get('ip') or not config.get('port'):
-                logger.warning("Proxy habilitado no Keyring, mas IP ou Porta estão faltando!")
-                # Considerar desabilitar ou retornar None aqui? Por ora, retorna o que achou.
+    try:
+        enabled_str = keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED)
+        config[K_PROXY_ENABLED] = enabled_str is not None and enabled_str.lower() in ('true', '1')
+
+        pwd_saved_str = keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD_SAVED)
+        config[K_PROXY_PASSWORD_SAVED] = pwd_saved_str is not None and pwd_saved_str.lower() in ('true', '1')
+
+        logger.debug(f"Proxy settings: Enabled={config[K_PROXY_ENABLED]}")
+
+        config[K_PROXY_IP_URL] = keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_IP_URL) or PROXY_URL_DEFAULT
+        config[K_PROXY_PORT] = keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_PORT) or PROXY_PORT_DEFAULT
+        config[K_PROXY_USERNAME] = keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME)            
+        logger.info(f"Proxy details loaded: IP={config.get(K_PROXY_IP_URL)}, Port={config.get(K_PROXY_PORT)}, User={config.get(K_PROXY_USERNAME)}")
+            
         return config
 
     except Exception as e:
         logger.error(f"Erro ao buscar configuração de proxy do Keyring: {e}", exc_info=True)
         # Retorna um estado seguro (desabilitado) em caso de erro na leitura
-        return {'proxy_enabled': False, 'password_saved': False, 'ip': None, 'port': None, 'username': None}
+        return config_start
 
+def delete_proxy_settings(logger: logging.Logger) -> None:
+    logger.info(f"Deletando configs proxy do Keyring (Service: {PROXY_KEYRING_SERVICE})")
+    try: keyring.delete_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME)
+    except keyring.errors.PasswordDeleteError: logger.debug("Username não existia para deletar.")
+    try: keyring.delete_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD)
+    except keyring.errors.PasswordDeleteError: logger.debug("Senha não existia para deletar.")
+    
 def save_proxy_settings(config: Dict[str, Any]) -> bool:
     """
     Salva as configurações de proxy no Keyring. Salva/Deleta a senha separadamente.
@@ -71,37 +76,41 @@ def save_proxy_settings(config: Dict[str, Any]) -> bool:
     logger.info(f"Salvando config proxy no Keyring (Service: {PROXY_KEYRING_SERVICE})")
     try:
         # Salva enabled, ip, port, username (como antes)
-        enabled_str = "true" if config.get('proxy_enabled', False) else "false"
-        passwd_saved_str = "true" if config.get('password_saved', False) else "false"
-        keyring.set_password(PROXY_KEYRING_SERVICE, PROXY_ENABLED_USER, enabled_str)
-        keyring.set_password(PROXY_KEYRING_SERVICE, PROXY_PASSWORD_SAVED_USER, passwd_saved_str)
-        keyring.set_password(PROXY_KEYRING_SERVICE, PROXY_IP_USER, config.get('ip', ''))
-        keyring.set_password(PROXY_KEYRING_SERVICE, PROXY_PORT_USER, config.get('port', ''))
+        enabled_str = "true" if config.get(K_PROXY_ENABLED, False) else "false"
+        passwd_saved_str = "true" if config.get(K_PROXY_PASSWORD_SAVED, False) else "false"
 
-        username = config.get('username')
-        enabled_passwd_to_save = config.get('password_saved') 
-        password_to_save = config.get('password') # Pega a senha vinda da UI, além do resultado do checkbox passwd_saved
+        keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED, enabled_str)
+        keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD_SAVED, passwd_saved_str)
+
+        keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_IP_URL, config.get(K_PROXY_IP_URL, PROXY_URL_DEFAULT))
+        keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_PORT, config.get(K_PROXY_PORT, PROXY_PORT_DEFAULT))
+
+        username = config.get(K_PROXY_USERNAME)
+        password_to_save = config.get(K_PROXY_PASSWORD) # Pega a senha vinda da UI, além do resultado do checkbox passwd_saved
 
         if username:
-            keyring.set_password(PROXY_KEYRING_SERVICE, PROXY_USERNAME_USER, username)
-
-            if enabled_passwd_to_save and password_to_save:
-                logger.debug("Salvando senha do proxy no Keyring.")
-                keyring.set_password(PROXY_KEYRING_SERVICE, PROXY_PASSWORD_USER, password_to_save)
-            else:
-                logger.debug("Nenhuma senha fornecida ou vazia. Removendo senha existente do Keyring (se houver).")
-                try: keyring.delete_password(PROXY_KEYRING_SERVICE, PROXY_PASSWORD_USER)
-                except keyring.errors.PasswordDeleteError: logger.debug("Senha não existia para deletar.") # Ignora se não existia
+            logger.info("Salvando username do proxy no Keyring.")
+            keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME, username)
+            if password_to_save:
+                logger.info("Salvando senha do proxy no Keyring.")
+                keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD, password_to_save)
         else:
             # Se não há username, remove username e senha
-            logger.debug("Nenhum username fornecido. Removendo username e senha do Keyring (se existirem).")
-            try: keyring.delete_password(PROXY_KEYRING_SERVICE, PROXY_USERNAME_USER)
-            except keyring.errors.PasswordDeleteError: logger.debug("Username não existia para deletar.")
-            try: keyring.delete_password(PROXY_KEYRING_SERVICE, PROXY_PASSWORD_USER)
-            except keyring.errors.PasswordDeleteError: logger.debug("Senha não existia para deletar.")
+            logger.info("Nenhum username fornecido. Removendo username e senha do Keyring (se existirem).")
+            delete_proxy_settings(logger)
 
-        logger.info("Configurações de proxy (com tratamento de senha) salvas com sucesso.")
+        logger.info("Configurações de proxy salvas com sucesso.")
         return True
     except Exception as e:
         logger.error(f"Erro ao salvar configurações de proxy no Keyring: {e}", exc_info=True)
         return False
+
+def set_final_keyring_proxy():
+    logger = logging.getLogger(__name__)
+    config = get_proxy_settings()
+    enabled_passwd_to_save = config.get(K_PROXY_PASSWORD_SAVED)
+    if not enabled_passwd_to_save:
+        logger.debug("Salvamento de senha desabilitado. Removendo dados existentes no Keyring (se houver)")
+        delete_proxy_settings(logger) 
+
+atexit.register(set_final_keyring_proxy)
