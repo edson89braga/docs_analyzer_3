@@ -244,11 +244,14 @@ class LoggerSetup:
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
 
-        # Adiciona o handler para CloudStorage
-        cloud_log_handler = cls._create_cloud_logger_handler(cls.formatter_detailed, level=logging.INFO)
-        if cloud_log_handler:
-            cls._apply_module_filter(cloud_log_handler, modules_to_log)
-            logger.addHandler(cloud_log_handler)
+        if firebase_client_storage or fb_manager_storage_admin:
+            # Adiciona o handler para CloudStorage
+            cloud_log_handler = cls._create_cloud_logger_handler(cls.formatter_detailed, level=logging.INFO)
+            if cloud_log_handler:
+                cls._apply_module_filter(cloud_log_handler, modules_to_log)
+                logger.addHandler(cloud_log_handler)
+        else:
+            print("LoggerSetup: Nenhum Firebase storage manager fornecido para o logger da nuvem. Cloud logging desabilitado.")
 
         # Adiciona o handler personalizado, se fornecido: Usado para handler que imprime no componente do Flet
         if custom_handler:
@@ -261,7 +264,59 @@ class LoggerSetup:
         
         # Atualiza todos os loggers já criados
         cls._update_existing_loggers()
-    
+
+    @classmethod
+    def add_cloud_logging(
+        cls,
+        user_token_for_client: Optional[str] = None, # Para passar o token no momento da adição
+        user_id_for_client: Optional[str] = None      # Para passar o user_id no momento da adição
+    ) -> bool:
+        """
+        Adiciona o CloudLogHandler ao logger raiz, se não já adicionado.
+        Cria os uploaders se necessário.
+        """
+        if not cls._initialized:
+            print("LoggerSetup ERROR: Logger não inicializado. Chame LoggerSetup.initialize() primeiro.")
+            return False
+        if not cls._instance: # Logger raiz não configurado
+            print("LoggerSetup ERROR: Logger raiz não está configurado.")
+            return False
+
+        # Verifica se um CloudLogHandler já existe para evitar duplicação
+        if cls._active_cloud_handler_instance and cls._active_cloud_handler_instance in cls._instance.handlers:
+            print("LoggerSetup: CloudLogHandler já está ativo. Verificando contexto do uploader.")
+            # Se já existe, apenas garante que o contexto do client_uploader está atualizado
+            if cls._client_uploader_instance and (user_token_for_client or user_id_for_client):
+                cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
+            return True
+
+        # Define o contexto do usuário para o client_uploader, se fornecido e o uploader existir
+        if (user_token_for_client or user_id_for_client):
+            if not cls._client_uploader_instance:
+                firebase_client_storage = FirebaseClientStorage()
+                cls._client_uploader_instance = ClientLogUploader(firebase_client_storage)
+                print("LoggerSetup: Instância de ClientLogUploader criada (em add_cloud_logging).")
+            cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
+        elif not cls._admin_uploader_instance:
+            fb_manager_storage_admin = FbManagerStorage()
+            cls._admin_uploader_instance = AdminLogUploader(fb_manager_storage_admin)
+            print("LoggerSetup: Instância de AdminLogUploader criada (em add_cloud_logging).")
+
+        cloud_log_handler = cls._create_cloud_logger_handler(
+            cls.formatter_detailed,
+            level=logging.INFO
+        )
+
+        if cloud_log_handler:
+            if cls._cloud_handler_modules_filter: # Usa o filtro salvo da inicialização
+                cls._apply_module_filter(cloud_log_handler, cls._cloud_handler_modules_filter)
+            cls._instance.addHandler(cloud_log_handler)
+            print("LoggerSetup: CloudLogHandler adicionado ao logger raiz.")
+            return True
+        else:
+            print("LoggerSetup: Falha ao criar CloudLogHandler. Logging na nuvem não será ativado.")
+            return False
+        
     @classmethod
     def _update_existing_loggers(cls):
         """Atualiza todos os loggers já criados com a nova configuração."""

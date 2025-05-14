@@ -1,11 +1,51 @@
 # src/flet_ui/views/home_view.py
 
 import flet as ft
-from src.logger.logger import LoggerSetup
+import os
+from src.settings import PATH_IMAGE_LOGO_DEPARTAMENTO
 
+from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
 
-def create_home_view(page: ft.Page) -> ft.View:
+
+def create_home_view(page: ft.Page) -> ft.Control: # Retorna ft.Control
+    """
+    Cria e retorna o *conteúdo* para a tela inicial (home).
+    """
+    _logger.info("Criando o conteúdo da view Home (imagem departamento).")
+
+    try:
+        department_logo = ft.Image(
+            src=PATH_IMAGE_LOGO_DEPARTAMENTO,
+            width=300, # Ajuste o tamanho conforme necessário
+            height=300,
+            fit=ft.ImageFit.CONTAIN,
+            error_content=ft.Text("Erro ao carregar imagem do logo.", color=ft.colors.RED)
+        )
+    except Exception as e:
+        _logger.error(f"Erro ao tentar carregar a imagem do logo '{PATH_IMAGE_LOGO_DEPARTAMENTO}': {e}")
+        department_logo = ft.Container(
+            content=ft.Text(f"Não foi possível carregar a imagem do logo em: {PATH_IMAGE_LOGO_DEPARTAMENTO}",
+                            color=ft.colors.ORANGE_ACCENT_700, style=ft.TextThemeStyle.BODY_LARGE),
+            padding=20,
+            alignment=ft.alignment.center
+        )
+
+    # Conteúdo principal da página Home (agora apenas a imagem centralizada)
+    main_content = ft.Column(
+        [
+            department_logo
+        ],
+        alignment=ft.MainAxisAlignment.CENTER, # Centraliza verticalmente
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER, # Centraliza horizontalmente
+        expand=True
+    )
+
+    # Não retorna ft.View, apenas o controle principal do conteúdo
+    return main_content
+
+
+def OLD_create_home_view(page: ft.Page) -> ft.View:
     """
     Cria e retorna a ft.View para a tela inicial (home) após o login.
     """

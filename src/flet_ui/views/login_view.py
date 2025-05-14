@@ -35,6 +35,7 @@ def create_login_view(page: ft.Page) -> ft.View:
     """
     Cria e retorna a ft.View para a tela de login.
     """
+    from src.services.firebase_client import FirebaseClientStorage
     _logger.info("Criando a view de Login.")
 
     auth_manager = FbManagerAuth() # Instancia o gerenciador de autenticação
@@ -134,6 +135,18 @@ def create_login_view(page: ft.Page) -> ft.View:
 
 
                 LoggerSetup.set_cloud_user_context(id_token, user_id)
+
+                # TENTA ADICIONAR CLOUD LOGGING AQUI
+                try:
+                    if not LoggerSetup._active_cloud_handler_instance:
+                        LoggerSetup.add_cloud_logging(
+                            user_token_for_client=id_token,
+                            user_id_for_client=user_id
+                        )
+                        _logger.info("Cloud logging (cliente) configurado após restaurar sessão.")
+                except Exception as e_rcl:
+                    _logger.error(f"Falha ao configurar cloud logging (cliente) após restaurar sessão: {e_rcl}")
+
                 _logger.info(f"Contexto do logger de nuvem atualizado para usuário {user_id}.")
 
                 page.go("/home")
@@ -232,7 +245,13 @@ def create_login_view(page: ft.Page) -> ft.View:
         # margin=20 # Margem em volta do card
     )
 
-    # A view de login não terá AppBar ou NavigationRail, geralmente é centralizada.
+    return ft.Container( # Container para centralizar o card
+                content=login_card,
+                alignment=ft.alignment.center,
+                expand=True, # Ocupa todo o espaço disponível
+                # bgcolor=ft.colors.BLUE_GREY_50 # Um fundo suave, opcional
+            )
+
     return ft.View(
         route="/login",
         controls=[

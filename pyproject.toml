@@ -6,7 +6,7 @@ authors = [
     {name = "Edson Braga",email = "edson89braga@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<4.0"
 dependencies = [
     "flet (>=0.27.6,<0.28.0)",
     "rich (>=14.0.0,<15.0.0)",
@@ -22,7 +22,10 @@ dependencies = [
     "langdetect (>=1.0.9,<2.0.0)",
     "sentence-transformers (>=4.1.0,<5.0.0)",
     "scikit-learn (>=1.6.1,<2.0.0)",
-    "numpy (>=2.2.5,<3.0.0)"
+    "numpy (>=2.2.5,<3.0.0)",
+    "langchain (>=0.3.25,<0.4.0)",
+    "openai (>=1.78.1,<2.0.0)",
+    "langchain-openai (>=0.3.16,<0.4.0)"
 ]
 
 

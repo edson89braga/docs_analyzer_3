@@ -1,14 +1,13 @@
 # src/flet_ui/app.py
 import flet as ft
-import time
+import time, os
 from typing import Dict, Any
 
-from ..settings import APP_TITLE, APP_VERSION
+from ..settings import APP_TITLE, APP_VERSION, FLET_SECRET_KEY
 
-#from .layout import create_app_bar, create_navigation_rail
+from .layout import create_app_bar, create_navigation_rail
 #from .components import ...
-from .router import app_router 
-
+from .router import route_change_content_only 
 from . import theme
 error_color = theme.COLOR_ERROR if hasattr(theme, 'COLOR_ERROR') else ft.colors.RED
 
@@ -48,6 +47,18 @@ def load_auth_state_from_storage(page: ft.Page):
                  page.session.set("auth_display_name", display_name)
             
             LoggerSetup.set_cloud_user_context(id_token, user_id)
+
+            # TENTA ADICIONAR CLOUD LOGGING AQUI
+            try:
+                if not LoggerSetup._active_cloud_handler_instance:
+                    LoggerSetup.add_cloud_logging(
+                        user_token_for_client=id_token,
+                        user_id_for_client=user_id
+                    )
+                    logger.info("Cloud logging (cliente) configurado após restaurar sessão.")
+            except Exception as e_rcl:
+                logger.error(f"Falha ao configurar cloud logging (cliente) após restaurar sessão: {e_rcl}")
+
             logger.info(f"Contexto do logger de nuvem restaurado para usuário {user_id} do client_storage.")
             # Verificar e tentar refresh se o token estiver perto de expirar ao carregar
             check_and_refresh_token_if_needed(page) # Chamada para nova função (ver abaixo)
@@ -57,7 +68,6 @@ def load_auth_state_from_storage(page: ft.Page):
             page.client_storage.remove("auth_id_token") # etc.
     else:
         logger.info("Nenhum estado de autenticação persistente encontrado no client_storage.")
-
 
 def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False) -> bool:
     """
@@ -124,8 +134,90 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
         handle_logout(page) # Força logout
         return False
     
+def main(page: ft.Page): 
+    logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando com layout persistente...")
+    page.title = APP_TITLE
+    page.vertical_alignment = ft.MainAxisAlignment.START
+    page.horizontal_alignment = ft.CrossAxisAlignment.START
 
-def main(page: ft.Page):
+    # --- Aplicar Temas ---
+    page.theme = theme.APP_THEME
+    page.dark_theme = theme.APP_DARK_THEME
+    page.theme_mode = ft.ThemeMode.SYSTEM
+
+    if page.data is None:
+        page.data = {}
+        
+    # Adiciona ao overlay uma única vez.
+    global_file_picker = ft.FilePicker()
+    page.overlay.append(global_file_picker)
+    page.data["global_file_picker"] = global_file_picker
+
+    # --- Elementos Persistentes do Layout ---
+    # AppBar será atualizada pelo router se o título precisar mudar,
+    # mas a instância base pode ser criada aqui.
+    app_bar = create_app_bar(page, APP_TITLE) # Título inicial
+
+    # NavigationRail (a rota inicial será usada para definir o selected_index)
+    # A rota atual pode ser "/" ou uma rota específica se o usuário recarregar a página.
+    # Se a rota inicial for de login, a NavRail não deve ser mostrada.
+    # Isso será tratado pelo router.
+    initial_route = page.route if page.route and page.route != "/" else "/login" # "/home"
+    navigation_rail = create_navigation_rail(page, initial_route)
+
+    content_container = ft.Container(
+        content=ft.Column( # Para centralizar o ProgressRing
+            [ft.ProgressRing()],
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True
+        ),
+        expand=True,
+        padding=theme.PADDING_L # Padding geral para a área de conteúdo
+    )
+
+    # --- Layout Principal da Página ---
+    # Limpa a página de qualquer configuração anterior (caso Flet reutilize a page)
+    page.clean()
+    page.appbar = app_bar
+    # O conteúdo principal (Row com NavRail e content_container)
+    # só será adicionado se a rota não for de login/signup.
+    # O router cuidará disso.
+
+    # --- Conectar o Roteador ---
+    page.on_route_change = lambda route_event: route_change_content_only(
+        page,
+        app_bar, # Passa a app_bar para que o título possa ser atualizado
+        navigation_rail,
+        content_container,
+        route_event.route
+    )
+    page.on_view_pop = None # Não usamos a pilha de views padrão com este layout
+
+    # Tenta carregar o estado de autenticação persistido
+    load_auth_state_from_storage(page)
+
+    # --- Limpeza ao Fechar ---
+    def on_disconnect(e):
+        logger.info("Cliente desconectado ou aplicação Flet fechando...")
+        LoggerSetup.set_cloud_user_context(None, None)
+        logger.info("Contexto do logger de nuvem limpo ao desconectar.")
+    page.on_disconnect = on_disconnect
+
+    # --- Navegar para a Rota Inicial ---
+    # O router agora lida com o redirecionamento para /login se não autenticado.
+    logger.info(f"Disparando navegação inicial para: {initial_route}")
+    page.go(initial_route) # Dispara o on_route_change
+
+    # Para uploads no modo web, Flet precisa de FLET_SECRET_KEY e upload_dir
+    if not os.getenv("FLET_SECRET_KEY"):
+        os.environ["FLET_SECRET_KEY"] = FLET_SECRET_KEY
+
+def OLD_main(page: ft.Page):
+    '''
+    Este modelo baseado em ft.View empilhadas foi substituído por um modelo de "Single Page Application (SPA)" acima;
+    '''
+    app_router = None
     logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando...")
     page.title = APP_TITLE
     page.vertical_alignment = ft.MainAxisAlignment.START
@@ -164,58 +256,3 @@ def main(page: ft.Page):
 
     logger.info(f"Disparando navegação inicial para: {initial_route}")
     page.go(initial_route) # Dispara o on_route_change
-
-
-def Other_main(page: ft.Page):
-    """
-    Função principal da aplicação Flet.
-    Configura a página, inicializa DB/Serviços, define layout persistente e conecta o router.
-    """
-    create_app_bar, route_change = [None]*2
-
-    page.title = APP_TITLE
-    page.vertical_alignment = ft.MainAxisAlignment.START
-    page.horizontal_alignment = ft.CrossAxisAlignment.START
-
-    # --- Aplicar Temas ---
-    page.theme = theme.APP_THEME
-    page.dark_theme = theme.APP_DARK_THEME
-    page.theme_mode = ft.ThemeMode.SYSTEM # Define como o tema inicial será escolhido (SYSTEM usa a preferência do OS)
-    
-    # page.data pode ser usado, mas page.client_data é mais adequado para dados da sessão
-    # page.client_data = {}
-            
-    # --- Definição dos Elementos Persistentes do Layout ---
-    app_bar = create_app_bar(page, APP_TITLE)
-    
-    # --- Conectar o Roteador ---
-    # Passa o content_container e navigation_rail para a função route_change
-    page.on_route_change = lambda route_event: route_change(page, route_event.route)
-    # page.on_view_pop não é mais necessário com esta abordagem, pois não usamos a pilha de Views
-
-    # --- Estrutura Principal da Página ---
-    page.clean() # Limpa a página
-    page.appbar = app_bar # AppBar global
-
-    ...
-
-    # --- Limpeza ao Fechar (Opcional mas recomendado) ---
-    def on_disconnect(e):
-        logger.info("Cliente desconectado ou aplicação Flet fechando...")
-        if page.data and page.data.get("db_session"):
-            logger.info("Fechando sessão SQLAlchemy...")
-            try:
-                page.data["db_session"].close()
-                logger.info("Sessão SQLAlchemy fechada.")
-            except Exception as close_err:
-                logger.error(f"Erro ao fechar a sessão SQLAlchemy: {close_err}")
-
-    page.on_disconnect = on_disconnect
-
-    # --- Navegar para a Rota Inicial ---
-    # Força a atualização inicial da rota "/" ou a rota atual se já houver uma
-    initial_route = page.route if page.route and page.route != "" and page.route != "/" else "/login"
-    logger.info(f"Navegando para a rota inicial: {initial_route}")
-    page.go(initial_route)
-
-

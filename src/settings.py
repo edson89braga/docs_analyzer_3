@@ -86,3 +86,21 @@ def show_data_k():
     print(keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD))
     #keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED, 'false')
 
+
+# --- Constantes referentes aos modelos de LLM:
+DEFAULT_LLM_PROVIDER = "openai"
+DEFAULT_OPENAI_MODEL = "gpt-3.5-turbo" # Modelo inicial padrão
+DEFAULT_TEMPERATURE = 0.2 # Baixa temperatura para respostas mais factuais/consistentes
+
+
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_ROOT_DIR = os.path.dirname(SRC_DIR)
+UPLOAD_TEMP_DIR = os.path.join(APP_ROOT_DIR, "uploads_temp") 
+
+ASSETS_DIR_ABS = os.path.join(APP_ROOT_DIR, "assets")
+
+FLET_SECRET_KEY = "minha_chave_secreta_de_teste_temporaria_123"
+
+# Caminho para a imagem (ajuste conforme necessário, pode estar em 'assets')
+PATH_IMAGE_LOGO_DEPARTAMENTO = "logo_pf_orgao.png" 
+

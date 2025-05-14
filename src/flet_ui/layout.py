@@ -8,169 +8,59 @@ from typing import List, Dict, Any, Optional
 # Importa definições de tema se necessário (ex: para padding ou cores)
 from src.flet_ui import theme
 
-def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
-    """Cria a AppBar padrão para a aplicação."""
-    
-    def toggle_theme_mode(e):
-        if page.theme_mode == ft.ThemeMode.LIGHT:
-            page.theme_mode = ft.ThemeMode.DARK
-        elif page.theme_mode == ft.ThemeMode.DARK:
-            page.theme_mode = ft.ThemeMode.LIGHT
-        else:
-            page.theme_mode = ft.ThemeMode.LIGHT
-        # Atualiza a cor da appbar explicitamente se necessário
-        # page.appbar.bgcolor = ... # Se o tema não atualizar automaticamente
-        page.update()
-
-    # Recupera o nome do usuário para exibir na AppBar, se logado
-    user_display_name = page.session.get("auth_display_name") or \
-                        (page.client_storage.get("auth_display_name") if page.client_storage else None)
-    
-    user_greeting_or_empty = []
-    if user_display_name:
-        user_greeting_or_empty.append(
-            ft.Text(f"Olá, {user_display_name.split(' ')[0]}", # Pega o primeiro nome
-                    size=14,
-                    font_family="Roboto", # Garante uma fonte consistente
-                    weight=ft.FontWeight.NORMAL,
-                    opacity=0.8, # Um pouco mais sutil
-                    italic=True) 
-        )
-        user_greeting_or_empty.append(ft.Container(width=10)) # Pequeno espaçador
-
-    # Botão Home - Adicionado no início das actions para aparecer mais à esquerda possível dentro das actions
-    home_button = ft.IconButton(
-        ft.icons.HOME_OUTLINED,
-        tooltip="Ir para Início",
-        on_click=lambda _: page.go("/home"),
-        padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
-        icon_size=40
-    )
-    
-    app_bar_actions = [
-        #*user_greeting_or_empty, # Desempacota a lista (pode ser vazia)
-        ft.IconButton(
-            ft.icons.SETTINGS_APPLICATIONS_OUTLINED, 
-            tooltip="Configurações LLM",
-            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
-            on_click=lambda _: page.go("/settings/llm"),
-            icon_size=40
-        ),
-        ft.PopupMenuButton(
-            tooltip="Opções do Usuário",
-            icon=ft.icons.ACCOUNT_CIRCLE_OUTLINED,
-            icon_size=40, 
-            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
-            items=[
-                ft.PopupMenuItem(text="Meu Perfil", icon=ft.icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")), # Rota de perfil
-                ft.PopupMenuItem(text="Configurar Proxy", icon=ft.icons.VPN_KEY_OUTLINED, on_click=lambda _: show_proxy_settings_dialog(page)),
-                ft.PopupMenuItem(),  # Divisor
-                ft.PopupMenuItem(text="Sair", icon=ft.icons.LOGOUT, on_click=lambda _: handle_logout(page)) # Ação de Logout
-            ]
-        ),
-        ft.IconButton(
-            ft.icons.BRIGHTNESS_4_OUTLINED, # Ícone para tema
-            tooltip="Mudar tema",
-            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
-            on_click=toggle_theme_mode,
-            icon_size=40
-        ),
-    ]
-
-    if page.route != "/home": # Só adiciona o botão Home se não estivermos na Home
-        app_bar_actions.insert(0, home_button)
-
-    return ft.AppBar(
-        title=ft.Text(app_title),
-        center_title=False,
-        actions=app_bar_actions,
-        #bgcolor=theme.SURFACE_VARIANT
-    )
-
-# Módulos e seus ícones/rotas para a navegação
-# Definido aqui para ser acessível globalmente por este módulo
 icones_navegacao: List[Dict[str, Any]] = [
     {
-        "label": "Início",
+        "label": "Início", # Imagem do departamento
         "icon": ft.Icons.HOME_OUTLINED,
         "selected_icon": ft.Icons.HOME,
         "route": "/home"
     },
     {
-        "label": "Perfil",
-        "icon": ft.Icons.ACCOUNT_CIRCLE_OUTLINED,
-        "selected_icon": ft.Icons.ACCOUNT_CIRCLE,
-        "route": "/profile"
+        "label": "Análise Inicial", # Antiga "Análise Inicial"
+        "icon": ft.Icons.FIND_IN_PAGE_OUTLINED,
+        "selected_icon": ft.Icons.FIND_IN_PAGE,
+        "route": "/analyze_pdf" # Nova rota para a funcionalidade principal
     },
     {
-        "label": "Produtos",
-        "icon": ft.Icons.CATEGORY_OUTLINED,
-        "selected_icon": ft.Icons.CATEGORY,
-        "route": "/products" # Rota base para a seção de produtos
+        "label": "Chat with PDF",
+        "icon": ft.Icons.QUESTION_ANSWER_OUTLINED,
+        "selected_icon": ft.Icons.QUESTION_ANSWER,
+        "route": "/chat_pdf"
     },
     {
-        "label": "Pedidos",
-        "icon": ft.Icons.SHOPPING_CART_OUTLINED,
-        "selected_icon": ft.Icons.SHOPPING_CART,
-        "route": "/orders" # Rota base para a seção de pedidos
+        "label": "Banco Pareceres",
+        "icon": ft.Icons.LIBRARY_BOOKS_OUTLINED,
+        "selected_icon": ft.Icons.LIBRARY_BOOKS,
+        "route": "/knowledge_base"
     },
-    {
-        "label": "Análises",
-        "icon": ft.Icons.INSIGHTS_OUTLINED,
-        "selected_icon": ft.Icons.INSIGHTS,
-        "route": "/analytics" # Rota base para a seção de análises
-    },
-    {
-        "label": "Ajuda",
-        "icon": ft.Icons.HELP_OUTLINE,
-        "selected_icon": ft.Icons.HELP,
-        "route": "/help/faq" # Exemplo de rota direta para uma sub-seção
-    },
-    {
-        "label": "Configurações",
-        "icon": ft.Icons.SETTINGS_OUTLINED,
-        "selected_icon": ft.Icons.SETTINGS,
-        "route": "/settings/application" # Rota base para a seção de configurações
-    },
+    #{
+    #    "label": "Meu Perfil",
+    #    "icon": ft.Icons.ACCOUNT_CIRCLE_OUTLINED,
+    #    "selected_icon": ft.Icons.ACCOUNT_CIRCLE,
+    #    "route": "/profile"
+    #},
+    #{
+    #    "label": "Config. LLM",
+    #    "icon": ft.Icons.SETTINGS_APPLICATIONS_OUTLINED,
+    #    "selected_icon": ft.Icons.SETTINGS_APPLICATIONS,
+    #    "route": "/settings/llm"
+    #},
+    # Adicionar outras seções futuras aqui
 ]
 
-# REESCRITA DA SEÇÃO: route_to_base_nav_index
 # Mapeamento inverso para destacar o item correto na NavRail principal
+# AJUSTADO para as novas seções
 route_to_base_nav_index: Dict[str, int] = {
     # Raiz do app, geralmente redireciona para /home ou /dashboard
-    "/": 0, # Mapeia para "Início" (índice 0)
+    "/": 0,
     "/home": 0,
-
-    "/profile": 1,
-    "/profile/edit": 1,
-    "/profile/security": 1,
-
-    "/products": 2, # Rota base para produtos
-    "/products/list": 2,
-    "/products/new": 2,
-    "/products/categories": 2,
-    "/products/detail/123": 2, # Exemplo com parâmetro
-
-    "/orders": 3, # Rota base para pedidos
-    "/orders/list": 3,
-    "/orders/pending": 3,
-    "/orders/detail/456": 3, # Exemplo com parâmetro
-
-    "/analytics": 4, # Rota base para análises
-    "/analytics/sales": 4,
-    "/analytics/users": 4,
-
-    "/help": 5, # Rota base para ajuda
-    "/help/faq": 5,
-    "/help/contact": 5,
-
-    "/settings": 6, # Rota base para configurações
-    "/settings/application": 6,
-    "/settings/user": 6,
-    "/settings/notifications": 6,
+    "/analyze_pdf": 1,
+    "/chat_pdf": 2, 
+    "/knowledge_base": 3,
+    # Se houver outras rotas de settings, mapear para o mesmo índice se fizer sentido
+    # "/settings/application": 4, (se /settings fosse o item da NavRail)
 }
 
-# Método exemplo abaixo; Não utilizado no projeto
 def _find_nav_index_for_route(route: str) -> int:
     """Encontra o índice da NavigationRail para uma dada rota (incluindo sub-rotas)."""
     selected_index = 0 # Default Dashboard
@@ -203,6 +93,87 @@ def _find_nav_index_for_route(route: str) -> int:
                  selected_index = index
 
     return selected_index
+
+
+def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
+    """Cria a AppBar padrão para a aplicação."""
+    
+    def toggle_theme_mode(e):
+        if page.theme_mode == ft.ThemeMode.LIGHT:
+            page.theme_mode = ft.ThemeMode.DARK
+        elif page.theme_mode == ft.ThemeMode.DARK:
+            page.theme_mode = ft.ThemeMode.LIGHT
+        else:
+            page.theme_mode = ft.ThemeMode.LIGHT
+        # Atualiza a cor da appbar explicitamente se necessário
+        # page.appbar.bgcolor = ... # Se o tema não atualizar automaticamente
+        page.update()
+
+    # Recupera o nome do usuário para exibir na AppBar, se logado
+    user_display_name = page.session.get("auth_display_name") or \
+                        (page.client_storage.get("auth_display_name") if page.client_storage else None)
+    
+    user_greeting_or_empty = []
+    if user_display_name:
+        user_greeting_or_empty.append(
+            ft.Text(f"Olá, {user_display_name.split(' ')[0]}", # Pega o primeiro nome
+                    size=14,
+                    font_family="Roboto", # Garante uma fonte consistente
+                    weight=ft.FontWeight.NORMAL,
+                    opacity=0.8, # Um pouco mais sutil
+                    italic=True) 
+        )
+        user_greeting_or_empty.append(ft.Container(width=10)) # Pequeno espaçador
+
+    # Botão Home - Adicionado no início das actions para aparecer mais à esquerda possível dentro das actions
+    home_button = ft.IconButton(
+        ft.Icons.HOME_OUTLINED,
+        tooltip="Ir para Início",
+        on_click=lambda _: page.go("/home"),
+        padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+        icon_size=40
+    )
+    
+    app_bar_actions = [
+        #*user_greeting_or_empty, # Desempacota a lista (pode ser vazia)
+        #ft.IconButton(
+        #    ft.Icons.SETTINGS_APPLICATIONS_OUTLINED, 
+        #    tooltip="Configurações LLM",
+        #    padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+        #    on_click=lambda _: page.go("/settings/llm"),
+        #    icon_size=40
+        #),
+        ft.PopupMenuButton(
+            tooltip="Configurações do Usuário",
+            icon=ft.Icons.SETTINGS, #SETTINGS_APPLICATIONS_OUTLINED, ACCOUNT_CIRCLE_OUTLINED,
+            icon_size=30, 
+            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+            items=[
+                ft.PopupMenuItem(text="Perfil", icon=ft.Icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")), # Rota de perfil
+                ft.PopupMenuItem(text="Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=lambda _: show_proxy_settings_dialog(page)),
+                ft.PopupMenuItem(text="LLM - Models", icon=ft.Icons.PERSON_OUTLINE, on_click=lambda _: page.go("/settings/llm")), # Rota de perfil
+                ft.PopupMenuItem(),  # Divisor
+                ft.PopupMenuItem(text="Sair", icon=ft.Icons.LOGOUT, on_click=lambda _: handle_logout(page)) # Ação de Logout
+            ]
+        ),
+        ft.IconButton(
+            ft.Icons.BRIGHTNESS_4_OUTLINED, # Ícone para tema
+            tooltip="Mudar tema",
+            padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+            on_click=toggle_theme_mode,
+            icon_size=30
+        ),
+    ]
+
+    #if page.route != "/home": # Só adiciona o botão Home se não estivermos na Home
+    #    app_bar_actions.insert(0, home_button)
+
+    return ft.AppBar(
+        title=ft.Text(app_title),
+        center_title=False,
+        actions=app_bar_actions,
+        #bgcolor=theme.SURFACE_VARIANT
+    )
 
 def create_navigation_rail(page: ft.Page, selected_route: str) -> ft.NavigationRail:
     """Cria a NavigationRail, marcando o índice correto com base na rota.

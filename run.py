@@ -1,43 +1,35 @@
-'''
-TODO:
-3) flet_ui: Criar LoginPage e CredentialsDialog;
-4) Refazer plano operacional de tarefas baseado nos novos módulos;
-5) Deletar Repo docs_analyzer_2;
-'''
-
 # run.py
-import logging
+import logging, os
 import flet as ft
 # Importa a função 'main' do seu módulo app dentro de flet_ui
 from src.flet_ui.app import main
 
-from src.services.firebase_client import FirebaseClientStorage
-from src.services.firebase_manager import FbManagerStorage
+# REMOVIDO daqui managers de storage para tentar tornar a inicialização da aplicação mais rápida (movido para app.py):
+# from src.services.firebase_client import FirebaseClientStorage
+# from src.services.firebase_manager import FbManagerStorage
+# 
+# # Instanciar managers de storage
+# _client_storage_for_logger = None
+# try:
+#     _client_storage_for_logger = FirebaseClientStorage()
+# except Exception as e_cli:
+#     print(f"AVISO em run.py: Falha ao instanciar FirebaseClientStorage para logger: {e_cli}")
+# 
+# _admin_storage_for_logger = None
+# try:
+#     _admin_storage_for_logger = FbManagerStorage() # Pode retornar None se não configurado
+# except Exception as e_adm:
+#     print(f"AVISO em run.py: Falha ao instanciar FbManagerStorage (Admin) para logger: {e_adm}")
+# 
+# if not _client_storage_for_logger and not _admin_storage_for_logger:
+#     print("AVISO CRÍTICO em run.py: Nenhum gerenciador de storage Firebase disponível. Logs na nuvem DESABILITADOS.")
 
 from src.logger.logger import LoggerSetup
-
-
-# Instanciar managers de storage
-_client_storage_for_logger = None
-try:
-    _client_storage_for_logger = FirebaseClientStorage()
-except Exception as e_cli:
-    print(f"AVISO em run.py: Falha ao instanciar FirebaseClientStorage para logger: {e_cli}")
-
-_admin_storage_for_logger = None
-try:
-    _admin_storage_for_logger = FbManagerStorage() # Pode retornar None se não configurado
-except Exception as e_adm:
-    print(f"AVISO em run.py: Falha ao instanciar FbManagerStorage (Admin) para logger: {e_adm}")
-
-if not _client_storage_for_logger and not _admin_storage_for_logger:
-    print("AVISO CRÍTICO em run.py: Nenhum gerenciador de storage Firebase disponível. Logs na nuvem DESABILITADOS.")
-
 try:
     LoggerSetup.initialize(
         routine_name="DocsAnalyzer3",
-        firebase_client_storage=_client_storage_for_logger,
-        fb_manager_storage_admin=_admin_storage_for_logger
+        #firebase_client_storage=_client_storage_for_logger,
+        #fb_manager_storage_admin=_admin_storage_for_logger
     )
     # Logger para o próprio run.py
     _run_logger = LoggerSetup.get_logger(__name__)
@@ -61,6 +53,7 @@ logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING) # Manter acesso em WARNING
 logging.getLogger("starlette").setLevel(logging.WARNING)
 
+from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
@@ -68,18 +61,22 @@ if __name__ == "__main__":
     ft.app(
         target=main,                 # Função principal a ser executada
         view=ft.AppView.WEB_BROWSER, # Executa como uma aplicação web no navegador padrão
-        port=8550                    # Porta em que a aplicação será servida (ex: http://localhost:8550)
-        # assets_dir="assets"        # Descomente se você tiver uma pasta 'assets' na raiz
-        # Para uploads no modo web, Flet precisa de FLET_SECRET_KEY e upload_dir
-        # os.environ["FLET_SECRET_KEY"] = "sua_chave_secreta_aqui_para_desenvolvimento" # Defina de forma segura
-        # upload_dir=os.path.abspath("temp_flet_uploads") # Crie este diretório
+        port=8550,                   # Porta em que a aplicação será servida (ex: http://localhost:8550)
+        assets_dir=ASSETS_DIR_ABS,         # Descomente se você tiver uma pasta 'assets' na raiz
+        upload_dir=UPLOAD_TEMP_DIR
     )
 
 # >>> python run.py  ou
 # >>> flet run -w run.py
 
 '''
+Quanto à FLET_SECRET_KEY, na compilação com pyinstaller:
+    Tentar ler do ambiente (os.getenv) primeiro (para casos onde um administrador de TI ou usuário avançado queira definir).
+    Se não encontrar, tentar ler do Keyring (para persistência na máquina local).
+    Se não encontrar no Keyring, gerar uma nova chave aleatória, usá-la E salvá-la no Keyring para futuras sessões naquela máquina.
+
+
 TODO:
 1) CreateUser: Tratar erro "message": "EMAIL_EXISTS"
-2) Seção Perfil, incluir botão para retornar à página inicial
+2) Possibilidade de receber multiplos arquivos PDF;
 '''

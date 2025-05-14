@@ -155,6 +155,12 @@ def create_signup_view(page: ft.Page) -> ft.View:
         elevation=8,
     )
 
+    return ft.Container(
+                content=signup_card,
+                alignment=ft.alignment.center,
+                expand=True,
+            )
+
     return ft.View(
         route="/signup",
         controls=[

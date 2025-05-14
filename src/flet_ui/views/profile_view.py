@@ -1,5 +1,6 @@
 # src/flet_ui/views/profile_view.py
 
+from turtle import bgcolor
 import flet as ft
 from typing import Optional
 
@@ -290,20 +291,31 @@ def create_profile_view(page: ft.Page) -> ft.View:
             ft.Divider(),
             display_name_text_control ,
             email_text,
-            ft.Container(height=10),
+            ft.Container(height=5),
             edit_profile_section, 
-            ft.Container(height=15),
+            ft.Container(height=8),
             change_password_section,
-            ft.Container(height=15),
+            ft.Container(height=8),
             danger_zone_section,
         ],
         spacing=20,
         width=700, # Definir uma largura máxima para o conteúdo do perfil
+        scroll=ft.ScrollMode.ADAPTIVE
         # alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
         # horizontal_alignment=ft.CrossAxisAlignment.CENTER # Centraliza a coluna na página
     )
 
-    # A view usará o layout padrão (AppBar, etc.) adicionado pelo router.
+    return ft.Container(content=ft.Column( # Container para centralizar e aplicar padding
+                [profile_content_column] ,
+                alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER, # Centraliza a coluna na página
+                expand=True, scroll=ft.ScrollMode.ADAPTIVE
+            ),
+            padding=ft.padding.symmetric(vertical=30, horizontal=20),
+            alignment=ft.alignment.top_center, expand=True, 
+            border=ft.border.all(1, ft.colors.with_opacity(0.3, theme.COLOR_INFO))
+        )
+
     return ft.View(
         route="/profile",
         controls=[

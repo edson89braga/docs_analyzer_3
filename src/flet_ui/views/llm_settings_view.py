@@ -322,7 +322,7 @@ def create_llm_settings_view(page: ft.Page) -> ft.View:
             ft.Text("Configurações de Modelos de Linguagem (LLM)", size=28, weight=ft.FontWeight.BOLD),
             ft.Text(
                 "Gerencie suas chaves de API para os serviços LLM utilizados pela aplicação. "
-                "Suas chaves API são criptografadas localmente antes de serem salvas.",
+                "\nSuas chaves API são criptografadas localmente antes de serem salvas.",
                 size=14, color=ft.colors.with_opacity(0.8, ft.colors.ON_SURFACE)
             ),
             ft.Divider(height=20),
@@ -334,6 +334,15 @@ def create_llm_settings_view(page: ft.Page) -> ft.View:
         width=800, 
         # horizontal_alignment=ft.CrossAxisAlignment.CENTER
     )
+
+    return ft.Container(content=ft.Column( 
+                [settings_content] ,
+                alignment=ft.MainAxisAlignment.START, 
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER, 
+                expand=True, scroll=ft.ScrollMode.ADAPTIVE
+            ),
+            padding=ft.padding.symmetric(vertical=30, horizontal=20),
+            alignment=ft.alignment.top_center, expand=True)
 
     return ft.View(
         route="/settings/llm",

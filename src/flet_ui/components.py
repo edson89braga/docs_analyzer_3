@@ -523,10 +523,10 @@ class ManagedFilePicker:
     def __init__(
         self,
         page: ft.Page,
-        file_picker_instance: ft.FilePicker, # Instância já adicionada ao page.overlay
+        file_picker_instance: ft.FilePicker,
         on_upload_complete: FileUploadCompleteCallback,
-        upload_dir: str, # Diretório absoluto no servidor para uploads temporários
-        allowed_extensions: Optional[List[str]] = None, # Ex: [".json", ".txt"]
+        upload_dir: str,
+        allowed_extensions: Optional[List[str]] = None,
         pick_dialog_title: str = "Selecionar arquivo",
         on_upload_progress: Optional[FileUploadProgressCallback] = None,
         upload_url_expiry_seconds: int = 300,
@@ -534,186 +534,173 @@ class ManagedFilePicker:
         self.page = page
         self.file_picker = file_picker_instance
         self.on_upload_complete = on_upload_complete
-        self.upload_dir = os.path.abspath(upload_dir) # Garante caminho absoluto
-        self.allowed_extensions = [ext.lower() for ext in allowed_extensions] if allowed_extensions else None
+        self.upload_dir = os.path.abspath(upload_dir)
+        self.allowed_extensions = [ext.lower().lstrip('.') for ext in allowed_extensions] if allowed_extensions else None
         self.pick_dialog_title = pick_dialog_title
-        self.on_upload_progress = on_upload_progress
+        self.on_upload_progress = on_upload_progress # Será usado em _on_file_picker_upload
         self.upload_url_expiry_seconds = upload_url_expiry_seconds
 
-        # Configura os callbacks do FilePicker
         self.file_picker.on_result = self._on_file_picker_result
         self.file_picker.on_upload = self._on_file_picker_upload
 
-        self._is_uploading_map: Dict[str, bool] = {} # Para rastrear uploads por nome de arquivo
+        self._is_uploading_map: Dict[str, bool] = {} # Rastreia uploads por nome
 
-        # Garante que o diretório de upload exista
         if not os.path.exists(self.upload_dir):
             try:
                 os.makedirs(self.upload_dir, exist_ok=True)
                 logger.info(f"Diretório de upload criado: {self.upload_dir}")
             except OSError as e:
                 logger.error(f"Falha ao criar diretório de upload {self.upload_dir}: {e}")
-                # Esta é uma falha crítica, poderia levantar uma exceção
-                # ou chamar o on_upload_complete com erro.
-                # Por agora, apenas loga.
+                # Considerar chamar self.on_upload_complete com erro aqui se o dir é essencial
 
     def pick_files(
         self,
         allow_multiple: bool = False,
-        allowed_extensions_override: Optional[List[str]] = None, # Override temporário
+        allowed_extensions_override: Optional[List[str]] = None,
         dialog_title_override: Optional[str] = None
     ):
-        """Abre o diálogo do FilePicker para o usuário selecionar arquivos."""
-        current_allowed_extensions = allowed_extensions_override or self.allowed_extensions
+        current_allowed_extensions_normalized = [
+            ext.lower().lstrip('.') for ext in allowed_extensions_override
+        ] if allowed_extensions_override else self.allowed_extensions
+        
         current_dialog_title = dialog_title_override or self.pick_dialog_title
 
-        logger.debug(f"Abrindo FilePicker: title='{current_dialog_title}', multiple={allow_multiple}, ext={current_allowed_extensions}")
+        logger.debug(f"Abrindo FilePicker: title='{current_dialog_title}', multiple={allow_multiple}, ext={current_allowed_extensions_normalized}")
         self.file_picker.pick_files(
             dialog_title=current_dialog_title,
             allow_multiple=allow_multiple,
-            allowed_extensions=current_allowed_extensions,
-            # Padrões do Flet para file_type e initial_directory são geralmente bons.
+            allowed_extensions=current_allowed_extensions_normalized # Passa normalizado
         )
 
     def _on_file_picker_result(self, e: ft.FilePickerResultEvent):
         if not e.files:
             logger.warning("Seleção de arquivo cancelada pelo usuário.")
-            # Opcional: Chamar on_upload_complete com um status de cancelamento
-            # self.on_upload_complete(False, "Seleção cancelada", None)
-            # Ou apenas não fazer nada, dependendo do fluxo desejado.
-            show_snackbar(self.page, "Seleção de arquivo cancelada.", color=theme.COLOR_WARNING)
+            # Notifica a view para que ela possa reabilitar botões, etc.
+            self.on_upload_complete(False, "Seleção cancelada", None)
             return
 
-        # Por simplicidade, este exemplo foca no upload de um único arquivo por vez
-        # mesmo que allow_multiple seja True. O Flet chama on_result para cada arquivo
-        # se pick_files for chamado para múltiplos. Se não, e.files terá múltiplos.
-        # Para múltiplos uploads simultâneos, a lógica de _is_uploading_map precisaria ser mais robusta.
         selected_file = e.files[0]
         file_name = selected_file.name
-        original_file_path_on_client = selected_file.path # `None` no modo Web
+        original_file_path_on_client = selected_file.path
 
         logger.info(f"Arquivo selecionado: {file_name}, Path cliente: {original_file_path_on_client}")
 
         if self._is_uploading_map.get(file_name):
             logger.warning(f"Upload de '{file_name}' já está em progresso.")
-            show_snackbar(self.page, f"Upload de '{file_name}' já em andamento.", color=theme.COLOR_WARNING)
+            # Não chamar show_snackbar aqui, a view pode decidir o feedback
+            # self.on_upload_complete(False, f"Upload de '{file_name}' já em andamento.", file_name) # Opcional
             return
 
-        # Validação de extensão (caso o FilePicker nativo não tenha filtrado 100%)
+        # Validação de extensão
         if self.allowed_extensions:
-            _root, ext = os.path.splitext(file_name)
-            if ext.lower() not in self.allowed_extensions:
-                err_msg = f"Tipo de arquivo inválido: '{ext}'. Permitidos: {', '.join(self.allowed_extensions)}"
+            _root, ext_with_dot = os.path.splitext(file_name)
+            normalized_ext = ext_with_dot.lower().lstrip('.')
+            if normalized_ext not in self.allowed_extensions: # self.allowed_extensions já está normalizado
+                original_allowed_ext_display = [f".{ae}" for ae in self.allowed_extensions] # Para display
+                err_msg = f"Tipo de arquivo inválido: '{ext_with_dot}'. Permitidos: {', '.join(original_allowed_ext_display)}"
                 logger.error(err_msg)
                 self.on_upload_complete(False, err_msg, file_name)
-                show_snackbar(self.page, err_msg, color=theme.COLOR_ERROR)
                 return
 
-        if original_file_path_on_client:
-            # MODO DESKTOP (ou app móvel com acesso ao path)
-            logger.info(f"Modo Desktop/App. Arquivo acessível em: {original_file_path_on_client}")
-            # Emula comportamento de upload "completo" imediatamente
-            if self.on_upload_progress:
-                 self.on_upload_progress(file_name, 1.0)
+        if original_file_path_on_client: # MODO DESKTOP
+            logger.info(f"Modo Desktop. Arquivo: {original_file_path_on_client}")
+            if self.on_upload_progress: self.on_upload_progress(file_name, 1.0)
             self.on_upload_complete(True, original_file_path_on_client, file_name)
-        else:
-            # MODO WEB - Iniciar upload para o servidor
-            logger.info(f"Modo Web. Iniciando processo de upload para: {file_name}")
+        else: # MODO WEB
+            logger.info(f"Modo Web. Preparando upload para: {file_name}")
+            self._is_uploading_map[file_name] = True # Marca como em andamento
 
-            # 1. Limpar arquivo com mesmo nome no destino (se existir)
+            # Limpar arquivo anterior no servidor (opcional, mas boa prática)
             server_target_path = os.path.join(self.upload_dir, file_name)
             if os.path.exists(server_target_path):
                 try:
                     os.remove(server_target_path)
-                    logger.debug(f"Arquivo anterior removido do servidor: {server_target_path}")
+                    logger.debug(f"Arquivo anterior removido: {server_target_path}")
                 except OSError as remove_err:
-                    errMsg = f"Erro ao limpar arquivo anterior no servidor: {remove_err}"
-                    logger.error(errMsg, exc_info=True)
-                    self.on_upload_complete(False, errMsg, file_name)
-                    show_snackbar(self.page, "Erro interno ao preparar upload.", color=theme.COLOR_ERROR)
-                    return
+                    logger.warning(f"Não foi possível remover arquivo anterior '{server_target_path}': {remove_err}")
+                    # Não necessariamente um erro fatal para o novo upload
 
-            # 2. Obter URL de upload do Flet
             try:
                 upload_url = self.page.get_upload_url(file_name, self.upload_url_expiry_seconds)
                 if not upload_url:
                     raise ValueError("Flet retornou uma URL de upload vazia.")
-                logger.debug(f"URL de upload gerada para '{file_name}': {upload_url[:50]}...") # Log truncado
-            except Exception as url_err:
-                errMsg = f"Erro ao obter URL de upload do Flet: {url_err}"
-                logger.error(errMsg, exc_info=True)
-                self.on_upload_complete(False, errMsg, file_name)
-                show_snackbar(self.page, "Erro ao preparar upload para o servidor.", color=theme.COLOR_ERROR)
-                return
+                logger.debug(f"URL de upload para '{file_name}' obtida.")
 
-            # 3. Iniciar o upload
-            self._is_uploading_map[file_name] = True
-            if self.on_upload_progress: # Sinaliza início
-                self.on_upload_progress(file_name, 0.0)
-            show_snackbar(self.page, f"Enviando '{file_name}'...", duration=5000) # Snackbar de início
+                # Notificar progresso 0% ANTES de iniciar o upload
+                if self.on_upload_progress:
+                    self.on_upload_progress(file_name, 0.0)
+                
+                # A view (analyze_pdf_view) já chamou page.update() ao desabilitar botões
+                # e mostrar "Selecionando arquivo...".
+                # Ela também pode mostrar "Enviando..." através do on_upload_progress(0.0)
+                # ou do on_upload_complete chamado com um status inicial.
+                # VAMOS REMOVER O SNACKBAR DAQUI e deixar a view controlar o feedback inicial de upload.
 
-            try:
-                self.file_picker.upload([ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)])
+                logger.info(f"Chamando self.file_picker.upload() para {file_name}")
+                self.file_picker.upload([
+                    ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)
+                ])
                 logger.info(f"Comando de upload para '{file_name}' enviado ao Flet.")
-            except Exception as upload_start_err:
-                errMsg = f"Erro ao iniciar comando de upload do Flet: {upload_start_err}"
-                logger.error(errMsg, exc_info=True)
-                self._is_uploading_map.pop(file_name, None)
-                self.on_upload_complete(False, errMsg, file_name)
-                show_snackbar(self.page, "Erro crítico ao tentar enviar arquivo.", color=theme.COLOR_ERROR)
+                
+                # Adicionar um page.update() AQUI, após o comando de upload.
+                # Isso foi o que funcionou na versão simplificada.
+                self.page.update()
+                logger.info(f"page.update() chamado após file_picker.upload() para {file_name}.")
+
+            except Exception as ex:
+                logger.error(f"Erro ao preparar ou iniciar upload para '{file_name}': {ex}", exc_info=True)
+                self._is_uploading_map.pop(file_name, None) # Limpa flag
+                self.on_upload_complete(False, f"Erro no preparo do upload: {ex}", file_name)
 
     def _on_file_picker_upload(self, e: ft.FilePickerUploadEvent):
-        if not self._is_uploading_map.get(e.file_name):
-            # logger.debug(f"Evento de upload para '{e.file_name}' recebido, mas não estava sendo rastreado (provavelmente já concluído ou erro anterior).")
-            return
+        logger.info(f"Evento _on_file_picker_upload: File={e.file_name}, Prog={e.progress}, Err={e.error}, Tracked={self._is_uploading_map.get(e.file_name)}")
 
-        logger.debug(f"Evento upload: Arquivo={e.file_name}, Progresso={e.progress}, Erro={e.error}")
+        # É crucial que _is_uploading_map seja verificado, mas só se remove no final ou erro.
+        # Se não estiver rastreado, pode ser um evento tardio de um upload cancelado ou problemático.
+        if not self._is_uploading_map.get(e.file_name) and not e.error : # Se não há erro, mas não está rastreado, é estranho
+            logger.warning(f"Evento de upload para '{e.file_name}' recebido, mas não estava sendo ativamente rastreado (ou já finalizado). Prog: {e.progress}")
+            # Poderia ser um evento de progresso após o _is_uploading_map ter sido limpo por uma conclusão/erro anterior.
+            # Se e.error existisse, o bloco abaixo trataria.
+            # Para evitar problemas, podemos simplesmente retornar se não estivermos esperando por ele.
+            # return
 
         if e.error:
-            errMsg = f"Erro durante o upload de '{e.file_name}': {e.error}"
-            logger.error(errMsg)
+            logger.error(f"Erro no evento de upload para '{e.file_name}': {e.error}")
             self._is_uploading_map.pop(e.file_name, None)
-            self.on_upload_complete(False, errMsg, e.file_name)
-            show_snackbar(self.page, f"Falha no envio de '{e.file_name}'.", color=theme.COLOR_ERROR)
+            self.on_upload_complete(False, f"Erro no upload: {e.error}", e.file_name)
             return
 
         if e.progress is not None and e.progress < 1.0:
+            logger.debug(f"Progresso do upload para '{e.file_name}': {e.progress*100:.1f}%")
             if self.on_upload_progress:
                 self.on_upload_progress(e.file_name, e.progress)
-            # Pode-se adicionar um snackbar de progresso aqui se desejado,
-            # mas pode ser verboso. Um ft.ProgressBar na UI é melhor.
-            return
+            return # Aguarda próximo evento de progresso ou conclusão
 
-        # Upload Concluído (e.progress == 1.0 implícito ou None quando não aplicável, mas sem erro)
-        logger.info(f"Upload de '{e.file_name}' para o Flet parece concluído. Verificando no servidor...")
-        show_snackbar(self.page, f"'{e.file_name}' recebido. Verificando...", duration=2000)
-
+        # Se chegou aqui, e.progress é 1.0 ou None (mas sem erro), indicando conclusão do upload para o Flet.
+        logger.info(f"Upload para Flet de '{e.file_name}' parece concluído. Verificando no servidor...")
         server_final_path = os.path.join(self.upload_dir, e.file_name)
+        file_found_on_server = False
+        max_retries = 5 # Reduzido um pouco, mas ainda importante
+        retry_delay_seconds = 0.3
 
-        # Lógica de retentativa para verificar se o arquivo existe no servidor
-        # (Race condition: evento de upload pode chegar antes do arquivo estar visível no FS)
-        max_retries = 7; retry_delay_seconds = 0.4; file_found_on_server = False
         for attempt in range(max_retries):
             if os.path.exists(server_final_path):
                 file_found_on_server = True
-                logger.info(f"Arquivo '{e.file_name}' confirmado no servidor em '{server_final_path}' (tentativa {attempt + 1}).")
+                logger.info(f"Arquivo '{e.file_name}' confirmado no servidor (tentativa {attempt + 1}). Path: {server_final_path}")
                 break
-            else:
-                logger.warning(f"Arquivo '{e.file_name}' ainda não encontrado em '{server_final_path}' (tentativa {attempt + 1}). Aguardando {retry_delay_seconds}s...")
-                if self.page: self.page.update() # Força um update para liberar a UI durante o sleep
-                time.sleep(retry_delay_seconds)
+            logger.warning(f"Arquivo '{e.file_name}' ainda não no servidor (tentativa {attempt + 1}). Aguardando...")
+            time.sleep(retry_delay_seconds) # Sleep na thread do callback (ok, não bloqueia UI)
 
-        self._is_uploading_map.pop(e.file_name, None) # Remove do rastreamento
+        # Limpa o rastreamento ANTES de chamar on_upload_complete
+        self._is_uploading_map.pop(e.file_name, None)
+        logger.debug(f"'{e.file_name}' removido do rastreamento _is_uploading_map.")
 
         if file_found_on_server:
             self.on_upload_complete(True, server_final_path, e.file_name)
-            # A responsabilidade de remover `server_final_path` após o processamento
-            # é do callback `on_upload_complete` ou da lógica que o chamou.
         else:
-            errMsg = f"Falha crítica: Arquivo '{e.file_name}' não foi encontrado em '{server_final_path}' após o upload ter sido reportado como completo."
+            errMsg = f"Arquivo '{e.file_name}' não encontrado em '{server_final_path}' após upload reportado como completo."
             logger.error(errMsg)
             self.on_upload_complete(False, errMsg, e.file_name)
-            show_snackbar(self.page, f"Erro: '{e.file_name}' não localizado após envio.", color=theme.COLOR_ERROR, duration=5000)
 
     def clear_upload_directory(self):
         """Remove todos os arquivos e subdiretórios do diretório de upload."""
@@ -733,6 +720,76 @@ class ManagedFilePicker:
             logger.info(f"Diretório de upload '{self.upload_dir}' limpo.")
         except Exception as e:
             logger.error(f"Erro ao tentar limpar o diretório de upload '{self.upload_dir}': {e}")
+    ### MÉTODOS PARA TESTE ISOLADO :
+    '''
+    def _on_file_picker_result(self, e: ft.FilePickerResultEvent):
+        if not e.files:
+            logger.warning("Seleção de arquivo cancelada (TESTE SIMPLES).")
+            self.on_upload_complete(False, "Seleção cancelada", None) # Notifica a view
+            return
+
+        selected_file = e.files[0]
+        self.current_test_file_name = selected_file.name # Armazena para _on_file_picker_upload
+        logger.info(f"TESTE SIMPLES: Arquivo selecionado: {self.current_test_file_name}")
+
+        if selected_file.path: # Modo Desktop
+            logger.info("TESTE SIMPLES: Modo Desktop.")
+            self.on_upload_complete(True, selected_file.path, self.current_test_file_name)
+            return
+        else: # Modo Web
+            logger.info("TESTE SIMPLES: Modo Web.")
+            try:
+                upload_url = self.page.get_upload_url(self.current_test_file_name, 300)
+                logger.info(f"TESTE SIMPLES: URL de Upload: {upload_url}")
+                if not upload_url:
+                    self.on_upload_complete(False, "URL de upload vazia (TESTE SIMPLES)", self.current_test_file_name)
+                    return
+
+                # Sem snackbar, sem timer, chamada direta
+                logger.info("TESTE SIMPLES: Chamando file_picker.upload() diretamente...")
+                self.file_picker.upload([
+                    ft.FilePickerUploadFile(name=self.current_test_file_name, upload_url=upload_url)
+                ])
+                logger.info("TESTE SIMPLES: Comando de upload enviado ao Flet.")
+                # Adicionando um update aqui para ver se ajuda
+                self.page.update()
+                logger.info("TESTE SIMPLES: self.page.update() chamado após upload.")
+
+            except Exception as ex:
+                logger.error(f"TESTE SIMPLES: Erro em _on_file_picker_result: {ex}", exc_info=True)
+                self.on_upload_complete(False, f"Erro: {ex}", self.current_test_file_name)
+
+    def _on_file_picker_upload(self, e: ft.FilePickerUploadEvent):
+        logger.critical(f"TESTE SIMPLES: _on_file_picker_upload ACIONADO! File: {e.file_name}, Prog: {e.progress}, Err: {e.error}")
+        
+        # Lógica mínima para chamar on_upload_complete
+        if e.error:
+            self.on_upload_complete(False, e.error, e.file_name)
+            return
+        
+        if e.progress is not None and e.progress < 1.0:
+            # Não fazer nada com on_upload_progress por enquanto
+            return
+
+        # Supondo que e.progress == 1.0 ou é None (sem erro) = completo
+        # No teste simplificado, vamos assumir que o arquivo está lá se não houve erro.
+        server_final_path = os.path.join(self.upload_dir, e.file_name)
+        
+        # VERIFICAÇÃO SIMPLES DE ARQUIVO NO SERVIDOR (com retry curto)
+        file_exists_on_server = False
+        for i in range(3): # Tenta por ~1 segundo
+            if os.path.exists(server_final_path):
+                file_exists_on_server = True
+                logger.info(f"TESTE SIMPLES: Arquivo {e.file_name} encontrado no servidor.")
+                break
+            time.sleep(0.3)
+        
+        if file_exists_on_server:
+            self.on_upload_complete(True, server_final_path, e.file_name)
+        else:
+            logger.error(f"TESTE SIMPLES: Arquivo {e.file_name} NÃO encontrado no servidor após upload.")
+            self.on_upload_complete(False, "Arquivo não encontrado no servidor após upload (TESTE SIMPLES)", e.file_name)
+    '''
 
 ### Diálogos Aninhados: ---------------------------------------------------------------------------------------
 

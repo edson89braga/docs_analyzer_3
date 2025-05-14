@@ -308,15 +308,14 @@ class PDFDocumentAnalyzer:
     Classe principal para processamento e análise de documentos PDF.
     Orquestra a extração de texto, pré-processamento, análise e classificação de páginas.
     """
-    def __init__(self, extractor_strategy: PDFTextExtractorStrategy):
+    def __init__(self, extractor_strategy: PDFTextExtractorStrategy = PdfPlumberExtractor()):
         self.extractor = extractor_strategy
 
     def get_pdf_page_count(self, pdf_path: str) -> int:
         """Obtém o número total de páginas de um arquivo PDF usando a estratégia configurada."""
         return self.extractor.get_total_pages(pdf_path)
 
-    @timing_decorator()
-    def analyze_pdf_document(self, pdf_path: str, page_indices: Optional[List[int]] = None) -> Dict[int, Dict[str, Any]]:
+    def extract_texts_and_preprocess(self, pdf_path: str, page_indices: Optional[List[int]] = None):
         """
         Processa um PDF, extrai texto de cada página e realiza análises.
 
@@ -358,6 +357,17 @@ class PDFDocumentAnalyzer:
             # Texto para análises mais profundas (preprocessamento avançado)
             texts_for_analysis = [preprocess_text_advanced(text) for _, text in extracted_pages_content]
 
+            return actual_indices, texts_for_storage, texts_for_analysis
+
+        except Exception as e:
+            logger.error(f"Erro ao processar PDF {os.path.basename(pdf_path)}: {str(e)}")
+            raise
+
+    def analyze_similarity_and_relevance(self, pdf_path, actual_indices, texts_for_storage, texts_for_analysis) -> Dict[int, Dict[str, Any]]:
+        """
+        Continuação da função extract_texts_and_preprocess.
+        """
+        try:
             # 3. Realizar análises de similaridade e relevância
             # É importante que texts_for_analysis corresponda à ordem dos actual_indices
             # se formos mapear os resultados de volta para os índices originais.
@@ -402,6 +412,14 @@ class PDFDocumentAnalyzer:
         except Exception as e:
             logger.error(f"Erro ao processar PDF {os.path.basename(pdf_path)}: {str(e)}")
             raise
+
+    @timing_decorator()
+    def analyze_pdf_document(self, pdf_path: str, page_indices: Optional[List[int]] = None) -> Dict[int, Dict[str, Any]]:
+        
+        actual_indices, texts_for_storage, texts_for_analysis = self.extract_texts_and_preprocess(pdf_path, page_indices)
+        processed_page_data = self.analyze_similarity_and_relevance(pdf_path, actual_indices, texts_for_storage, texts_for_analysis)
+
+        return processed_page_data
 
     @timing_decorator()
     def filter_and_classify_pages(
@@ -608,14 +626,8 @@ def test_example(pdf_path: str, token_limit_for_summary: int = 100000, page_indi
         print(f"Arquivo PDF de exemplo não encontrado: {pdf_path}")
         return
 
-    # 1. Escolher e instanciar a estratégia de extração
-    # Usando PdfPlumberExtractor
-    extractor = PdfPlumberExtractor()
-    # Para usar PyPdfExtractor (se implementado e pypdf instalado):
-    # extractor = PyPdfExtractor()
-
     # 2. Instanciar o analisador de documentos com a estratégia escolhida
-    analyzer = PDFDocumentAnalyzer(extractor_strategy=extractor)
+    analyzer = PDFDocumentAnalyzer()
 
     # 3. Obter o número total de páginas (opcional, apenas para informação)
     try:

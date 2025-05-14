@@ -1,7 +1,7 @@
 # src/flet_ui/router.py
 import flet as ft
 import re
-from typing import Optional
+from typing import Optional, Dict, Callable, Any
 
 from .theme import COLOR_ERROR, PADDING_L 
 from .layout import create_app_bar, create_navigation_rail, create_navigation_drawer, create_footer, _find_nav_index_for_route, icones_navegacao
@@ -11,6 +11,8 @@ from .views.signup_view import create_signup_view
 from .views.home_view import create_home_view 
 from .views.profile_view import create_profile_view
 from .views.llm_settings_view import create_llm_settings_view
+from .views.analyze_pdf_view import create_analyze_pdf_content, create_chat_pdf_content
+from .views.knowledge_base_view import create_knowledge_base_content
 
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
@@ -18,26 +20,32 @@ logger = LoggerSetup.get_logger(__name__)
 
 # Mapeamento de rotas para funções que criam o *conteúdo* (não a View inteira)
 # route_content_mapping
-_view_creators = {
+_content_creators = {
     "/login": create_login_view,
     "/signup": create_signup_view, 
     "/home": create_home_view,
     "/profile": create_profile_view,
     "/settings/llm": create_llm_settings_view,
+    "/analyze_pdf": create_analyze_pdf_content, 
+    "/chat_pdf": create_chat_pdf_content, 
+    "/knowledge_base": create_knowledge_base_content,    
 }
 
-# Mapeamento para rotas parametrizadas (usando regex simples)
-# A chave é um padrão regex, o valor é a função que recebe page e os grupos capturados
-# route_parameter_mapping 
-_parameterized_view_creators  = {
-    #r"/cadastros/materiais/chapa/(.+)$": lambda p, m: 'create_form_chapa_content'(p, m.group(1)), # Captura o ID da chapa
-    # Adicionar outras rotas parametrizadas aqui (ex: /compras/<id>)
+# Mapeamento para rotas parametrizadas (se houver)
+_parameterized_content_creators: Dict[str, Callable[[ft.Page, Any], Any]] = {
+    # Ex: r"/products/(\d+)": create_product_detail_content,
 }
+
+# Rotas que são consideradas públicas (não exigem autenticação)
+PUBLIC_ROUTES = ["/login", "/signup"]
+# Rotas que não devem exibir a NavigationRail (ex: login, signup)
+ROUTES_WITHOUT_NAV_RAIL = ["/login", "/signup"]
 
 # Função auxiliar para verificar se o usuário está autenticado
 def is_user_authenticated(page: ft.Page) -> bool:
     """Verifica se há um token de ID válido na sessão ou client_storage."""
     token = page.session.get("auth_id_token") or (page.client_storage.get("auth_id_token") if page.client_storage else None)
+    # TODO: Validar expiração do token aqui (já existe em app.py, pode ser centralizado)
     # TODO: Idealmente, verificar a validade/expiração do token aqui.
     # Por agora, apenas a presença é verificada.
     # if token:
@@ -59,7 +67,6 @@ def is_user_authenticated(page: ft.Page) -> bool:
     #         return False
     return bool(token)
 
-
 def app_router(page: ft.Page, route: str):
     """
     Gerencia a navegação e a exibição das views corretas.
@@ -71,8 +78,8 @@ def app_router(page: ft.Page, route: str):
     route_params = None
 
     # Tenta encontrar uma view estática
-    if route in _view_creators:
-        current_view_creator = _view_creators[route]
+    if route in _content_creators:
+        current_view_creator = _content_creators[route]
     # else: # Lógica para rotas parametrizadas de views, se houver
     #     for pattern, creator_func in _parameterized_view_creators.items():
     #         match = re.fullmatch(pattern, route)
@@ -130,7 +137,7 @@ def app_router(page: ft.Page, route: str):
                 ft.View(
                     route=route,
                     controls=[
-                        ft.Icon(ft.icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
+                        ft.Icon(ft.Icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
                         ft.Text(f"Erro ao carregar a página: {route}", size=20, weight=ft.FontWeight.BOLD),
                         ft.Text(f"Detalhes: {e}", selectable=True)
                     ],
@@ -144,7 +151,7 @@ def app_router(page: ft.Page, route: str):
             ft.View(
                 route=route, # Mostra a rota não encontrada
                 controls=[
-                    ft.Icon(ft.icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
+                    ft.Icon(ft.Icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
                     ft.Text(f"Página não encontrada: {route}", size=24, weight=ft.FontWeight.BOLD),
                     ft.ElevatedButton("Voltar ao Início", on_click=lambda _: page.go("/home"))
                 ],
@@ -155,67 +162,99 @@ def app_router(page: ft.Page, route: str):
     
     page.update()
 
-# Método exemplo abaixo; Não utilizado no projeto
-def route_change(page: ft.Page, content_container: ft.Container, navigation_rail: ft.NavigationRail, route: str) -> None:
-    """
-    Chamado quando a rota da página muda.
-    Atualiza o conteúdo principal e garante o índice correto da NavigationRail.
-    """
-    route_content_mapping = None
-    route_parameter_mapping = None
+def route_change_content_only(
+    page: ft.Page,
+    app_bar: ft.AppBar,
+    navigation_rail: ft.NavigationRail,
+    content_container_for_main_layout: ft.Container, # Renomeado para clareza
+    route: str
+):
+    logger.info(f"Router (content_only): Navegando para rota '{route}'")
+    authenticated = is_user_authenticated(page)
 
-    current_nav_index = _find_nav_index_for_route(route)
-    if navigation_rail.selected_index != current_nav_index:
-        navigation_rail.selected_index = current_nav_index
-    
-    # Limpa o container de conteúdo antigo
-    content_container.content = None
-    # Mostra um indicador de carregamento enquanto busca o novo conteúdo
-    content_container.content = ft.Column(
-        [ft.ProgressRing()],
-        alignment=ft.MainAxisAlignment.CENTER,
-        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        expand=True
-    )
-    page.update() # Mostra o loading
-   
-    content_creator = None
-    parameter_match = None
+    # --- Lógica de Autenticação e Redirecionamento ---
+    if not authenticated and route not in PUBLIC_ROUTES:
+        logger.warning(f"Usuário não autenticado tentando acessar '{route}'. Redirecionando para /login.")
+        page.go("/login")
+        return
+    if authenticated and route in PUBLIC_ROUTES:
+        logger.info(f"Usuário já autenticado na página '{route}'. Redirecionando para /home.")
+        page.go("/home")
+        return
 
-    # 1. Tenta encontrar rota estática primeiro
-    content_creator = route_content_mapping.get(route)
+    # --- Seleção do Criador de Conteúdo ---
+    current_content_creator: Optional[Callable] = None
+    route_params: Optional[Any] = None
+    if route in _content_creators:
+        current_content_creator = _content_creators[route]
+    # ... (lógica para rotas parametrizadas, se houver) ...
 
-    # 2. Se não achou estática, tenta as parametrizadas
-    if not content_creator:
-        for pattern, creator_func in route_parameter_mapping.items():
-            match = re.match(pattern, route)
-            if match:
-                content_creator = creator_func
-                parameter_match = match # Guarda o objeto match para passar os grupos
-                break # Para no primeiro match parametrizado
+    # --- Limpeza e Preparação da Página ---
+    page.controls.clear() # Limpa quaisquer controles anteriores da página
+    generated_content = None # Conteúdo a ser adicionado à página ou ao container
 
-    if content_creator:
+    # --- Geração do Conteúdo Principal ---
+    if current_content_creator:
         try:
-            if parameter_match:
-                # Chama a função passando page e o objeto match
-                new_content = content_creator(page, parameter_match)
+            if route_params:
+                generated_content = current_content_creator(page, *route_params)
             else:
-                # Chama a função passando apenas page (rotas estáticas/novo)
-                new_content = content_creator(page)
-            content_container.content = new_content
+                generated_content = current_content_creator(page)
         except Exception as e:
-            # ... (tratamento de erro como antes) ...
-            content_container.content = ft.Column([
-                 ft.Icon(ft.icons.ERROR_OUTLINE, color=COLOR_ERROR, size=30),
-                 ft.Text(f"Erro ao carregar conteúdo para {route}:", weight=ft.FontWeight.BOLD),
-                 ft.Text(f"{e}", selectable=True),
-            ], spacing=PADDING_L, alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-            # Logar o erro também
-            logger.error(f"Erro ao criar conteúdo para rota '{route}'", exc_info=True)
+            logger.error(f"Erro ao criar conteúdo para rota '{route}': {e}", exc_info=True)
+            generated_content = ft.Column([ # Conteúdo de erro
+                ft.Icon(ft.icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
+                ft.Text(f"Erro ao carregar: {route}", size=20), ft.Text(f"{e}", selectable=True),
+            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True)
     else:
-        # ... (conteúdo de rota não encontrada como antes) ...
-         content_container.content = ft.Column([
-             ft.Text(f"Recurso não encontrado: {route}", size=20)
+        logger.warning(f"Nenhum criador de conteúdo encontrado para a rota: {route}")
+        generated_content = ft.Column([ # Conteúdo de rota não encontrada
+            ft.Icon(ft.icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
+            ft.Text(f"Página não encontrada: {route}", size=24),
+            ft.ElevatedButton("Voltar ao Início", on_click=lambda _: page.go("/home"))
         ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True)
 
-    page.update()
+    # --- Configuração do Layout da Página (AppBar, NavRail, Conteúdo) ---
+    if route in ROUTES_WITHOUT_NAV_RAIL: # Ex: /login, /signup - Tela Cheia
+        logger.debug(f"Rota '{route}' é de tela cheia.")
+        page.appbar = None # Sem AppBar
+        # page.navigation_rail = None # NavigationRail não é um atributo direto de page
+        if generated_content:
+            page.add(generated_content) # Adiciona o conteúdo de login/signup diretamente
+        else: # Segurança, caso generated_content seja None por algum erro não capturado
+            page.add(ft.Text("Erro: Conteúdo da página de tela cheia não pôde ser gerado.", color=COLOR_ERROR))
+    else: # Rotas que usam o layout principal com AppBar e NavigationRail
+        logger.debug(f"Rota '{route}' usa layout principal.")
+        page.appbar = app_bar # Define a AppBar global
+        page.appbar.visible = True
+        navigation_rail.visible = True # Garante que a NavRail esteja visível
+
+        # Atualiza o índice da NavigationRail
+        current_nav_index = _find_nav_index_for_route(route)
+        if navigation_rail.selected_index != current_nav_index:
+            navigation_rail.selected_index = current_nav_index
+        
+        # Define o conteúdo no container do layout principal
+        if generated_content:
+            content_container_for_main_layout.content = generated_content
+        else: # Segurança
+            content_container_for_main_layout.content = ft.Text("Erro: Conteúdo principal não pôde ser gerado.", color=COLOR_ERROR)
+        
+        content_container_for_main_layout.padding = PADDING_L # Padding padrão
+
+        # Adiciona o layout principal (Row com NavRail e content_container) à página
+        page.add(
+            ft.Row(
+                [
+                    navigation_rail,
+                    ft.VerticalDivider(width=1),
+                    content_container_for_main_layout
+                ],
+                expand=True,
+            )
+        )
+
+    page.update() # Atualiza a página inteira com a nova estrutura e conteúdo
+
+
+
