@@ -80,8 +80,14 @@ Quanto à FLET_SECRET_KEY, na compilação com pyinstaller:
 
 TODO:
 > CreateUser: Tratar erro "message": "EMAIL_EXISTS"
-> Possibilidade de receber multiplos arquivos PDF;
+
 > Não apagar análise feita (nas alterações de views), até que seja recarregado ou upload ou solicitado nova análise
 > Viabilizar análise conjunta de multiplos arquivos PDFs (particionados)
+
+> panel de métricas: tempo de processamento de extração, de classificação, total; pages ininteligíveis; pages semelhantes; pages semelhantes com relevância; pages semelhantes com similaridade; pages semelhantes com relevância e similaridade.
+> Fields: Prompt, Provedor; Modelo; Modo de consulta; Processador de PDF;
+
+> prompt refinado
+> novo layout formulário para respostas da LLM
 
 '''

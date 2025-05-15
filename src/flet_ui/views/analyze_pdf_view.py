@@ -33,6 +33,7 @@ KEY_SESSION_CURRENT_PDF_NAME = "current_pdf_name_for_analysis"
 KEY_SESSION_PDF_ANALYZER_DATA = "pdf_analyzer_processed_page_data"
 KEY_SESSION_PDF_CLASSIFIED_INDICES = "pdf_classified_indices_data"
 KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "pdf_aggregated_text_info" # Substitui KEY_SESSION_PDF_PROCESSED_TEXT
+KEY_SESSION_PDF_LAST_LLM_RESPONSE = "pdf_last_llm_response"
 
 
 def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
@@ -86,7 +87,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         keys_to_clear = [
             KEY_SESSION_CURRENT_PDF_PATH, KEY_SESSION_CURRENT_PDF_NAME,
             KEY_SESSION_PDF_ANALYZER_DATA, KEY_SESSION_PDF_CLASSIFIED_INDICES,
-            KEY_SESSION_PDF_AGGREGATED_TEXT_INFO
+            KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, KEY_SESSION_PDF_LAST_LLM_RESPONSE
         ]
         for k in keys_to_clear:
             if page.session.contains_key(k):
@@ -178,10 +179,10 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             return
 
         _logger.info(f"Iniciando processamento do PDF: {pdf_name}")
-        show_loading_overlay(page, f"Iniciando Processamento do PDF '{pdf_name}'...")
+        show_loading_overlay(page, f"A processar Leitura, Extração e Classificação do conteúdo \nPDF '{pdf_name}'...")
 
         # Limpa status e resultados anteriores
-        result_textfield.value = ""
+        result_textfield.value = "Análise em progresso..."
         result_textfield.text_style = ft.TextStyle(weight=ft.FontWeight.NORMAL, color=None) # Reset
         result_textfield.border_color = theme.PRIMARY # Reset
 
@@ -240,11 +241,11 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                     count_discarded_similarity, count_discarded_unintelligible = classified_data
                     
                     info_classificacao = ( # Recria a string de informação
-                        f"Págs. Relevantes: {count_selected}, "
-                        f"Ininteligíveis: {count_discarded_unintelligible}, "
-                        f"Similares: {count_discarded_similarity}"
+                        f"\nPágs. Relevantes: {count_selected}, "
+                        f"\nIninteligíveis: {count_discarded_unintelligible}, "
+                        f"\nSimilares: {count_discarded_similarity}"
                     )
-                    page.run_thread(update_text_status, status_llm_text, f"Classificação carregada do cache: {info_classificacao}. Agregando texto...")
+                    page.run_thread(update_text_status, status_llm_text, f"Classificação carregada do cache: {info_classificacao}. \nAgregando texto...")
                 
                 else:
                     # --- Fase 3: Classificação e Agregação ---
@@ -254,11 +255,12 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
 
                     # (Opcional) Mostrar contagens na UI
                     info_classificacao = (
-                        f"Págs. Relevantes: {count_selected}, "
-                        f"Descartadas (Ininteligíveis): {count_discarded_unintelligible}, "
-                        f"Descartadas (Similares): {count_discarded_similarity}"
+                        f"\nPágs. Relevantes: {count_selected}, "
+                        f"\nDescartadas (Ininteligíveis): {count_discarded_unintelligible}, "
+                        f"\nDescartadas (Similares): {count_discarded_similarity}"
                     )
-                    page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}. Agregando texto...")
+                    page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}. \nAgregando texto...")
+                    page.session.set(KEY_SESSION_PDF_CLASSIFIED_INDICES, (relevant_indices, unintelligible_indices, count_selected, count_discarded_similarity, count_discarded_unintelligible))    
 
                 if not relevant_indices:
                     raise ValueError("Nenhuma página relevante encontrada no PDF após filtragem.")
@@ -283,8 +285,11 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                     
                     page.session.set(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, (str_pages_considered, aggregated_text, tokens_antes, tokens_depois))
 
-                page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}, Texto agregado de {str_pages_considered} págs.. Consultando LLM...")
+                page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}, \n\nTexto final agregado das págs {str_pages_considered}.\n Consultando LLM...")
                 
+                hide_loading_overlay(page)
+                show_loading_overlay(page, f"PDF '{pdf_name}'.. \nInteragindo com modelo de LLM...")
+
                 # --- Fase 4: Chamada LLM ---
                 llm_response = analyze_text_with_llm(
                     page=page,
@@ -296,13 +301,18 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                 # Atualiza UI final
                 page.run_thread(hide_loading_overlay, page) # Esconde o overlay global
                 if llm_response:
+                    page.session.set(KEY_SESSION_PDF_LAST_LLM_RESPONSE, llm_response) # SALVA NO CACHE
+                    _logger.info(f"Resposta da LLM para '{pdf_name}' salva na sessão.")
                     page.run_thread(update_text_status, result_textfield, llm_response, {"format": "normal"})
-                    page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}, Texto agregado de {str_pages_considered} págs. \nAnálise de '{pdf_name}' concluída pela LLM.")
+                    page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}. \n\nTexto final agregado das págs {str_pages_considered}. \n\nAnálise de '{pdf_name}' concluída pela LLM.")
                     page.run_thread(show_snackbar, page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
                 else:
                     page.run_thread(update_text_status, result_textfield, "Falha ao obter resposta da LLM.", {"format": "error"})
                     page.run_thread(update_text_status, status_llm_text, "Erro na LLM.")
                     page.run_thread(show_snackbar, page, "Erro na LLM.", theme.COLOR_ERROR)
+                    # Se a resposta da LLM for None (erro), remove qualquer resposta antiga da sessão
+                    if page.session.contains_key(KEY_SESSION_PDF_LAST_LLM_RESPONSE):
+                        page.session.remove(KEY_SESSION_PDF_LAST_LLM_RESPONSE)
 
             except Exception as ex_thread:
                 _logger.error(f"Erro na thread de análise do PDF '{pdf_name}': {ex_thread}", exc_info=True)
@@ -381,11 +391,13 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         expand=True, # Permite que a coluna principal expanda
         #scroll=ft.ScrollMode.ADAPTIVE # Adicionar scroll se necessário
     )
+    
     # Recarregar o estado da UI se um PDF já estiver na sessão
     # (Ex: usuário navegou para outra aba e voltou)
     pdf_name_on_session = page.session.get(KEY_SESSION_CURRENT_PDF_NAME)
+    last_llm_response_on_session = page.session.get(KEY_SESSION_PDF_LAST_LLM_RESPONSE)
     if pdf_name_on_session:
-        selected_file_text.value = f"Arquivo selecionado: {pdf_name_on_session}"
+        selected_file_text.value = f"Arquivo carregado: {pdf_name_on_session}"
         
         processed_page_data = page.session.get(KEY_SESSION_PDF_ANALYZER_DATA)
         if processed_page_data:    
@@ -398,13 +410,19 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             count_discarded_similarity, count_discarded_unintelligible = classified_data
             
             info_classificacao = ( # Recria a string de informação
-                f"Págs. Relevantes: {count_selected}, "
-                f"Ininteligíveis: {count_discarded_unintelligible}, "
-                f"Similares: {count_discarded_similarity}"
+                f"\nPágs. Relevantes: {count_selected}, "
+                f"\nIninteligíveis: {count_discarded_unintelligible}, "
+                f"\nSimilares: {count_discarded_similarity}"
             )
             str_pages_considered, aggregated_text, tokens_antes, tokens_depois = aggregated_info
 
-            status_llm_text.value = f"Classificação: {info_classificacao}, Texto agregado de {str_pages_considered} págs."
+            status_llm_text.value = f"Classificação: {info_classificacao}. \n\nTexto final agregado das págs {str_pages_considered}."
+        
+        if last_llm_response_on_session:
+            result_textfield.value = last_llm_response_on_session
+            _logger.info(f"Última resposta da LLM para '{pdf_name_on_session}' carregada da sessão.")
+        else:
+            selected_file_text.value += "\nClique em 'Analisar PDF' para processar."
 
         analyze_button.disabled = False
         # Poderia também recarregar o resultado se estiver salvo, mas pode ser custoso/complexo
@@ -477,7 +495,7 @@ def create_chat_pdf_content(page: ft.Page) -> ft.Control:
 
     # --- Conteúdo da view Chat com PDF (se PDF estiver carregado) ---
     if current_pdf_name and processed_text_for_chat:
-        title = ft.Row([ft.Text(f"Chat com: {current_pdf_name}", style=ft.TextThemeStyle.HEADLINE_SMALL)], alignment=ft.MainAxisAlignment.START, expand=True, height=50)
+        title = ft.Row([ft.Text(f"Chat com: {current_pdf_name}", style=ft.TextThemeStyle.HEADLINE_SMALL)], alignment=ft.MainAxisAlignment.START, expand=True)
         
         # Placeholder para a interface de chat (será implementada na Fase 2 - Objetivo 2.5)
         chat_placeholder = ft.Column(
@@ -515,10 +533,9 @@ def create_chat_pdf_content(page: ft.Page) -> ft.Control:
                 ft.Divider(),
                 chat_placeholder
             ],
-            alignment=ft.MainAxisAlignment.CENTER,
+            alignment=ft.MainAxisAlignment.START,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            expand=True,
-            spacing=15,
+            expand=True, #spacing=15,
         )
     
     return main_content

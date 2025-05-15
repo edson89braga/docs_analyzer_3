@@ -143,7 +143,7 @@ def main(page: ft.Page):
     # --- Aplicar Temas ---
     page.theme = theme.APP_THEME
     page.dark_theme = theme.APP_DARK_THEME
-    page.theme_mode = ft.ThemeMode.SYSTEM
+    page.theme_mode = ft.ThemeMode.LIGHT # .SYSTEM
 
     if page.data is None:
         page.data = {}

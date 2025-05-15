@@ -300,7 +300,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
         ],
         spacing=20,
         width=700, # Definir uma largura máxima para o conteúdo do perfil
-        scroll=ft.ScrollMode.ADAPTIVE
+        #scroll=ft.ScrollMode.ADAPTIVE
         # alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
         # horizontal_alignment=ft.CrossAxisAlignment.CENTER # Centraliza a coluna na página
     )
@@ -309,7 +309,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
                 [profile_content_column] ,
                 alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER, # Centraliza a coluna na página
-                expand=True, 
+                expand=True, scroll=ft.ScrollMode.ALWAYS
             ),
             padding=ft.padding.symmetric(vertical=30, horizontal=20),
             alignment=ft.alignment.top_center, expand=True, 
