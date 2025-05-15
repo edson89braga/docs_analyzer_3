@@ -581,7 +581,7 @@ class PDFDocumentAnalyzer:
             # Isso acontece independentemente de a página ser totalmente incluída, parcialmente ou não.
             # Estamos interessados no total das páginas que *tentamos* incluir.
             if page_idx not in considered_page_indices_for_output:
-                 total_tokens_before_truncation += page_tokens
+                total_tokens_before_truncation += page_tokens
 
             if limit_reached:
                 continue

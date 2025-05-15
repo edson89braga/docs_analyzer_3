@@ -321,18 +321,22 @@ def handle_logout(page: ft.Page):
                 _logger.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
 
     # Limpa do client_storage se existir
-    auth_keys_to_clear = [
-        "auth_id_token", "auth_user_id", "auth_user_email", 
-        "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at" # Adicionar novas chaves
-    ]
+    # auth_keys_to_clear = [
+    #     "auth_id_token", "auth_user_id", "auth_user_email", 
+    #     "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at" # Adicionar novas chaves
+    # ]
+    auth_keys_to_clear = list(page.session.keys()) # Pega todas as chaves
     if page.client_storage:
         for key in auth_keys_to_clear:
-            if page.client_storage.contains_key(key): page.client_storage.remove(key)
+            if key.startswith("auth_") or key.startswith("decrypted_api_key_"):
+                if page.client_storage.contains_key(key): 
+                    page.client_storage.remove(key)
         _logger.debug("Dados de autenticação removidos do client_storage (se existiam).")
     
     for key in auth_keys_to_clear:
-        if page.session.contains_key(key):
-            page.session.remove(key) 
+        if key.startswith("auth_") or key.startswith("decrypted_api_key_"):
+            if page.session.contains_key(key):
+                page.session.remove(key) 
     _logger.debug("Dados de autenticação removidos da sessão Flet.")
     
     LoggerSetup.set_cloud_user_context(None, None) # Limpa contexto do logger de nuvem
@@ -369,8 +373,8 @@ def show_proxy_settings_dialog(page: ft.Page):
     security_warning_text = ft.Text(
         "Atenção: As configurações de proxy, incluindo o nome de usuário, são salvas localmente neste computador."
         "Se 'Salvar Senha' estiver marcado, a senha também será armazenada de forma segura no Keyring do sistema operacional."
-        "Se este não é seu computador pessoal, desmarque 'Salvar Senha' ou remova as configurações ao sair.",
-        size=11,
+        "Se este NÃO é seu computador pessoal, desmarque 'Salvar Senha' ou remova as configurações ao sair.",
+        size=12,
         italic=True,
         color=ft.colors.with_opacity(0.7, ft.colors.ON_SURFACE),
         # width=430 # Para quebrar linha dentro do diálogo

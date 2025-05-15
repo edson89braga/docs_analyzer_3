@@ -30,7 +30,10 @@ _logger = LoggerSetup.get_logger(__name__)
 
 KEY_SESSION_CURRENT_PDF_PATH = "current_pdf_path_for_analysis"
 KEY_SESSION_CURRENT_PDF_NAME = "current_pdf_name_for_analysis"
-KEY_SESSION_PDF_PROCESSED_TEXT = "current_pdf_processed_text" # Texto agrupado pronto para LLM
+KEY_SESSION_PDF_ANALYZER_DATA = "pdf_analyzer_processed_page_data"
+KEY_SESSION_PDF_CLASSIFIED_INDICES = "pdf_classified_indices_data"
+KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "pdf_aggregated_text_info" # Substitui KEY_SESSION_PDF_PROCESSED_TEXT
+
 
 def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     _logger.info("Criando conteúdo da view de Análise de PDF.")
@@ -78,6 +81,18 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         #on_click=handle_copy_result_click
     )
 
+    def clear_pdf_session_data():
+        """Limpa todos os dados de sessão relacionados ao PDF atual."""
+        keys_to_clear = [
+            KEY_SESSION_CURRENT_PDF_PATH, KEY_SESSION_CURRENT_PDF_NAME,
+            KEY_SESSION_PDF_ANALYZER_DATA, KEY_SESSION_PDF_CLASSIFIED_INDICES,
+            KEY_SESSION_PDF_AGGREGATED_TEXT_INFO
+        ]
+        for k in keys_to_clear:
+            if page.session.contains_key(k):
+                page.session.remove(k)
+        _logger.debug("Dados de sessão do PDF anterior limpos.")
+
     # --- Funções de Callback ---
     def on_file_upload_complete(
         success: bool,
@@ -97,11 +112,9 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             status_text_analysis.value = "PDF carregado. Clique em 'Analisar PDF' para processar."
             result_textfield.value = "" # Limpa resultado anterior
 
-            # Armazena o caminho do arquivo na sessão para uso posterior
+            clear_pdf_session_data() # Limpa dados de um PDF anterior ANTES de setar novos
             page.session.set(KEY_SESSION_CURRENT_PDF_PATH, file_path_or_message)
             page.session.set(KEY_SESSION_CURRENT_PDF_NAME, file_name)
-            if page.session.contains_key(KEY_SESSION_PDF_PROCESSED_TEXT):
-                page.session.remove(KEY_SESSION_PDF_PROCESSED_TEXT) # Limpa texto processado anterior
             
             analyze_button.disabled = False
         elif file_path_or_message == "Seleção cancelada": # Identifica o cancelamento
@@ -112,9 +125,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             _logger.error(f"Falha no upload do arquivo: {file_path_or_message} (Nome: {file_name})")
             show_snackbar(page, f"Erro no upload: {file_path_or_message}", color=theme.COLOR_ERROR, duration=7000)
             selected_file_text.value = "Falha ao carregar o arquivo."
-            for k in [KEY_SESSION_CURRENT_PDF_PATH, KEY_SESSION_CURRENT_PDF_NAME, KEY_SESSION_PDF_PROCESSED_TEXT]:
-                if page.session.contains_key(k):
-                    page.session.remove(k)
+            clear_pdf_session_data() # Limpa se o upload falhou
             analyze_button.disabled = True # Mantém/Desabilita análise
         
         page.update(upload_button, analyze_button, selected_file_text, status_extraction_text, status_text_analysis, result_textfield) # Garante que tudo atualize
@@ -136,9 +147,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             result_textfield
         )
 
-        for k_session in [KEY_SESSION_CURRENT_PDF_PATH, KEY_SESSION_CURRENT_PDF_NAME, KEY_SESSION_PDF_PROCESSED_TEXT]:
-            if page.session.contains_key(k_session):
-                page.session.remove(k_session)
+        clear_pdf_session_data() # Limpa dados de um PDF anterior
         
         managed_file_picker.pick_files(allow_multiple=False, dialog_title_override="Selecione o PDF para análise")
 
@@ -184,74 +193,111 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         page.update()
 
         def analysis_thread_func():
+            nonlocal pdf_path, pdf_name # Importante para threads
             try:
                 pdf_analyzer = PDFDocumentAnalyzer()
 
-                # --- Fase 1: Extração e Pré-processamento ---
-                actual_indices, texts_for_storage, texts_for_analysis = \
-                    pdf_analyzer.extract_texts_and_preprocess(pdf_path)
+                # --- Fase 1A: Verificar Cache para processed_page_data ---
+                processed_page_data = page.session.get(KEY_SESSION_PDF_ANALYZER_DATA)
+                if processed_page_data:
+                    _logger.info(f"Dados processados do PDF '{pdf_name}' encontrados na sessão (cache). Pulando Fase 1 e 2.")
 
-                if not actual_indices:
-                    raise ValueError("Nenhum texto extraível encontrado no PDF.")
+                    # Atualiza UI para indicar que pulou
+                    page.run_thread(update_text_status, status_extraction_text, f"Fase 1 e 2 (Extração/Análise PDF) carregadas do cache.")
+                    page.run_thread(update_text_status, status_text_analysis, f"{len(processed_page_data)} páginas processadas.")
+                    page.run_thread(update_text_status, status_llm_text, "Fase 3: Classificando páginas (usando cache)...")
+                
+                else:
+                    # --- Fase 1: Extração e Pré-processamento ---
+                    actual_indices, texts_for_storage, texts_for_analysis = \
+                        pdf_analyzer.extract_texts_and_preprocess(pdf_path)
 
-                # Atualiza UI após Fase 1 (da thread)
-                page.run_thread(update_text_status, status_extraction_text, f"Fase 1 concluída: {len(actual_indices)} páginas com texto extraído.")
-                page.run_thread(update_text_status, status_text_analysis, "Fase 2: Analisando similaridade e relevância das páginas...")
-                # page.update() será chamado implicitamente por page.run_threadsafe se o controle for parte da UI
+                    if not actual_indices:
+                        raise ValueError("Nenhum texto extraível encontrado no PDF.")
 
-                # --- Fase 2: Análise de Similaridade e Relevância ---
-                processed_page_data = pdf_analyzer.analyze_similarity_and_relevance(
-                    pdf_path, actual_indices, texts_for_storage, texts_for_analysis
-                )
-                if not processed_page_data: # Deve ser raro se a Fase 1 passou
-                     raise ValueError("Falha na análise de similaridade/relevância.")
+                    # Atualiza UI após Fase 1 (da thread)
+                    page.run_thread(update_text_status, status_extraction_text, f"Fase 1 concluída: {len(actual_indices)} páginas com texto extraído.")
+                    page.run_thread(update_text_status, status_text_analysis, "Fase 2: Analisando similaridade e relevância das páginas...")
+                    # page.update() será chamado implicitamente por page.run_threadsafe se o controle for parte da UI
 
-                # Atualiza UI após Fase 2
-                page.run_thread(update_text_status, status_text_analysis, "Fase 2 concluída: Análise das páginas páginas finalizada.")
-                page.run_thread(update_text_status, status_llm_text, "Fase 3: Classificando páginas e preparando para LLM...")
+                    # --- Fase 2: Análise de Similaridade e Relevância ---
+                    processed_page_data = pdf_analyzer.analyze_similarity_and_relevance(
+                        pdf_path, actual_indices, texts_for_storage, texts_for_analysis
+                    )
+                    if not processed_page_data: # Deve ser raro se a Fase 1 passou
+                        raise ValueError("Falha na análise de similaridade/relevância.")
 
-                # --- Fase 3: Classificação e Agregação ---
-                (relevant_indices, unintelligible_indices, count_selected,
-                 count_discarded_similarity, count_discarded_unintelligible) = \
-                    pdf_analyzer.filter_and_classify_pages(processed_page_data)
+                    # Atualiza UI após Fase 2
+                    page.run_thread(update_text_status, status_text_analysis, "Fase 2 concluída: Páginas processadas.")
+                    page.run_thread(update_text_status, status_llm_text, "Fase 3: Classificando páginas e preparando para LLM...")
+                    
+                    page.session.set(KEY_SESSION_PDF_ANALYZER_DATA, processed_page_data) # SALVA NO CACHE
+
+                classified_data = page.session.get(KEY_SESSION_PDF_CLASSIFIED_INDICES)
+                if classified_data:
+                    _logger.info(f"Dados de classificação do PDF '{pdf_name}' encontrados na sessão (cache). Pulando classificação.")
+                    relevant_indices, unintelligible_indices, count_selected, \
+                    count_discarded_similarity, count_discarded_unintelligible = classified_data
+                    
+                    info_classificacao = ( # Recria a string de informação
+                        f"Págs. Relevantes: {count_selected}, "
+                        f"Ininteligíveis: {count_discarded_unintelligible}, "
+                        f"Similares: {count_discarded_similarity}"
+                    )
+                    page.run_thread(update_text_status, status_llm_text, f"Classificação carregada do cache: {info_classificacao}. Agregando texto...")
+                
+                else:
+                    # --- Fase 3: Classificação e Agregação ---
+                    (relevant_indices, unintelligible_indices, count_selected,
+                    count_discarded_similarity, count_discarded_unintelligible) = \
+                        pdf_analyzer.filter_and_classify_pages(processed_page_data)
+
+                    # (Opcional) Mostrar contagens na UI
+                    info_classificacao = (
+                        f"Págs. Relevantes: {count_selected}, "
+                        f"Descartadas (Ininteligíveis): {count_discarded_unintelligible}, "
+                        f"Descartadas (Similares): {count_discarded_similarity}"
+                    )
+                    page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}. Agregando texto...")
 
                 if not relevant_indices:
                     raise ValueError("Nenhuma página relevante encontrada no PDF após filtragem.")
+                
+                # --- Fase 4A: Verificar Cache para aggregated_text_info ---
+                aggregated_info = page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
 
-                # (Opcional) Mostrar contagens na UI
-                info_classificacao = (
-                    f"Págs. Relevantes: {count_selected}, "
-                    f"Descartadas (Ininteligíveis): {count_discarded_unintelligible}, "
-                    f"Descartadas (Similares): {count_discarded_similarity}"
-                )
-                page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}. Agregando texto...")
+                if aggregated_info:
+                    _logger.info(f"Texto agregado do PDF '{pdf_name}' encontrado na sessão (cache). Pulando agregação.")
+                    str_pages_considered, aggregated_text, tokens_antes, tokens_depois = aggregated_info
+                    
+                else:
+                    # TODO: O token_limit pode vir de configurações do usuário/LLM no futuro
+                    token_limit_for_aggregation = 180000 # TODO: Passar como parâmetro
+                    str_pages_considered, aggregated_text, tokens_antes, tokens_depois = \
+                        pdf_analyzer.group_texts_by_relevance_and_token_limit(
+                            processed_page_data=processed_page_data,
+                            relevant_page_indices=relevant_indices,
+                            token_limit=token_limit_for_aggregation
+                        )
+                    _logger.info(f"Texto agregado. Páginas: {str_pages_considered}. Tokens Antes: {tokens_antes}, Depois: {tokens_depois}")
+                    
+                    page.session.set(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, (str_pages_considered, aggregated_text, tokens_antes, tokens_depois))
 
-                # TODO: O token_limit pode vir de configurações do usuário/LLM no futuro
-                token_limit_for_aggregation = 100000 # TODO: Passar como parâmetro
-                str_pages_considered, aggregated_text, tokens_antes, tokens_depois = \
-                    pdf_analyzer.group_texts_by_relevance_and_token_limit(
-                        processed_page_data=processed_page_data,
-                        relevant_page_indices=relevant_indices,
-                        token_limit=token_limit_for_aggregation
-                    )
-                _logger.info(f"Texto agregado. Páginas: {str_pages_considered}. Tokens Antes: {tokens_antes}, Depois: {tokens_depois}")
-                page.session.set(KEY_SESSION_PDF_PROCESSED_TEXT, aggregated_text)
-
-                page.run_thread(update_text_status, status_llm_text, f"Texto agregado de {str_pages_considered} págs. Consultando LLM...")
+                page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}, Texto agregado de {str_pages_considered} págs.. Consultando LLM...")
                 
                 # --- Fase 4: Chamada LLM ---
                 llm_response = analyze_text_with_llm(
                     page=page,
                     processed_text=aggregated_text,
                     provider="openai",
-                    model_name="gpt-3.5-turbo"
+                    model_name="gpt-4.1-nano" # TODO: Obter das configurações selecionadas pelo usuário!
                 )
 
                 # Atualiza UI final
                 page.run_thread(hide_loading_overlay, page) # Esconde o overlay global
                 if llm_response:
                     page.run_thread(update_text_status, result_textfield, llm_response, {"format": "normal"})
-                    page.run_thread(update_text_status, status_llm_text, f"Análise de '{pdf_name}' concluída pela LLM.")
+                    page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}, Texto agregado de {str_pages_considered} págs. \nAnálise de '{pdf_name}' concluída pela LLM.")
                     page.run_thread(show_snackbar, page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
                 else:
                     page.run_thread(update_text_status, result_textfield, "Falha ao obter resposta da LLM.", {"format": "error"})
@@ -340,8 +386,31 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     pdf_name_on_session = page.session.get(KEY_SESSION_CURRENT_PDF_NAME)
     if pdf_name_on_session:
         selected_file_text.value = f"Arquivo selecionado: {pdf_name_on_session}"
+        
+        processed_page_data = page.session.get(KEY_SESSION_PDF_ANALYZER_DATA)
+        if processed_page_data:    
+            status_extraction_text.value = f"Fase 1 e 2 (Extração/Análise PDF) carregadas do cache."
+        
+        classified_data = page.session.get(KEY_SESSION_PDF_CLASSIFIED_INDICES)
+        aggregated_info = page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
+        if classified_data and aggregated_info:
+            relevant_indices, unintelligible_indices, count_selected, \
+            count_discarded_similarity, count_discarded_unintelligible = classified_data
+            
+            info_classificacao = ( # Recria a string de informação
+                f"Págs. Relevantes: {count_selected}, "
+                f"Ininteligíveis: {count_discarded_unintelligible}, "
+                f"Similares: {count_discarded_similarity}"
+            )
+            str_pages_considered, aggregated_text, tokens_antes, tokens_depois = aggregated_info
+
+            status_llm_text.value = f"Classificação: {info_classificacao}, Texto agregado de {str_pages_considered} págs."
+
         analyze_button.disabled = False
         # Poderia também recarregar o resultado se estiver salvo, mas pode ser custoso/complexo
+    else:
+        selected_file_text.value = "Nenhum arquivo PDF selecionado."
+        analyze_button.disabled = True
 
     return content_column
 
@@ -349,13 +418,13 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
 def create_chat_pdf_content(page: ft.Page) -> ft.Control:
     _logger.info("Criando conteúdo da view Chat com PDF.")
 
-    # Verificar se há um PDF carregado na sessão (da view de análise)
-    # Estas chaves devem ser as mesmas usadas em analyze_pdf_view.py
-    KEY_SESSION_CURRENT_PDF_NAME = "current_pdf_name_for_analysis"
-    KEY_SESSION_PDF_PROCESSED_TEXT = "current_pdf_processed_text"
-
     current_pdf_name = page.session.get(KEY_SESSION_CURRENT_PDF_NAME)
-    processed_text_for_chat = page.session.get(KEY_SESSION_PDF_PROCESSED_TEXT)
+    aggregated_info = page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
+    
+    processed_text_for_chat = None
+    if aggregated_info:
+        # A ordem na tupla é (str_pages_considered, aggregated_text, tokens_antes, tokens_depois)
+        processed_text_for_chat = aggregated_info[1] 
 
     show_snackbar(
         page,
@@ -374,7 +443,7 @@ def create_chat_pdf_content(page: ft.Page) -> ft.Control:
                 opacity=0.7
             ),
             ft.Text(
-                "Esta funcionalidade estará disponível em versões futuras.",
+                "Esta funcionalidade estará disponível na próxima versão.",
                 style=ft.TextThemeStyle.BODY_LARGE,
                 text_align=ft.TextAlign.CENTER,
                 opacity=0.7
@@ -408,7 +477,7 @@ def create_chat_pdf_content(page: ft.Page) -> ft.Control:
 
     # --- Conteúdo da view Chat com PDF (se PDF estiver carregado) ---
     if current_pdf_name and processed_text_for_chat:
-        title = ft.Text(f"Chat com: {current_pdf_name}", style=ft.TextThemeStyle.HEADLINE_SMALL)
+        title = ft.Row([ft.Text(f"Chat com: {current_pdf_name}", style=ft.TextThemeStyle.HEADLINE_SMALL)], alignment=ft.MainAxisAlignment.START, expand=True, height=50)
         
         # Placeholder para a interface de chat (será implementada na Fase 2 - Objetivo 2.5)
         chat_placeholder = ft.Column(

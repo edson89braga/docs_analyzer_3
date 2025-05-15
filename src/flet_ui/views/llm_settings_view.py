@@ -25,10 +25,10 @@ SUPPORTED_PROVIDERS = {
     "OpenAI": {
         "display_name": "OpenAI",
         "models": [
-            {"id": "gpt-3.5-turbo", "name": "GPT-3.5 Turbo"},
-            {"id": "gpt-4", "name": "GPT-4"},
-            {"id": "gpt-4-turbo", "name": "GPT-4 Turbo"},
-            {"id": "gpt-4o", "name": "GPT-4o"},
+            {"id": "gpt-4.1-nano", "name": "GPT-4.1 Nano"}, # 0.10 $ p/1M tokens
+            {"id": "gpt-4.1-mini", "name": "GPT-4.1 Mini"}, # 0.40 $
+            {"id": "o4-mini", "name": "OpenAI o4-mini"},    # 1.10 $
+            {"id": "gpt-4.1", "name": "GPT-4.1"},           # 2.00 $
         ],
         "api_url_default": "https://api.openai.com/v1", # Exemplo, pode não ser editável pelo usuário
         "api_key_field_label": "Chave API OpenAI (sk-...)",
@@ -99,6 +99,10 @@ class LLMConfigCard(CardWithHeader):
         )
         #self.load_saved_api_key() # Carrega a chave ao inicializar o card
 
+    def _get_session_key_for_decrypted_api_key(self) -> str:
+        """Gera uma chave única para armazenar a API key descriptografada na sessão."""
+        return f"decrypted_api_key_{self.provider_id}_{self.service_name_firestore}"
+    
     def did_mount(self):
         """
         Chamado pelo Flet após o controle ser adicionado à página e montado.
@@ -150,6 +154,18 @@ class LLMConfigCard(CardWithHeader):
             return
 
         id_token, user_id = context
+        session_key_decrypted = self._get_session_key_for_decrypted_api_key()
+
+        # 1. Tenta carregar da sessão primeiro (cache)
+        cached_decrypted_key = self.page.session.get(session_key_decrypted)
+        if cached_decrypted_key:
+            _logger.info(f"Chave API descriptografada para {self.service_name_firestore} encontrada na sessão (cache).")
+            self.api_key_field.hint_text = "Chave API configurada (em cache). Preencha para alterar."
+            self.api_key_field.value = "" # Não mostramos a chave
+            self.status_text.value = "Chave API está configurada e pronta para uso."
+            self.status_text.color = theme.COLOR_SUCCESS
+            if self.page and self.uid: self.update_card_content()
+            return
         
         # Não usar show_loading_overlay aqui se for chamado de did_mount,
         # pois o overlay pode cobrir a UI que está sendo montada.
@@ -225,9 +241,12 @@ class LLMConfigCard(CardWithHeader):
                 id_token, user_id, self.service_name_firestore, encrypted_key_bytes
             )
             hide_loading_overlay(self.page)
-
+            
+            session_key_decrypted = self._get_session_key_for_decrypted_api_key()
             if success:
                 _logger.info(f"Chave API para {self.service_name_firestore} salva com sucesso.")
+                self.page.session.set(session_key_decrypted, new_api_key_value)
+                _logger.info(f"Chave API descriptografada para {self.service_name_firestore} armazenada na sessão.")
                 show_snackbar(self.page, "Chave API salva com sucesso!", color=theme.COLOR_SUCCESS)
                 self.api_key_field.value = "" # Limpa o campo após salvar
                 self.api_key_field.hint_text = "Chave API configurada. Preencha para alterar."
@@ -241,10 +260,14 @@ class LLMConfigCard(CardWithHeader):
                     show_snackbar(self.page, "Não foi possível salvar a chave API.", color=theme.COLOR_ERROR)
                     self.status_text.value = "Erro ao salvar a chave."
                     self.status_text.color = theme.COLOR_ERROR
+                if self.page.session.contains_key(session_key_decrypted):
+                    self.page.session.remove(session_key_decrypted)
                 _logger.error(f"Falha ao salvar chave API para {self.service_name_firestore} no Firestore.")
         except Exception as ex:
             hide_loading_overlay(self.page)
             _logger.error(f"Erro inesperado ao salvar chave API: {ex}", exc_info=True)
+            if self.page.session.contains_key(session_key_decrypted):
+                self.page.session.remove(session_key_decrypted)
             show_snackbar(self.page, "Ocorreu um erro inesperado ao salvar a chave.", color=theme.COLOR_ERROR)
             self.status_text.value = "Erro inesperado ao salvar."
             self.status_text.color = theme.COLOR_ERROR
@@ -268,6 +291,12 @@ class LLMConfigCard(CardWithHeader):
              return
 
         show_loading_overlay(self.page, f"Limpando chave para {self.provider_config['display_name']}...")
+
+        session_key_decrypted = self._get_session_key_for_decrypted_api_key()
+        if self.page.session.contains_key(session_key_decrypted):
+            self.page.session.remove(session_key_decrypted)
+            _logger.info(f"Chave API descriptografada para {self.service_name_firestore} removida da sessão.")
+
         try:
             success = self.firestore_manager.save_user_api_key_client(
                 id_token, user_id, self.service_name_firestore, empty_encrypted_key 
@@ -291,7 +320,7 @@ class LLMConfigCard(CardWithHeader):
             hide_loading_overlay(self.page)
             _logger.error(f"Erro inesperado ao limpar chave API: {ex}", exc_info=True)
             show_snackbar(self.page, "Ocorreu um erro inesperado ao limpar a chave.", color=theme.COLOR_ERROR)
-        
+    
         self.update_card_content()
 
 

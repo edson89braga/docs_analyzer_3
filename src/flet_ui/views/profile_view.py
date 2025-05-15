@@ -309,11 +309,11 @@ def create_profile_view(page: ft.Page) -> ft.View:
                 [profile_content_column] ,
                 alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER, # Centraliza a coluna na página
-                expand=True, scroll=ft.ScrollMode.ADAPTIVE
+                expand=True, 
             ),
             padding=ft.padding.symmetric(vertical=30, horizontal=20),
             alignment=ft.alignment.top_center, expand=True, 
-            border=ft.border.all(1, ft.colors.with_opacity(0.3, theme.COLOR_INFO))
+            #border=ft.border.all(2, ft.Colors.BLUE_ACCENT_100)
         )
 
     return ft.View(

@@ -1,5 +1,5 @@
 # run.py
-import logging, os
+import logging
 import flet as ft
 # Importa a função 'main' do seu módulo app dentro de flet_ui
 from src.flet_ui.app import main
@@ -57,6 +57,7 @@ from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
+    ...
     # Configura e inicia a aplicação Flet
     ft.app(
         target=main,                 # Função principal a ser executada
@@ -66,8 +67,9 @@ if __name__ == "__main__":
         upload_dir=UPLOAD_TEMP_DIR
     )
 
-# >>> python run.py  ou
-# >>> flet run -w run.py
+    # >>> python run.py  ou
+    # >>> flet run -w run.py
+
 
 '''
 Quanto à FLET_SECRET_KEY, na compilação com pyinstaller:
@@ -77,6 +79,9 @@ Quanto à FLET_SECRET_KEY, na compilação com pyinstaller:
 
 
 TODO:
-1) CreateUser: Tratar erro "message": "EMAIL_EXISTS"
-2) Possibilidade de receber multiplos arquivos PDF;
+> CreateUser: Tratar erro "message": "EMAIL_EXISTS"
+> Possibilidade de receber multiplos arquivos PDF;
+> Não apagar análise feita (nas alterações de views), até que seja recarregado ou upload ou solicitado nova análise
+> Viabilizar análise conjunta de multiplos arquivos PDFs (particionados)
+
 '''

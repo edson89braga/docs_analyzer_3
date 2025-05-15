@@ -53,47 +53,76 @@ def analyze_text_with_llm(
     """
     logger.info(f"Iniciando análise de texto com LLM. Provider: {provider}, Prompt: {prompt_name}")
 
+    decrypted_api_key: Optional[str] = None # Gera a chave de sessão esperada (deve corresponder à lógica em LLMConfigCard)
+    service_name_firestore = f"{provider}_api_key" # Ou uma lógica de mapeamento mais robusta
+    session_key_for_decrypted_api_key = f"decrypted_api_key_{provider}_{service_name_firestore}"
+
+    # 0. Tenta obter da sessão (cache)
+    if page.session.contains_key(session_key_for_decrypted_api_key):
+        decrypted_api_key = page.session.get(session_key_for_decrypted_api_key)
+        if decrypted_api_key: # Verifica se não é None ou string vazia, se isso for um estado válido
+            logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+        else: # Chave na sessão mas é None/vazia, indica que não está configurada
+            logger.warning(f"Chave API para '{provider}' está na sessão como vazia/None. Considerada não configurada.")
+            # A UI deveria ter impedido a chamada ou o usuário precisa configurar.
+            # Ou, se uma chave vazia na sessão significa "sem chave", então o comportamento está correto.
+            # Vamos assumir que se está na sessão e não é uma string "válida", é porque não tem.
+            # Se uma chave pode ser explicitamente None na sessão para indicar "não configurado",
+            # a lógica abaixo de buscar no Firestore não seria acionada desnecessariamente.
+            # Para este caso, se está na sessão e é None/vazia, não prosseguimos.
+            if decrypted_api_key is None: # Se foi explicitamente setada como None
+                logger.error(f"Chave API para '{provider}' explicitamente definida como None na sessão. O usuário precisa configurar.")
+                return None # Ou mostrar mensagem para configurar
+
     # 1. Obter Contexto do Usuário e Chave API
-    user_token = page.session.get("auth_id_token")
-    user_id = page.session.get("auth_user_id")
+    if not decrypted_api_key: # Se ainda não temos uma chave válida
+        logger.info(f"Chave API para '{provider}' não encontrada na sessão ou inválida. Tentando carregar do Firestore.")
 
-    if not user_token or not user_id:
-        logger.error("Contexto do usuário (token/ID) não encontrado na sessão Flet. Abortando análise.")
-        # Idealmente, a UI já deveria ter garantido isso, mas é uma salvaguarda.
-        # A UI deve lidar com a ausência de resposta.
-        return None
+        user_token = page.session.get("auth_id_token")
+        user_id = page.session.get("auth_user_id")
 
-    decrypted_api_key: Optional[str] = None
-    try:
-        firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
-        # O nome do serviço no Firestore precisa corresponder ao que foi salvo na Task 1.3
-        # Assumindo que foi salvo como "openai_api_key" para o provedor "openai"
-        service_name_firestore = f"{provider}_api_key" # Ou uma lógica de mapeamento mais robusta
+        if not user_token or not user_id:
+            logger.error("Contexto do usuário (token/ID) não encontrado na sessão Flet. Abortando análise.")
+            # Idealmente, a UI já deveria ter garantido isso, mas é uma salvaguarda.
+            # A UI deve lidar com a ausência de resposta.
+            return None
+                    
+        try:
+            firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
+            # O nome do serviço no Firestore precisa corresponder ao que foi salvo na Task 1.3
+            # Assumindo que foi salvo como "openai_api_key" para o provedor "openai"
+            service_name_firestore = f"{provider}_api_key" # Ou uma lógica de mapeamento mais robusta
 
-        logger.debug(f"Buscando chave API criptografada para serviço: {service_name_firestore}")
-        encrypted_key_bytes = firestore_client.get_user_api_key_client(
-            user_token, user_id, service_name_firestore
-        )
+            logger.debug(f"Buscando chave API criptografada para serviço: {service_name_firestore}")
+            encrypted_key_bytes = firestore_client.get_user_api_key_client(
+                user_token, user_id, service_name_firestore
+            )
 
-        if not encrypted_key_bytes:
-            logger.error(f"Chave API criptografada para '{service_name_firestore}' não encontrada no Firestore para o usuário {user_id}.")
-            # A UI deve informar o usuário para configurar a chave.
+            if not encrypted_key_bytes:
+                logger.error(f"Chave API criptografada para '{service_name_firestore}' não encontrada no Firestore para o usuário {user_id}.")
+                # A UI deve informar o usuário para configurar a chave.
+                return None
+
+            logger.debug("Descriptografando chave API...")
+            decrypted_api_key = credentials_manager.decrypt(encrypted_key_bytes)
+
+            if not decrypted_api_key:
+                logger.error(f"Falha ao descriptografar a chave API para '{service_name_firestore}' do usuário {user_id}.")
+                # Pode indicar chave de criptografia local ausente ou corrompida.
+                return None
+
+            logger.info(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
+
+        except Exception as e:
+            logger.error(f"Erro ao obter/descriptografar chave API para '{provider}': {e}", exc_info=True)
             return None
 
-        logger.debug("Descriptografando chave API...")
-        decrypted_api_key = credentials_manager.decrypt(encrypted_key_bytes)
-
-        if not decrypted_api_key:
-            logger.error(f"Falha ao descriptografar a chave API para '{service_name_firestore}' do usuário {user_id}.")
-            # Pode indicar chave de criptografia local ausente ou corrompida.
-            return None
-
-        logger.info(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
-
-    except Exception as e:
-        logger.error(f"Erro ao obter/descriptografar chave API para '{provider}': {e}", exc_info=True)
+    # Se após todas as tentativas, decrypted_api_key ainda for None ou vazia
+    if not decrypted_api_key:
+        logger.error(f"Chave API para o provedor '{provider}' não está configurada ou não pôde ser obtida.")
+        # A UI deve informar o usuário para configurar a chave.
         return None
-
+    
     # 2. Obter o Prompt
     prompt_string = prompts.get_prompt(prompt_name)
     if not prompt_string:
@@ -118,7 +147,7 @@ def analyze_text_with_llm(
             llm = ChatOpenAI(
                 model_name=_model_name,
                 temperature=temperature,
-                openai_api_key=decrypted_api_key # Passa a chave aqui
+                openai_api_key=decrypted_api_key # Passa a chave aqui  
             )
             prompt_template = PromptTemplate(input_variables=["input_text"], template=prompt_string)
             chain = LLMChain(llm=llm, prompt=prompt_template)
