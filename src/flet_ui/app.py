@@ -134,8 +134,12 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
         handle_logout(page) # Força logout
         return False
     
-def main(page: ft.Page): 
-    logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando com layout persistente...")
+def main(page: ft.Page, dev_mode: bool = False): 
+    if dev_mode:
+        logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando em MODO DE DESENVOLVIMENTO (UI Test).")
+    else:
+        logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando com layout persistente...")
+
     page.title = APP_TITLE
     page.vertical_alignment = ft.MainAxisAlignment.START
     page.horizontal_alignment = ft.CrossAxisAlignment.START
@@ -194,8 +198,39 @@ def main(page: ft.Page):
     )
     page.on_view_pop = None # Não usamos a pilha de views padrão com este layout
 
-    # Tenta carregar o estado de autenticação persistido
-    load_auth_state_from_storage(page)
+    if dev_mode:
+        logger.info("DEV_MODE: Populando page.session com dados mockados.")
+        page.session.set("auth_id_token", "mock_dev_id_token_abcdef123456")
+        page.session.set("auth_user_id", "mock_dev_user_id_xyz789")
+        page.session.set("auth_refresh_token", "mock_dev_refresh_token_ghi987")
+        page.session.set("auth_id_token_expires_at", time.time() + 7200) # Mock válido por 2 horas
+        page.session.set("auth_user_email", "dev.user@example.com")
+        page.session.set("auth_display_name", "Usuário DEV")
+        
+        # Mock de chave API para OpenAI (exemplo para llm_settings_view e ai_orchestrator)
+        # A chave no nome do serviço Firestore é `provider_config["service_name_firestore"]`
+        # Para OpenAI, é "openai_api_key".
+        # O provider_id é "OpenAI".
+        # A session key é: f"decrypted_api_key_{self.provider_id}_{self.service_name_firestore}"
+        # Para OpenAI: "decrypted_api_key_OpenAI_openai_api_key"
+        page.session.set("decrypted_api_key_OpenAI_openai_api_key", "sk-mockDevKeyOpenAI12345")
+
+        # Em dev_mode, não tentamos configurar o logger de nuvem real aqui,
+        # pois o LoggerSetup em run_dev.py já é simplificado.
+        LoggerSetup.set_cloud_user_context( # Apenas para que o logger não falhe se tentar usar
+            page.session.get("auth_id_token"),
+            page.session.get("auth_user_id")
+        )
+        logger.info("DEV_MODE: Logger context set with mock data (cloud logging likely disabled by run_dev init).")
+
+        initial_route = "/home" # Em dev_mode, assumimos que já está "logado" e vamos para home.
+                                # O router ainda fará a checagem, mas is_user_authenticated retornará True
+                                # devido ao token mockado na sessão.
+    else:
+        load_auth_state_from_storage(page)
+        # A função check_and_refresh_token_if_needed já é chamada dentro de load_auth_state_from_storage
+        # e também é chamada por _execute_sensitive_action em FbManagerAuth.
+        # Não precisa chamar aqui explicitamente fora do dev_mode, a menos que haja um novo requisito.
 
     # --- Limpeza ao Fechar ---
     def on_disconnect(e):

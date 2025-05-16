@@ -203,13 +203,13 @@ def route_change_content_only(
         except Exception as e:
             logger.error(f"Erro ao criar conteúdo para rota '{route}': {e}", exc_info=True)
             generated_content = ft.Column([ # Conteúdo de erro
-                ft.Icon(ft.icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
+                ft.Icon(ft.Icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
                 ft.Text(f"Erro ao carregar: {route}", size=20), ft.Text(f"{e}", selectable=True),
             ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True)
     else:
         logger.warning(f"Nenhum criador de conteúdo encontrado para a rota: {route}")
         generated_content = ft.Column([ # Conteúdo de rota não encontrada
-            ft.Icon(ft.icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
+            ft.Icon(ft.Icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
             ft.Text(f"Página não encontrada: {route}", size=24),
             ft.ElevatedButton("Voltar ao Início", on_click=lambda _: page.go("/home"))
         ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True)

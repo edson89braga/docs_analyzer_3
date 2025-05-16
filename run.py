@@ -69,6 +69,7 @@ if __name__ == "__main__":
 
     # >>> python run.py  ou
     # >>> flet run -w run.py
+    # >>> flet run run.py -d -r --ignore-dirs=logs,__pycache__,.git,.pytest_cache,storage --web -p 8550
 
 
 '''

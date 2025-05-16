@@ -77,8 +77,8 @@ APP_PRIMARY_COLOR = ft.Colors.BLUE_GREY_700
 
 # Cores de Material Design (exemplo)
 PRIMARY = APP_PRIMARY_COLOR # Pode ser referenciada diretamente como PRIMARY
-SURFACE_VARIANT = ft.colors.BLUE_GREY_100
-ON_SURFACE = ft.colors.BLACK87
+SURFACE_VARIANT = ft.Colors.BLUE_GREY_100
+ON_SURFACE = ft.Colors.BLACK87
 
 # Função básica de configuração de tema
 def configure_theme(page: ft.Page):

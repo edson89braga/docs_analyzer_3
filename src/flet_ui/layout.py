@@ -376,7 +376,7 @@ def show_proxy_settings_dialog(page: ft.Page):
         "Se este NÃO é seu computador pessoal, desmarque 'Salvar Senha' ou remova as configurações ao sair.",
         size=12,
         italic=True,
-        color=ft.colors.with_opacity(0.7, ft.colors.ON_SURFACE),
+        color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
         # width=430 # Para quebrar linha dentro do diálogo
     )
 
@@ -509,7 +509,7 @@ def show_proxy_settings_dialog(page: ft.Page):
         proxy_port_field,
         proxy_user_field,
         ft.Row([proxy_password_field, save_password_checkbox], expand=True),
-        ft.Divider(height=10, color=ft.colors.TRANSPARENT), # Espaçador
+        ft.Divider(height=10, color=ft.Colors.TRANSPARENT), # Espaçador
         security_warning_text
         ],
         tight=True, scroll=ft.ScrollMode.ADAPTIVE, width=560

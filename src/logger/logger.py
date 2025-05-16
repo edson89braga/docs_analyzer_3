@@ -176,7 +176,8 @@ class LoggerSetup:
                    firebase_client_storage: Optional['FirebaseClientStorage'] = None,
                    fb_manager_storage_admin: Optional['FbManagerStorage'] = None,
                    modules_to_log: Optional[List[str]] = None,
-                   custom_handler: Optional[logging.Handler] = None) -> None:
+                   custom_handler: Optional[logging.Handler] = None,
+                   dev_mode: bool = False) -> None:
         """
         Inicializa o logger global. Deve ser chamado uma vez no início do programa.
         
@@ -185,8 +186,28 @@ class LoggerSetup:
             modules_to_log: Lista de módulos para filtrar os logs.
             custom_handler: Handler personalizado para ser adicionado ao logger.
         """   
+        if cls._initialized and not dev_mode: 
+            return
+        
+        if cls._initialized and dev_mode and cls._instance and cls._instance.name == "dev_minimal_logger":
+            return
+        
+        if dev_mode:
+            # Configuração mínima para dev_mode
+            logger = logging.getLogger('dev_minimal_logger') # Usa um nome diferente para evitar conflitos
+            logger.handlers.clear() # Limpa handlers anteriores se houver
+            console_handler = cls._create_console_handler(cls.formatter_resumed, logging.DEBUG) # DEBUG para dev
+            logger.addHandler(console_handler)
+            logger.setLevel(logging.DEBUG)
+            logger.propagate = False # Não propaga para o logger root padrão, pois este é o nosso "root" em dev_mode
+            cls._instance = logger
+            cls._initialized = True
+            # current_internal_logger.info("LoggerSetup inicializado em MODO DE DESENVOLVIMENTO (mínimo).")
+            # cls._update_existing_loggers() # Garante que loggers filhos usem este
+            return
+        
         global PATH_LOGS
-
+        
         if firebase_client_storage:
             cls._client_uploader_instance = ClientLogUploader(firebase_client_storage)
             print("LoggerSetup: Instância de ClientLogUploader criada.")

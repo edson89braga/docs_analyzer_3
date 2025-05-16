@@ -7,7 +7,7 @@ import os
 import logging
 
 # Importa a função principal da UI Flet do seu projeto
-from src.flet_ui.app import main as create_flet_page_layout # Renomeado para clareza
+from src.flet_ui.app import main as original_flet_main  # Renomeado para clareza
 from src.settings import APP_NAME, UPLOAD_TEMP_DIR, ASSETS_DIR_ABS # Importa o nome da pasta de uploads
 from src.logger.logger import LoggerSetup # Para inicializar o logger
 
@@ -20,6 +20,7 @@ try:
     # Considere ter uma flag ou um modo "DEV" no seu LoggerSetup.
     LoggerSetup.initialize(
         routine_name=f"{APP_NAME}_DevHotReload",
+        dev_mode=True
         # firebase_client_storage=None, # Opcional para dev
         # fb_manager_storage_admin=None # Opcional para dev
     )
@@ -57,13 +58,18 @@ else:
 
 os.environ["FLET_SECRET_KEY"] = flet_secret
 
+def main_dev_mode_wrapper(page: ft.Page):
+    """Chama a função main original da UI Flet com dev_mode=True."""
+    logger.info("Executando main_dev_mode_wrapper: chamando original_flet_main com dev_mode=True")
+    original_flet_main(page, dev_mode=True)
+
 # --- Configuração da Aplicação FastAPI e Flet ---
 fast_api_app = FastAPI()
 
 # O page_factory é a sua função `main` de `src.flet_ui.app`
 # Ela já faz toda a configuração da página, incluindo layout e roteador.
 flet_asgi_app = flet.fastapi.app(
-    create_flet_page_layout,
+    main_dev_mode_wrapper,
     assets_dir=ASSETS_DIR_ABS,
     upload_dir=UPLOAD_TEMP_DIR
 )
@@ -110,6 +116,8 @@ if __name__ == "__main__":
 # python run_dev.py  ou
 # uvicorn run_dev:app_to_run_dev_mode --reload --port 8550 --reload-dir ./src --reload-dir .
 
+# >>> flet run run_dev.py -d
+
 '''
-Não funcionou como esperado =( pois tenta atualizar o token de usuário a cada alteração, forçando ter que refazer login
+PERSISTE o problema de Lento hot-reload =(
 '''

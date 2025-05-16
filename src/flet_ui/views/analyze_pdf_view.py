@@ -195,9 +195,9 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
 
                 action_buttons = ft.Row(
                     [
-                        ft.IconButton(ft.icons.ARROW_UPWARD, on_click=lambda _, i=idx: move_file_in_list(i, -1), disabled=(idx==0), tooltip="Mover para Cima", icon_size=18, padding=ft.padding.all(3)),
-                        ft.IconButton(ft.icons.ARROW_DOWNWARD, on_click=lambda _, i=idx: move_file_in_list(i, 1), disabled=(idx==len(_files)-1), tooltip="Mover para Baixo", icon_size=18, padding=ft.padding.all(3)),
-                        ft.IconButton(ft.icons.DELETE_OUTLINE, on_click=lambda _, i=idx: remove_file_from_list(i), icon_color=theme.COLOR_ERROR, tooltip="Remover da Lista", icon_size=18, padding=ft.padding.all(3))
+                        ft.IconButton(ft.Icons.ARROW_UPWARD, on_click=lambda _, i=idx: move_file_in_list(i, -1), disabled=(idx==0), tooltip="Mover para Cima", icon_size=18, padding=ft.padding.all(3)),
+                        ft.IconButton(ft.Icons.ARROW_DOWNWARD, on_click=lambda _, i=idx: move_file_in_list(i, 1), disabled=(idx==len(_files)-1), tooltip="Mover para Baixo", icon_size=18, padding=ft.padding.all(3)),
+                        ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda _, i=idx: remove_file_from_list(i), icon_color=theme.COLOR_ERROR, tooltip="Remover da Lista", icon_size=18, padding=ft.padding.all(3))
                     ],
                     spacing=0, # Reduz o espaçamento entre os botões de ação
                     alignment=ft.MainAxisAlignment.END, 
@@ -206,7 +206,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
 
                 list_tile_itself = ft.ListTile(
                     title=file_name_text, # Usa o Text com expand=True
-                    leading=ft.Icon(ft.icons.PICTURE_AS_PDF),
+                    leading=ft.Icon(ft.Icons.PICTURE_AS_PDF),
                     trailing=action_buttons,
                     # dense=True, # Torna o ListTile um pouco mais compacto
                     # visual_density=ft.VisualDensity.COMPACT # Outra opção para compactar
