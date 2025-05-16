@@ -325,7 +325,7 @@ def handle_logout(page: ft.Page):
     #     "auth_id_token", "auth_user_id", "auth_user_email", 
     #     "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at" # Adicionar novas chaves
     # ]
-    auth_keys_to_clear = list(page.session.keys()) # Pega todas as chaves
+    auth_keys_to_clear = page.session.get_keys() # Pega todas as chaves
     if page.client_storage:
         for key in auth_keys_to_clear:
             if key.startswith("auth_") or key.startswith("decrypted_api_key_"):

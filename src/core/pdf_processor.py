@@ -315,6 +315,10 @@ class PDFDocumentAnalyzer:
         """Obtém o número total de páginas de um arquivo PDF usando a estratégia configurada."""
         return self.extractor.get_total_pages(pdf_path)
 
+    def _generate_global_page_key(self, file_index: int, page_index_in_file: int) -> str:
+        """Gera uma chave única global para uma página. Ex: 'file0_page15'"""
+        return f"file{file_index}_page{page_index_in_file}"
+    
     def extract_texts_and_preprocess(self, pdf_path: str, page_indices: Optional[List[int]] = None):
         """
         Processa um PDF, extrai texto de cada página e realiza análises.
@@ -422,10 +426,124 @@ class PDFDocumentAnalyzer:
         return processed_page_data
 
     @timing_decorator()
+    def extract_texts_and_preprocess_batch(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Processa um lote de PDFs ordenados, extrai texto e realiza análises.
+        As chaves do dicionário de resultado são prefixadas com o índice do arquivo.
+        """
+        if not pdf_paths_ordered:
+            logger.warning("Nenhum caminho de PDF fornecido para análise em lote.")
+            return {}
+
+        combined_processed_page_data: Dict[str, Dict[str, Any]] = {}
+        
+        # Para a análise de similaridade combinada
+        all_texts_for_analysis_combined: List[str] = []
+        all_global_page_keys_ordered: List[str] = [] # Mantém a ordem para mapear similaridade
+
+        current_global_page_offset = 0 # Para a matriz de similaridade combinada
+
+        for file_idx, pdf_path in enumerate(pdf_paths_ordered):
+            if not os.path.exists(pdf_path):
+                logger.error(f"PDF não encontrado no lote: {pdf_path} (Índice {file_idx}). Pulando.")
+                continue
+            
+            logger.info(f"Processando arquivo {file_idx + 1}/{len(pdf_paths_ordered)}: {os.path.basename(pdf_path)}")
+
+            # --- 1. Extração e Pré-processamento (por arquivo) ---
+            try:
+                # Não podemos chamar o `analyze_pdf_document` antigo diretamente se ele faz TF-IDF/Similaridade por arquivo.
+                # Precisamos da lógica de `extract_texts_and_preprocess` e `analyze_similarity_and_relevance` adaptada.
+
+                # Replicando lógica de extract_texts_and_preprocess para este arquivo
+                extracted_pages_content_single_file = self.extractor.extract_texts_from_pages(pdf_path, None)
+                if not extracted_pages_content_single_file:
+                    logger.warning(f"Nenhum texto extraído de {os.path.basename(pdf_path)}.")
+                    continue
+
+                actual_indices_in_file = [idx for idx, _ in extracted_pages_content_single_file]
+                texts_for_storage_single_file = {idx: preprocess_text_basic(text) for idx, text in extracted_pages_content_single_file}
+                texts_for_analysis_single_file = [preprocess_text_advanced(text) for _, text in extracted_pages_content_single_file]
+                
+                # Adiciona à lista combinada para análise de similaridade global
+                for i, text_to_analyze in enumerate(texts_for_analysis_single_file):
+                    page_idx_in_file = actual_indices_in_file[i]
+                    global_page_key = self._generate_global_page_key(file_idx, page_idx_in_file)
+                    
+                    all_texts_for_analysis_combined.append(text_to_analyze)
+                    all_global_page_keys_ordered.append(global_page_key)
+
+                    # Armazena dados básicos já, TF-IDF e similaridade virão depois
+                    text_stored = texts_for_storage_single_file[page_idx_in_file]
+                    combined_processed_page_data[global_page_key] = {
+                        'texto': text_stored,
+                        'number_words': count_unique_words(text_stored),
+                        'number_tokens': count_tokens(text_stored, model_name=model_name_for_tokens),
+                        'inteligible': is_text_intelligible(text_stored),
+                        'file_index': file_idx, # Adiciona referência ao arquivo original
+                        'page_index_in_file': page_idx_in_file,
+                        'original_pdf_path': pdf_path, # Para referência
+                        'tf_idf_score': 0.0, # Será preenchido depois
+                        'semelhantes': []    # Será preenchido depois
+                    }
+
+            except Exception as e:
+                logger.error(f"Erro ao processar (extração/pré-proc) arquivo {os.path.basename(pdf_path)}: {e}", exc_info=True)
+                continue # Pula para o próximo arquivo em caso de erro neste
+
+        if not all_texts_for_analysis_combined:
+            logger.warning("Nenhum texto para análise combinado de todos os arquivos.")
+            return {}
+
+        logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(combined_processed_page_data)}")
+        
+        return combined_processed_page_data, all_texts_for_analysis_combined, all_global_page_keys_ordered
+    
+    @timing_decorator()
+    def analyze_similarity_and_relevance_batch(self, combined_processed_page_data: Dict[str, Dict[str, Any]], 
+                                               all_texts_for_analysis_combined: List[str], 
+                                               all_global_page_keys_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Processa um lote de PDFs ordenados, extrai texto e realiza análises.
+        As chaves do dicionário de resultado são prefixadas com o índice do arquivo.
+        """   
+
+        # --- 2. Análise de Similaridade e TF-IDF (COMBINADA para todos os arquivos) ---
+        logger.info(f"Realizando análise de similaridade e TF-IDF para {len(all_texts_for_analysis_combined)} páginas combinadas.")
+        try:
+            similarity_matrix_combined = analyze_text_similarity(all_texts_for_analysis_combined)
+            tf_idf_scores_array_combined = calculate_text_relevance_tfidf(all_texts_for_analysis_combined)
+
+            # Mapear scores TF-IDF e similaridade de volta aos dados das páginas globais
+            for i, global_page_key in enumerate(all_global_page_keys_ordered):
+                if global_page_key in combined_processed_page_data:
+                    combined_processed_page_data[global_page_key]['tf_idf_score'] = round(tf_idf_scores_array_combined[i], 4)
+                    
+                    relative_similar_indices = get_similar_items_indices(i, similarity_matrix_combined)
+                    # Converte índices relativos (da lista combinada) para chaves de página globais
+                    absolute_similar_global_keys = [all_global_page_keys_ordered[sim_idx] for sim_idx in relative_similar_indices]
+                    combined_processed_page_data[global_page_key]['semelhantes'] = absolute_similar_global_keys
+        except Exception as e:
+            logger.error(f"Erro durante análise combinada de similaridade/TF-IDF: {e}", exc_info=True)
+            # Pode optar por continuar sem esses dados ou retornar erro.
+            # Por ora, os scores/semelhantes podem ficar zerados/vazios.
+
+        logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(combined_processed_page_data)}")
+        return combined_processed_page_data
+
+    @timing_decorator()
+    def analyze_pdf_document_batch(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
+        
+        combined_processed_page_data, all_texts_for_analysis_combined, all_global_page_keys_ordered = self.extract_texts_and_preprocess_batch(pdf_paths_ordered)
+        combined_processed_page_data = self.analyze_similarity_and_relevance_batch(combined_processed_page_data, all_texts_for_analysis_combined, all_global_page_keys_ordered)
+
+        return combined_processed_page_data
+    
+    @timing_decorator()
     def filter_and_classify_pages(
         self, 
-        processed_page_data: Dict[int, Dict[str, Any]]
-    ) -> Tuple[List[int], List[int], int, int, int]: # <--- MODIFICADO: Novo tipo de retorno
+        processed_page_data: Dict[str, Dict[str, Any]]
+    ) -> Tuple[List[str], List[str], int, int, int]: # Retorna listas de global_page_key (str)
         """
         Filtra e classifica páginas com base em sua relevância (TF-IDF) e similaridade.
         Remove páginas ininteligíveis e redundantes (mantendo a mais relevante do grupo).
@@ -532,11 +650,61 @@ class PDFDocumentAnalyzer:
             discarded_by_unintelligibility_count
         )
 
+    def format_global_keys_for_display(self, global_keys: List[str]) -> str:
+        if not global_keys: return "Nenhuma"
+        
+        parsed_pages = []
+        for key in global_keys:
+            match = re.match(r"file(\d+)_page(\d+)", key)
+            if match:
+                file_num = int(match.group(1)) + 1 # Para ser 1-based
+                page_num = int(match.group(2)) + 1 # Para ser 1-based
+                parsed_pages.append({'file': file_num, 'page': page_num, 'original_key': key})
+        
+        if not parsed_pages: return ", ".join(global_keys) # Fallback
+
+        # Ordena primeiro por arquivo, depois por página
+        parsed_pages.sort(key=lambda x: (x['file'], x['page']))
+        
+        output_parts = []
+        current_file = -1
+        current_interval_start = -1
+        
+        for p_info in parsed_pages:
+            if p_info['file'] != current_file: # Mudou de arquivo
+                if current_interval_start != -1: # Fecha intervalo anterior
+                    if current_page_in_interval == current_interval_start:
+                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
+                    else:
+                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
+                current_file = p_info['file']
+                current_interval_start = p_info['page']
+                current_page_in_interval = p_info['page']
+            elif p_info['page'] == current_page_in_interval + 1: # Continua intervalo
+                current_page_in_interval = p_info['page']
+            else: # Quebrou intervalo no mesmo arquivo
+                if current_interval_start != -1:
+                    if current_page_in_interval == current_interval_start:
+                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
+                    else:
+                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
+                current_interval_start = p_info['page']
+                current_page_in_interval = p_info['page']
+        
+        # Fecha o último intervalo
+        if current_interval_start != -1:
+            if current_page_in_interval == current_interval_start:
+                output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
+            else:
+                output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
+                
+        return ", ".join(output_parts) if output_parts else "Nenhuma"
+
     @timing_decorator()
     def group_texts_by_relevance_and_token_limit(
         self,
-        processed_page_data: Dict[int, Dict[str, Any]],
-        relevant_page_indices: List[int], # Já ordenados por relevância
+        processed_page_data: Dict[str, Dict[str, Any]], # Chave é global_page_key (str)
+        relevant_page_indices: List[str], # Lista de global_page_key (str)
         token_limit: int,
     ) -> Tuple[str, str, int, int]: # <--- MODIFICADO: Adicionado retorno para contagens de tokens
         """
@@ -570,7 +738,8 @@ class PDFDocumentAnalyzer:
         limit_reached = False
         for page_idx in relevant_page_indices:
             if page_idx not in processed_page_data:
-                logger.warning(f"Índice de página relevante {page_idx+1} não encontrado nos dados processados. Ignorando.")
+                #logger.warning(f"Índice de página relevante {page_idx+1} não encontrado nos dados processados. Ignorando.")
+                logger.warning(f"Chave de página relevante '{page_idx}' não encontrada...")
                 continue
 
             page_text = processed_page_data[page_idx]['texto']
@@ -601,19 +770,30 @@ class PDFDocumentAnalyzer:
                     current_total_tokens_final += count_tokens(partial_text, model_name=model_name_for_tokens)
                     if page_idx not in considered_page_indices_for_output:
                         considered_page_indices_for_output.append(page_idx)
-                    logger.info(f'Texto da página {page_idx + 1} reduzido para caber no limite de tokens.')
+                    logger.info(f'Texto da página {page_idx} reduzido para caber no limite de tokens.')
                     limit_reached = True
 
-        sorted_indices_for_concatenation = sorted(texts_for_concatenation.keys())
+        #sorted_indices_for_concatenation = sorted(texts_for_concatenation.keys())
+        accumulated_text_parts = []
+        final_considered_indices_for_output = []
         
-        accumulated_text_parts = [texts_for_concatenation[idx] for idx in sorted_indices_for_concatenation]
+        # accumulated_text_parts = [texts_for_concatenation[idx] for idx in sorted_indices_for_concatenation]
+        # Itera na ordem de relevância (que já considera os melhores de cada arquivo)
+        for page_idx_global_key in relevant_page_indices: 
+            if page_idx_global_key in texts_for_concatenation: # Se foi selecionado para inclusão (total ou parcial)
+                accumulated_text_parts.append(texts_for_concatenation[page_idx_global_key])
+                final_considered_indices_for_output.append(page_idx_global_key) # Adiciona na ordem de relevância/processamento
+
         accumulated_text = " ".join(accumulated_text_parts).strip()
         
         # RECALCULAR tokens finais do texto agregado para máxima precisão,
         # pois o join(" ") pode adicionar/remover tokens.
         final_aggregated_tokens = count_tokens(accumulated_text, model_name=model_name_for_tokens)
 
-        str_pages_considered = get_string_intervalos(sorted(considered_page_indices_for_output), incrementa_1=True)
+        #str_pages_considered = get_string_intervalos(sorted(considered_page_indices_for_output), incrementa_1=True)
+        
+        #str_pages_considered = ", ".join(final_considered_indices_for_output)
+        str_pages_considered = self.format_global_keys_for_display(final_considered_indices_for_output)
 
         # MODIFICADO: Retornar as duas contagens de tokens
         return str_pages_considered, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens

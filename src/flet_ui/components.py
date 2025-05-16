@@ -53,6 +53,7 @@ def show_snackbar(page: ft.Page, message: str, color: str = theme.COLOR_INFO, du
     snackbar.bgcolor = color
     snackbar.duration = duration
     snackbar.open = True
+    #threading.Timer(0.1, page.update).start()
     page.update() # Atualiza para efetivamente mostrar
 
 ### Dialog in Overlay: ---------------------------------------------------------------------------------------
@@ -344,7 +345,7 @@ _loading_text_instance: Optional[ft.Text] = None
 def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."):
     global _loading_overlay_instance, _loading_text_instance
     if _loading_overlay_instance is None:
-        _loading_text_instance = ft.Text(message, size=16, weight=ft.FontWeight.BOLD)
+        _loading_text_instance = ft.Text(message, size=16, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
         _loading_overlay_instance = ft.Container(
             content=ft.Column(
                 [
@@ -365,6 +366,7 @@ def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."
     if _loading_overlay_instance not in page.overlay:
         page.overlay.append(_loading_overlay_instance)
     _loading_overlay_instance.visible = True
+    #threading.Timer(0.1, page.update).start()
     page.update()
 
 def hide_loading_overlay(page: ft.Page):
@@ -377,6 +379,7 @@ def hide_loading_overlay(page: ft.Page):
         #     page.overlay.remove(_loading_overlay_instance)
         # _loading_overlay_instance = None 
         # _loading_text_instance = None
+        #threading.Timer(0.1, page.update).start()
         page.update()
 
 ### ValidatedTextField: ---------------------------------------------------------------------------------------
@@ -507,8 +510,9 @@ class ValidatedTextField(ft.Column):
 
 ### ManagedFilePicker: ---------------------------------------------------------------------------------------
 
-FileUploadCompleteCallback = Callable[[bool, str, Optional[str]], None]
-FileUploadProgressCallback = Callable[[str, float], None] # file_name, progress (0.0-1.0)
+FileUploadCompleteCallback = Callable[[bool, str, Optional[str]], None] # Para cada arquivo
+FileBatchUploadCompleteCallback = Callable[[List[Dict[str, Any]]], None] # NOVO: Para o lote
+FileUploadProgressCallback = Callable[[str, float], None]
 
 class ManagedFilePicker: 
     """
@@ -524,8 +528,9 @@ class ManagedFilePicker:
         self,
         page: ft.Page,
         file_picker_instance: ft.FilePicker,
-        on_upload_complete: FileUploadCompleteCallback,
+        on_individual_file_complete: FileUploadCompleteCallback, # Renomeado para clareza
         upload_dir: str,
+        on_batch_complete: Optional[FileBatchUploadCompleteCallback] = None, # NOVO CALLBACK
         allowed_extensions: Optional[List[str]] = None,
         pick_dialog_title: str = "Selecionar arquivo",
         on_upload_progress: Optional[FileUploadProgressCallback] = None,
@@ -533,17 +538,23 @@ class ManagedFilePicker:
     ):
         self.page = page
         self.file_picker = file_picker_instance
-        self.on_upload_complete = on_upload_complete
+        self.on_individual_file_complete  = on_individual_file_complete 
+        self.on_batch_complete = on_batch_complete
         self.upload_dir = os.path.abspath(upload_dir)
         self.allowed_extensions = [ext.lower().lstrip('.') for ext in allowed_extensions] if allowed_extensions else None
         self.pick_dialog_title = pick_dialog_title
-        self.on_upload_progress = on_upload_progress # Será usado em _on_file_picker_upload
+        self.on_upload_progress = on_upload_progress
         self.upload_url_expiry_seconds = upload_url_expiry_seconds
 
-        self.file_picker.on_result = self._on_file_picker_result
-        self.file_picker.on_upload = self._on_file_picker_upload
+        # Atribui os métodos internos aos eventos do FilePicker
+        self.file_picker.on_result = self._handle_picker_result
+        self.file_picker.on_upload = self._handle_picker_upload
 
-        self._is_uploading_map: Dict[str, bool] = {} # Rastreia uploads por nome
+        self._is_uploading_map: Dict[str, bool] = {}
+        self.files_to_process_queue: List[ft.FilePickerFile] = []
+
+        self._current_batch_results: List[Dict[str, Any]] = [] # Para acumular resultados do lote atual
+        self._files_expected_in_current_batch = 0
 
         if not os.path.exists(self.upload_dir):
             try:
@@ -551,7 +562,6 @@ class ManagedFilePicker:
                 logger.info(f"Diretório de upload criado: {self.upload_dir}")
             except OSError as e:
                 logger.error(f"Falha ao criar diretório de upload {self.upload_dir}: {e}")
-                # Considerar chamar self.on_upload_complete com erro aqui se o dir é essencial
 
     def pick_files(
         self,
@@ -559,128 +569,186 @@ class ManagedFilePicker:
         allowed_extensions_override: Optional[List[str]] = None,
         dialog_title_override: Optional[str] = None
     ):
+        """Abre o diálogo do FilePicker para o usuário selecionar arquivos."""
         current_allowed_extensions_normalized = [
             ext.lower().lstrip('.') for ext in allowed_extensions_override
         ] if allowed_extensions_override else self.allowed_extensions
         
         current_dialog_title = dialog_title_override or self.pick_dialog_title
 
-        logger.debug(f"Abrindo FilePicker: title='{current_dialog_title}', multiple={allow_multiple}, ext={current_allowed_extensions_normalized}")
+        logger.info(f"[DEBUG] Abrindo FilePicker: title='{current_dialog_title}', multiple={allow_multiple}, ext={current_allowed_extensions_normalized}")
         self.file_picker.pick_files(
             dialog_title=current_dialog_title,
             allow_multiple=allow_multiple,
-            allowed_extensions=current_allowed_extensions_normalized # Passa normalizado
+            allowed_extensions=current_allowed_extensions_normalized
         )
 
-    def _on_file_picker_result(self, e: ft.FilePickerResultEvent):
+    def _handle_picker_result(self, e: ft.FilePickerResultEvent):
+        """Callback para o evento on_result do FilePicker."""
         if not e.files:
             logger.warning("Seleção de arquivo cancelada pelo usuário.")
-            # Notifica a view para que ela possa reabilitar botões, etc.
-            self.on_upload_complete(False, "Seleção cancelada", None)
+            self.on_individual_file_complete (False, "Seleção cancelada", None)
+            if self.on_batch_complete: # Se não há arquivos, o "lote" (vazio) está completo
+                self.on_batch_complete([])
             return
 
-        selected_file = e.files[0]
-        file_name = selected_file.name
-        original_file_path_on_client = selected_file.path
+        logger.info(f"--- ManagedFilePicker: FilePicker retornou {len(e.files)} arquivo(s) ---")
+        for i, f_obj in enumerate(e.files):
+            logger.info(f"[DEBUG]   Arquivo {i}: Nome='{f_obj.name}', Tamanho={f_obj.size}, PathCliente='{f_obj.path}'")
 
-        logger.info(f"Arquivo selecionado: {file_name}, Path cliente: {original_file_path_on_client}")
+        # Inicia um novo lote
+        self.files_to_process_queue = list(e.files)
+        self._current_batch_results = []
+        self._files_expected_in_current_batch = len(e.files)
 
-        if self._is_uploading_map.get(file_name):
-            logger.warning(f"Upload de '{file_name}' já está em progresso.")
-            # Não chamar show_snackbar aqui, a view pode decidir o feedback
-            # self.on_upload_complete(False, f"Upload de '{file_name}' já em andamento.", file_name) # Opcional
+        # Adiciona os novos arquivos à fila
+        # Se a fila já tiver itens de uma seleção anterior não processada, esta lógica adicionará.
+        # Normalmente, a fila deve estar vazia se todos os uploads anteriores foram concluídos.
+        is_processing_active = bool(self.files_to_process_queue) # Verifica se já há algo na fila
+
+        for f_obj in e.files:
+            self.files_to_process_queue.append(f_obj)
+        
+        logger.info(f"{len(e.files)} arquivo(s) adicionado(s) à fila. Total agora: {len(self.files_to_process_queue)}")
+
+        if self.files_to_process_queue: # and not is_processing_active
+            # Se não havia processamento ativo e agora há arquivos na fila,
+            # inicia o processamento do primeiro arquivo imediatamente.
+            logger.info("[DEBUG] Iniciando processamento da fila (primeiro arquivo sem delay).")
+            self._process_one_file_from_queue(is_first_call_in_batch=True)
+        #elif is_processing_active: logger.info("[DEBUG] Processamento da fila já estava ativo. Novos arquivos foram enfileirados.")
+        elif self.on_batch_complete: # Se por algum motivo a fila ficou vazia
+             self.on_batch_complete([])
+
+    def _record_file_result_and_check_batch_completion(self, success: bool, message: str, file_name: Optional[str]):
+        """Chamado internamente após cada tentativa de processamento de arquivo."""
+        if file_name: # Só registra se tiver nome
+            self._current_batch_results.append({
+                "name": file_name,
+                "success": success,
+                "path_or_message": message
+            })
+        
+        # Chama o callback individual
+        self.on_individual_file_complete(success, message, file_name)
+
+        # Verifica se o lote terminou
+        if len(self._current_batch_results) >= self._files_expected_in_current_batch:
+            logger.info(f"Lote de {self._files_expected_in_current_batch} arquivos processado.")
+            if self.on_batch_complete:
+                self.on_batch_complete(list(self._current_batch_results)) # Passa uma cópia
+            self._current_batch_results = [] # Reseta para o próximo lote
+            self._files_expected_in_current_batch = 0
+            
+    def _process_one_file_from_queue(self, is_first_call_in_batch: bool = False):
+        """
+        Processa um único arquivo da fila.
+        Aplica delay para arquivos subsequentes em um lote.
+        """
+        if not self.files_to_process_queue:
+            logger.info("[DEBUG] Fila de processamento de arquivos está vazia. Nada a fazer.")
             return
 
-        # Validação de extensão
-        if self.allowed_extensions:
-            _root, ext_with_dot = os.path.splitext(file_name)
-            normalized_ext = ext_with_dot.lower().lstrip('.')
-            if normalized_ext not in self.allowed_extensions: # self.allowed_extensions já está normalizado
-                original_allowed_ext_display = [f".{ae}" for ae in self.allowed_extensions] # Para display
-                err_msg = f"Tipo de arquivo inválido: '{ext_with_dot}'. Permitidos: {', '.join(original_allowed_ext_display)}"
-                logger.error(err_msg)
-                self.on_upload_complete(False, err_msg, file_name)
+        def _execute_logic():
+            # Esta função interna contém a lógica de processamento de UM arquivo
+            if not self.files_to_process_queue: # Verificação dupla
+                logger.info("[DEBUG] Fila esvaziou antes da execução agendada/imediata.")
                 return
 
-        if original_file_path_on_client: # MODO DESKTOP
-            logger.info(f"Modo Desktop. Arquivo: {original_file_path_on_client}")
-            if self.on_upload_progress: self.on_upload_progress(file_name, 1.0)
-            self.on_upload_complete(True, original_file_path_on_client, file_name)
-        else: # MODO WEB
-            logger.info(f"Modo Web. Preparando upload para: {file_name}")
-            self._is_uploading_map[file_name] = True # Marca como em andamento
+            selected_file = self.files_to_process_queue.pop(0)
+            file_name = selected_file.name
+            original_file_path_on_client = selected_file.path
 
-            # Limpar arquivo anterior no servidor (opcional, mas boa prática)
-            server_target_path = os.path.join(self.upload_dir, file_name)
-            if os.path.exists(server_target_path):
+            logger.info(f"Processando da fila: '{file_name}', Path cliente: '{original_file_path_on_client}'")
+
+            if self._is_uploading_map.get(file_name):
+                logger.warning(f"Upload de '{file_name}' já está em progresso (skip).")
+                #self.on_individual_file_complete (False, f"Tentativa de upload duplicado para '{file_name}'", file_name)
+                self._record_file_result_and_check_batch_completion(False, f"Tentativa de upload duplicado para '{file_name}'", file_name)
+                self._process_one_file_from_queue() # Agenda o próximo (com delay implícito)
+                return
+
+            if self.allowed_extensions:
+                _root, ext_with_dot = os.path.splitext(file_name)
+                normalized_ext = ext_with_dot.lower().lstrip('.')
+                if normalized_ext not in self.allowed_extensions:
+                    display_allowed = [f".{ae}" for ae in self.allowed_extensions] if self.allowed_extensions else []
+                    err_msg = f"Tipo de arquivo inválido: '{ext_with_dot}'. Permitidos: {', '.join(display_allowed)}"
+                    logger.error(err_msg)
+                    #self.on_individual_file_complete (False, err_msg, file_name)
+                    self._record_file_result_and_check_batch_completion(False, err_msg, file_name)
+                    self._process_one_file_from_queue() # Agenda o próximo (com delay implícito)
+                    return
+
+            if original_file_path_on_client: # MODO DESKTOP
+                logger.info(f"Modo Desktop para '{file_name}'.")
+                if self.on_upload_progress: self.on_upload_progress(file_name, 1.0)
+                #self.on_individual_file_complete (True, original_file_path_on_client, file_name)
+                self._record_file_result_and_check_batch_completion(True, original_file_path_on_client, file_name)
+                self._process_one_file_from_queue() # Agenda o próximo (com delay implícito)
+            else: # MODO WEB
+                logger.info(f"Modo Web. Preparando upload para: {file_name}")
+                self._is_uploading_map[file_name] = True
+
+                server_target_path = os.path.join(self.upload_dir, file_name)
+                if os.path.exists(server_target_path):
+                    try: os.remove(server_target_path)
+                    except OSError as e_rem: logger.warning(f"Não foi possível remover arquivo anterior '{server_target_path}': {e_rem}")
+
                 try:
-                    os.remove(server_target_path)
-                    logger.debug(f"Arquivo anterior removido: {server_target_path}")
-                except OSError as remove_err:
-                    logger.warning(f"Não foi possível remover arquivo anterior '{server_target_path}': {remove_err}")
-                    # Não necessariamente um erro fatal para o novo upload
+                    upload_url = self.page.get_upload_url(file_name, self.upload_url_expiry_seconds)
+                    if not upload_url: raise ValueError("URL de upload vazia.")
+                    
+                    if self.on_upload_progress: self.on_upload_progress(file_name, 0.0)
+                    
+                    self.file_picker.upload([ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)])
+                    self.page.update()
+                    logger.info(f"page.update() chamado após file_picker.upload() para '{file_name}'.")
+                except Exception as ex:
+                    logger.error(f"Erro ao preparar/iniciar upload para '{file_name}': {ex}", exc_info=True)
+                    self._is_uploading_map.pop(file_name, None)
+                    #self.on_individual_file_complete (False, f"Erro no preparo do upload: {ex}", file_name)
+                    self._record_file_result_and_check_batch_completion(False, f"Erro no preparo: {ex}", file_name)
+                    self._process_one_file_from_queue() # Agenda o próximo (com delay implícito)
+        
+        # Lógica de Delay
+        if is_first_call_in_batch:
+            logger.info("[DEBUG]Processando primeiro arquivo do lote/trigger imediatamente.")
+            _execute_logic()
+        else:
+            delay = 0.1 # Segundos
+            logger.info(f"[DEBUG] Agendando processamento do próximo arquivo ('{self.files_to_process_queue[0].name if self.files_to_process_queue else 'fila vazia'}') com delay de {delay}s.")
+            threading.Timer(delay, _execute_logic).start()
 
-            try:
-                upload_url = self.page.get_upload_url(file_name, self.upload_url_expiry_seconds)
-                if not upload_url:
-                    raise ValueError("Flet retornou uma URL de upload vazia.")
-                logger.debug(f"URL de upload para '{file_name}' obtida.")
+    def _handle_picker_upload(self, e: ft.FilePickerUploadEvent):
+        """Callback para o evento on_upload do FilePicker."""
+        logger.info(f"Evento _handle_picker_upload: File='{e.file_name}', Prog={e.progress}, Err='{e.error}', Tracked={self._is_uploading_map.get(e.file_name)}")
 
-                # Notificar progresso 0% ANTES de iniciar o upload
-                if self.on_upload_progress:
-                    self.on_upload_progress(file_name, 0.0)
-                
-                # A view (analyze_pdf_view) já chamou page.update() ao desabilitar botões
-                # e mostrar "Selecionando arquivo...".
-                # Ela também pode mostrar "Enviando..." através do on_upload_progress(0.0)
-                # ou do on_upload_complete chamado com um status inicial.
-                # VAMOS REMOVER O SNACKBAR DAQUI e deixar a view controlar o feedback inicial de upload.
-
-                logger.info(f"Chamando self.file_picker.upload() para {file_name}")
-                self.file_picker.upload([
-                    ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)
-                ])
-                logger.info(f"Comando de upload para '{file_name}' enviado ao Flet.")
-                
-                # Adicionar um page.update() AQUI, após o comando de upload.
-                # Isso foi o que funcionou na versão simplificada.
-                self.page.update()
-                logger.info(f"page.update() chamado após file_picker.upload() para {file_name}.")
-
-            except Exception as ex:
-                logger.error(f"Erro ao preparar ou iniciar upload para '{file_name}': {ex}", exc_info=True)
-                self._is_uploading_map.pop(file_name, None) # Limpa flag
-                self.on_upload_complete(False, f"Erro no preparo do upload: {ex}", file_name)
-
-    def _on_file_picker_upload(self, e: ft.FilePickerUploadEvent):
-        logger.info(f"Evento _on_file_picker_upload: File={e.file_name}, Prog={e.progress}, Err={e.error}, Tracked={self._is_uploading_map.get(e.file_name)}")
-
-        # É crucial que _is_uploading_map seja verificado, mas só se remove no final ou erro.
-        # Se não estiver rastreado, pode ser um evento tardio de um upload cancelado ou problemático.
-        if not self._is_uploading_map.get(e.file_name) and not e.error : # Se não há erro, mas não está rastreado, é estranho
-            logger.warning(f"Evento de upload para '{e.file_name}' recebido, mas não estava sendo ativamente rastreado (ou já finalizado). Prog: {e.progress}")
-            # Poderia ser um evento de progresso após o _is_uploading_map ter sido limpo por uma conclusão/erro anterior.
-            # Se e.error existisse, o bloco abaixo trataria.
-            # Para evitar problemas, podemos simplesmente retornar se não estivermos esperando por ele.
-            # return
-
+        # Mesmo se não estiver no _is_uploading_map, se houver erro, precisamos reportar e tentar o próximo.
         if e.error:
             logger.error(f"Erro no evento de upload para '{e.file_name}': {e.error}")
-            self._is_uploading_map.pop(e.file_name, None)
-            self.on_upload_complete(False, f"Erro no upload: {e.error}", e.file_name)
+            self._is_uploading_map.pop(e.file_name, None) # Limpa se estava lá
+            #self.on_individual_file_complete (False, f"Erro no upload: {e.error}", e.file_name)
+            self._record_file_result_and_check_batch_completion(False, f"Erro no upload: {e.error}", e.file_name)
+            self._process_one_file_from_queue() # Agenda o próximo (com delay implícito)
+            return
+
+        # Se não estiver rastreando e não há erro, pode ser um evento tardio de um upload já tratado/cancelado.
+        if not self._is_uploading_map.get(e.file_name):
+            logger.warning(f"Evento de upload para '{e.file_name}' (Prog: {e.progress}) recebido, mas não estava sendo ativamente rastreado. Ignorando.")
             return
 
         if e.progress is not None and e.progress < 1.0:
-            logger.debug(f"Progresso do upload para '{e.file_name}': {e.progress*100:.1f}%")
+            logger.info(f"[DEBUG] Progresso do upload para '{e.file_name}': {e.progress*100:.1f}%")
             if self.on_upload_progress:
                 self.on_upload_progress(e.file_name, e.progress)
-            return # Aguarda próximo evento de progresso ou conclusão
+            return # Aguarda próximo evento
 
-        # Se chegou aqui, e.progress é 1.0 ou None (mas sem erro), indicando conclusão do upload para o Flet.
+        # Upload para Flet concluído (progress é 1.0 ou None, sem erro)
         logger.info(f"Upload para Flet de '{e.file_name}' parece concluído. Verificando no servidor...")
         server_final_path = os.path.join(self.upload_dir, e.file_name)
         file_found_on_server = False
-        max_retries = 5 # Reduzido um pouco, mas ainda importante
+        max_retries = 5
         retry_delay_seconds = 0.3
 
         for attempt in range(max_retries):
@@ -689,19 +757,28 @@ class ManagedFilePicker:
                 logger.info(f"Arquivo '{e.file_name}' confirmado no servidor (tentativa {attempt + 1}). Path: {server_final_path}")
                 break
             logger.warning(f"Arquivo '{e.file_name}' ainda não no servidor (tentativa {attempt + 1}). Aguardando...")
-            time.sleep(retry_delay_seconds) # Sleep na thread do callback (ok, não bloqueia UI)
+            time.sleep(retry_delay_seconds)
 
-        # Limpa o rastreamento ANTES de chamar on_upload_complete
-        self._is_uploading_map.pop(e.file_name, None)
-        logger.debug(f"'{e.file_name}' removido do rastreamento _is_uploading_map.")
+        self._is_uploading_map.pop(e.file_name, None) # Limpa rastreamento
+        logger.info(f"[DEBUG] '{e.file_name}' removido do rastreamento _is_uploading_map.")
 
         if file_found_on_server:
-            self.on_upload_complete(True, server_final_path, e.file_name)
+            #self.on_individual_file_complete (True, server_final_path, e.file_name)
+            self._record_file_result_and_check_batch_completion(True, server_final_path, e.file_name)
         else:
-            errMsg = f"Arquivo '{e.file_name}' não encontrado em '{server_final_path}' após upload reportado como completo."
+            errMsg = f"Arquivo '{e.file_name}' não encontrado em '{server_final_path}' após upload."
             logger.error(errMsg)
-            self.on_upload_complete(False, errMsg, e.file_name)
+            #self.on_individual_file_complete (False, errMsg, e.file_name)
+            self._record_file_result_and_check_batch_completion(False, errMsg, e.file_name)
+            
+        self._process_one_file_from_queue() # Agenda o próximo (com delay implícito)
 
+    def clear_upload_state_for_file(self, file_name: str):
+        """Remove um arquivo do mapa de rastreamento de uploads."""
+        if file_name in self._is_uploading_map:
+            del self._is_uploading_map[file_name]
+            logger.info(f"Estado de upload para '{file_name}' limpo do ManagedFilePicker.")
+            
     def clear_upload_directory(self):
         """Remove todos os arquivos e subdiretórios do diretório de upload."""
         if not self.upload_dir or not os.path.exists(self.upload_dir):
@@ -720,6 +797,7 @@ class ManagedFilePicker:
             logger.info(f"Diretório de upload '{self.upload_dir}' limpo.")
         except Exception as e:
             logger.error(f"Erro ao tentar limpar o diretório de upload '{self.upload_dir}': {e}")
+    
     ### MÉTODOS PARA TESTE ISOLADO :
     '''
     def _on_file_picker_result(self, e: ft.FilePickerResultEvent):
@@ -804,12 +882,12 @@ def open_nested_dialog(
     chama uma função para abrir um diálogo filho.
     Útil para transições suaves entre diálogos aninhados.
     """
-    logger.debug(f"Fechando diálogo pai (Título: {parent_dialog.title.value if isinstance(parent_dialog.title, ft.Text) else 'N/A'}) para abrir filho.")
+    logger.info(f"[DEBUG] Fechando diálogo pai (Título: {parent_dialog.title.value if isinstance(parent_dialog.title, ft.Text) else 'N/A'}) para abrir filho.")
     parent_dialog.open = False
     page.update(parent_dialog) # Atualiza só o pai para fechar
 
     def _open_child():
-        logger.debug("Delay concluído. Abrindo diálogo filho.")
+        logger.info("[DEBUG] Delay concluído. Abrindo diálogo filho.")
         child_dialog_open_callable() # Esta função deve conter child.open=True e page.update()
 
     threading.Timer(delay, _open_child).start()
@@ -835,18 +913,18 @@ def reopen_parent_dialog(
         logic_before_reopen_callable: Função opcional a ser executada ANTES de reabrir o pai.
         delay: Pequeno atraso antes de tentar reabrir o pai.
     """
-    logger.debug(f"Agendando reabertura do diálogo pai (Título: {parent_dialog.title.value if isinstance(parent_dialog.title, ft.Text) else 'N/A'}).")
+    logger.info(f"[DEBUG] Agendando reabertura do diálogo pai (Título: {parent_dialog.title.value if isinstance(parent_dialog.title, ft.Text) else 'N/A'}).")
 
     def _reopen_parent_action():
         if logic_before_reopen_callable:
-            logger.debug("Executando lógica customizada antes de reabrir o diálogo pai.")
+            logger.info("[DEBUG] Executando lógica customizada antes de reabrir o diálogo pai.")
             try:
                 logic_before_reopen_callable()
             except Exception as e:
                 logger.error(f"Erro na 'logic_before_reopen_callable' ao reabrir diálogo pai: {e}", exc_info=True)
                 # Decide se continua ou aborta. Por segurança, continua a reabrir.
 
-        logger.debug(f"Delay concluído. Reabrindo diálogo pai.")
+        logger.info(f"[DEBUG] Delay concluído. Reabrindo diálogo pai.")
         if parent_dialog not in page.overlay: # Garante que está no overlay
              page.overlay.append(parent_dialog)
 
@@ -1672,22 +1750,22 @@ class ManagedAlertDialog(ft.AlertDialog):
         if self.open:
             self.open = False
             self.page_ref.update(self) # Atualiza apenas o diálogo para processar o open=False
-            logger.debug(f"ManagedAlertDialog: Fechamento visual iniciado. Agendando finalização.")
+            logger.info(f"[DEBUG] ManagedAlertDialog: Fechamento visual iniciado. Agendando finalização.")
             threading.Timer(self.close_delay_seconds, self._finish_close_action).start()
         else:
-             logger.debug("ManagedAlertDialog: _trigger_close_with_timer chamado, mas diálogo já estava fechado.")
+             logger.info("[DEBUG] ManagedAlertDialog: _trigger_close_with_timer chamado, mas diálogo já estava fechado.")
 
 
     def _finish_close_action(self):
         """Executado pelo timer após o fechamento visual."""
-        logger.debug(f"ManagedAlertDialog: Timer finalizado.")
+        logger.info(f"[DEBUG] ManagedAlertDialog: Timer finalizado.")
         if self in self.page_ref.overlay: # Remove do overlay
             self.page_ref.overlay.remove(self)
             # Não chamar page_ref.update() aqui se on_dialog_fully_closed vai fazer (via snackbar etc.)
 
         if self.on_dialog_fully_closed:
             try:
-                logger.debug(f"ManagedAlertDialog: Chamando on_dialog_fully_closed com dados: {self._result_data_for_callback}")
+                logger.info(f"[DEBUG] ManagedAlertDialog: Chamando on_dialog_fully_closed com dados: {self._result_data_for_callback}")
                 self.on_dialog_fully_closed(self._result_data_for_callback)
             except Exception as e:
                 logger.error(f"ManagedAlertDialog: Erro ao executar on_dialog_fully_closed: {e}", exc_info=True)

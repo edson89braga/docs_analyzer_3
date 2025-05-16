@@ -1,5 +1,6 @@
 # src/flet_ui/views/profile_view.py
 
+from math import exp
 from turtle import bgcolor
 import flet as ft
 from typing import Optional
@@ -298,7 +299,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
             ft.Container(height=8),
             danger_zone_section,
         ],
-        spacing=20,
+        spacing=10,
         width=700, # Definir uma largura máxima para o conteúdo do perfil
         #scroll=ft.ScrollMode.ADAPTIVE
         # alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
@@ -306,7 +307,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
     )
 
     return ft.Container(content=ft.Column( # Container para centralizar e aplicar padding
-                [profile_content_column] ,
+                [ ft.Container(profile_content_column, expand=True, padding=ft.padding.only(right=15)) ], 
                 alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER, # Centraliza a coluna na página
                 expand=True, scroll=ft.ScrollMode.ALWAYS
