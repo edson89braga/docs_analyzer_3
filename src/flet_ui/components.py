@@ -587,38 +587,42 @@ class ManagedFilePicker:
         """Callback para o evento on_result do FilePicker."""
         if not e.files:
             logger.warning("Seleção de arquivo cancelada pelo usuário.")
-            self.on_individual_file_complete (False, "Seleção cancelada", None)
-            if self.on_batch_complete: # Se não há arquivos, o "lote" (vazio) está completo
+            # Chama o callback individual para registrar o cancelamento
+            self.on_individual_file_complete(False, "Seleção cancelada", None)
+            # Se houver um callback de lote, informa que o lote (vazio) está completo
+            if self.on_batch_complete:
                 self.on_batch_complete([])
+            # Limpa a fila e reseta o estado do lote para o caso de ter algo pendente
+            self.files_to_process_queue.clear()
+            self._current_batch_results = []
+            self._files_expected_in_current_batch = 0
             return
 
         logger.info(f"--- ManagedFilePicker: FilePicker retornou {len(e.files)} arquivo(s) ---")
         for i, f_obj in enumerate(e.files):
             logger.info(f"[DEBUG]   Arquivo {i}: Nome='{f_obj.name}', Tamanho={f_obj.size}, PathCliente='{f_obj.path}'")
 
-        # Inicia um novo lote
-        self.files_to_process_queue = list(e.files)
+        # Limpa a fila e reseta o estado do lote ANTES de adicionar novos arquivos
+        self.files_to_process_queue.clear()
         self._current_batch_results = []
         self._files_expected_in_current_batch = len(e.files)
 
-        # Adiciona os novos arquivos à fila
-        # Se a fila já tiver itens de uma seleção anterior não processada, esta lógica adicionará.
-        # Normalmente, a fila deve estar vazia se todos os uploads anteriores foram concluídos.
-        is_processing_active = bool(self.files_to_process_queue) # Verifica se já há algo na fila
-
+        # Adiciona os novos arquivos selecionados à fila (agora limpa)
         for f_obj in e.files:
             self.files_to_process_queue.append(f_obj)
-        
-        logger.info(f"{len(e.files)} arquivo(s) adicionado(s) à fila. Total agora: {len(self.files_to_process_queue)}")
 
-        if self.files_to_process_queue: # and not is_processing_active
-            # Se não havia processamento ativo e agora há arquivos na fila,
-            # inicia o processamento do primeiro arquivo imediatamente.
+        logger.info(f"{len(e.files)} arquivo(s) adicionado(s) à fila (total na fila agora: {len(self.files_to_process_queue)}).")
+
+        # Inicia o processamento da fila se houver arquivos.
+        # A flag is_first_call_in_batch=True garante que o primeiro arquivo do novo lote
+        # seja processado imediatamente.
+        if self.files_to_process_queue:
             logger.info("[DEBUG] Iniciando processamento da fila (primeiro arquivo sem delay).")
             self._process_one_file_from_queue(is_first_call_in_batch=True)
-        #elif is_processing_active: logger.info("[DEBUG] Processamento da fila já estava ativo. Novos arquivos foram enfileirados.")
-        elif self.on_batch_complete: # Se por algum motivo a fila ficou vazia
-             self.on_batch_complete([])
+        elif self.on_batch_complete: 
+            # Isso só aconteceria se e.files fosse vazio, o que já foi tratado no início.
+            # Mas, como salvaguarda, se a fila estiver vazia e on_batch_complete existir.
+                self.on_batch_complete([])
 
     def _record_file_result_and_check_batch_completion(self, success: bool, message: str, file_name: Optional[str]):
         """Chamado internamente após cada tentativa de processamento de arquivo."""

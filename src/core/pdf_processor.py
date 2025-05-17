@@ -33,8 +33,7 @@ def initialize_nltk_data():
 # Executa a inicialização quando este módulo é importado
 initialize_nltk_data()
 
-
-### pdf_extraction_strategies:
+### pdf_extraction_strategies: #########################################################################################
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Optional
 
@@ -166,7 +165,7 @@ class FitzExtractor(PDFTextExtractorStrategy):
         except Exception as e:
             raise RuntimeError(f"PyPdf extraction error for {pdf_path}: {e}")
         
-### text_processing_utils:
+### text_processing_utils: #########################################################################################
 import re
 from langdetect import detect
 from langdetect.lang_detect_exception import LangDetectException
@@ -263,7 +262,7 @@ def print_text_intelligibility(content_by_page: list[tuple[int, str]]):
                 logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
     print('\n')
 
-### text_analysis_utils:
+### text_analysis_utils: #########################################################################################
 import numpy as np
 from nltk.corpus import stopwords
 from sentence_transformers import SentenceTransformer
@@ -329,8 +328,7 @@ def get_similar_items_indices(item_index: int, similarity_matrix: np.ndarray, th
             similar_indices.append(j)
     return similar_indices
 
-
-### pdf_document_analyzer:
+### pdf_document_analyzer: #########################################################################################
 import os
 from typing import Dict, Any
 # Importando as funções e classes dos "módulos" acima
@@ -475,22 +473,21 @@ class PDFDocumentAnalyzer:
         return processed_page_data
 
     @timing_decorator()
-    def extract_texts_and_preprocess_batch(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
+    def extract_texts_and_preprocess_batch(self, pdf_paths_ordered: List[str]) -> Tuple[Dict[str, Dict[str, Any]], List[str], List[str]]:
         """
         Processa um lote de PDFs ordenados, extrai texto e realiza análises.
         As chaves do dicionário de resultado são prefixadas com o índice do arquivo.
+        Retorna uma tupla: (dados_processados_combinados, textos_para_analise_combinados, chaves_globais_ordenadas)
         """
         if not pdf_paths_ordered:
             logger.warning("Nenhum caminho de PDF fornecido para análise em lote.")
-            return {}
+            return {}, [], []
 
         combined_processed_page_data: Dict[str, Dict[str, Any]] = {}
-        
-        # Para a análise de similaridade combinada
         all_texts_for_analysis_combined: List[str] = []
-        all_global_page_keys_ordered: List[str] = [] # Mantém a ordem para mapear similaridade
+        all_global_page_keys_ordered: List[str] = [] 
 
-        current_global_page_offset = 0 # Para a matriz de similaridade combinada
+        current_global_page_offset = 0 
 
         for file_idx, pdf_path in enumerate(pdf_paths_ordered):
             if not os.path.exists(pdf_path):
@@ -499,12 +496,7 @@ class PDFDocumentAnalyzer:
             
             logger.info(f"Processando arquivo {file_idx + 1}/{len(pdf_paths_ordered)}: {os.path.basename(pdf_path)}")
 
-            # --- 1. Extração e Pré-processamento (por arquivo) ---
             try:
-                # Não podemos chamar o `analyze_pdf_document` antigo diretamente se ele faz TF-IDF/Similaridade por arquivo.
-                # Precisamos da lógica de `extract_texts_and_preprocess` e `analyze_similarity_and_relevance` adaptada.
-
-                # Replicando lógica de extract_texts_and_preprocess para este arquivo
                 extracted_pages_content_single_file = self.extractor.extract_texts_from_pages(pdf_path, None)
                 if not extracted_pages_content_single_file:
                     logger.warning(f"Nenhum texto extraído de {os.path.basename(pdf_path)}.")
@@ -514,7 +506,6 @@ class PDFDocumentAnalyzer:
                 texts_for_storage_single_file = {idx: preprocess_text_basic(text) for idx, text in extracted_pages_content_single_file}
                 texts_for_analysis_single_file = [preprocess_text_advanced(text) for _, text in extracted_pages_content_single_file]
                 
-                # Adiciona à lista combinada para análise de similaridade global
                 for i, text_to_analyze in enumerate(texts_for_analysis_single_file):
                     page_idx_in_file = actual_indices_in_file[i]
                     global_page_key = self._generate_global_page_key(file_idx, page_idx_in_file)
@@ -522,32 +513,32 @@ class PDFDocumentAnalyzer:
                     all_texts_for_analysis_combined.append(text_to_analyze)
                     all_global_page_keys_ordered.append(global_page_key)
 
-                    # Armazena dados básicos já, TF-IDF e similaridade virão depois
                     text_stored = texts_for_storage_single_file[page_idx_in_file]
                     combined_processed_page_data[global_page_key] = {
                         'texto': text_stored,
                         'number_words': count_unique_words(text_stored),
                         'number_tokens': count_tokens(text_stored, model_name=model_name_for_tokens),
                         'inteligible': is_text_intelligible(text_stored),
-                        'file_index': file_idx, # Adiciona referência ao arquivo original
+                        'file_index': file_idx, 
                         'page_index_in_file': page_idx_in_file,
-                        'original_pdf_path': pdf_path, # Para referência
-                        'tf_idf_score': 0.0, # Será preenchido depois
-                        'semelhantes': []    # Será preenchido depois
+                        'original_pdf_path': pdf_path, 
+                        'tf_idf_score': 0.0, 
+                        'semelhantes': []    
                     }
 
             except Exception as e:
                 logger.error(f"Erro ao processar (extração/pré-proc) arquivo {os.path.basename(pdf_path)}: {e}", exc_info=True)
-                continue # Pula para o próximo arquivo em caso de erro neste
+                continue 
 
         if not all_texts_for_analysis_combined:
             logger.warning("Nenhum texto para análise combinado de todos os arquivos.")
-            return {}
+            # Retorna o combined_processed_page_data que pode ter sido parcialmente preenchido
+            # e listas vazias para os outros dois valores.
+            return combined_processed_page_data, [], []
 
-        logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(combined_processed_page_data)}")
-        
+        logger.info(f"Extração e pré-processamento em lote concluídos. Total de páginas com texto para análise: {len(all_texts_for_analysis_combined)}")
         return combined_processed_page_data, all_texts_for_analysis_combined, all_global_page_keys_ordered
-    
+       
     @timing_decorator()
     def analyze_similarity_and_relevance_batch(self, combined_processed_page_data: Dict[str, Dict[str, Any]], 
                                                all_texts_for_analysis_combined: List[str], 
@@ -847,6 +838,7 @@ class PDFDocumentAnalyzer:
         # MODIFICADO: Retornar as duas contagens de tokens
         return str_pages_considered, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
 
+### Func OCR #########################################################################################
 import easyocr
 from pdf2image import convert_from_path
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError, PDFInfoNotInstalledError
@@ -1008,29 +1000,28 @@ def extrair_texto_pdf(
     logger.info(f"Extração OCR concluída. {len(resultados_finais)} página(s) processada(s).")
     return resultados_finais
 
-# Exemplo de uso:
-# pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf'
-# pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf'  # 16 e 6
-
-# Extrair apenas as páginas 2, 5 e 8 (índices 1, 4 e 7 no sistema zero-based)
-# paginas_alvo = [15] # indices
-
-#for pagina, texto in texto_extraido.items():
-#    print(f"\n--- PÁGINA {pagina} ---")
-#    print(texto)
-
-# r = extrair_texto_pdf(pdf_path, paginas_alvo, poppler_path=poppler_path)
-
 '''
+Exemplo de uso:
+pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf'
+pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf'  # 16 e 6
+
+Extrair apenas as páginas 2, 5 e 8 (índices 1, 4 e 7 no sistema zero-based)
+paginas_alvo = [15] # indices
+
 for pagina, texto in texto_extraido.items():
-    with open(f"pagina_{pagina}_texto.txt", "w", encoding="utf-8") as f:
-        f.write(texto)
+   print(f"\n--- PÁGINA {pagina} ---")
+   print(texto)
+
+   result = extrair_texto_pdf(pdf_path, paginas_alvo, poppler_path=poppler_path)
+
+for pagina, texto in result.items():
+   with open(f"pagina_{pagina}_texto.txt", "w", encoding="utf-8") as f:
+       f.write(texto)
 '''
 
+### Funcs Testes #########################################################################################
 
-### --- Teste-Exemplo de uso --------------------------------------------------------------
-
-def test_example(pdf_paths: List[str], token_limit_for_summary: int = 100000): # Modificado para List[str]
+def test_example_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 100000): # Modificado para List[str]
     if not pdf_paths:
         print("Nenhum caminho de PDF fornecido para o teste.")
         return
@@ -1133,32 +1124,27 @@ def test_example(pdf_paths: List[str], token_limit_for_summary: int = 100000): #
         import traceback
         traceback.print_exc()
 
-# Exemplo de como chamar a função test_example (atualizado para lista)
 r'''
-# Para testar com um único arquivo:
-# pdf_paths_to_test = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.013511_2025-29.pdf']
-
-# Para testar com múltiplos arquivos:
-pdf_paths_to_test = [
-    r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.013511_2025-29.pdf', # Exemplo de arquivo 1
-    r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf', # Exemplo de arquivo 2
-    # r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf' # Exemplo de arquivo 3 (opcional)
-]
-
 python -i teste_interativo.py
 
-pdf_paths = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf']
+pdf_paths_1 = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf']
+pdf_paths_2 = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\01_08500.014072_2025-71.pdf',
+               r'C:\Users\edson.eab\Downloads\PDFs-Testes\11_08500.014072_2025-71.pdf']
 
-pdf_paths = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\01_08500.014072_2025-71.pdf',
-             r'C:\Users\edson.eab\Downloads\PDFs-Testes\11_08500.014072_2025-71.pdf']
+analyzer = PDFDocumentAnalyzer()
 
-test_example(pdf_paths)
+processed_data_batch_1 = analyzer.analyze_pdf_document_batch(pdf_paths_1)
+tupla_processed_data_batch_1 = analyzer.filter_and_classify_pages(processed_data_batch_1)
+processed_data_batch_2 = analyzer.analyze_pdf_document_batch(pdf_paths_2)
+tupla_processed_data_batch_2 = analyzer.filter_and_classify_pages(processed_data_batch_2)
 
-pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.013511_2025-29.pdf'
-pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf'
-pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf'
-token_limit_for_summary = 100000
-processed_data = test_example(pdf_path)
+for k1, k2 in zip(list(processed_data_batch_1.keys()), list(processed_data_batch_2.keys())): 
+    for k3 in list(processed_data_batch_1[k1].keys()):
+        if k3 in ['semelhantes', 'page_index_in_file', 'original_pdf_path', 'file_index']:
+            continue
+        assert processed_data_batch_1[k1][k3] == processed_data_batch_2[k2][k3]
+
+assert tupla_processed_data_batch_1[2:] == tupla_processed_data_batch_2[2:]
 
 '''
 
@@ -1167,7 +1153,6 @@ from rich.table import Table
 import time # Para medição de tempo manual
 import threading # Para execução paralela
 
-# Função worker que será executada em cada thread
 def _worker_extract_strategy_performance(
     pdf_path: str,
     strategy_instance: PDFTextExtractorStrategy,
@@ -1325,7 +1310,6 @@ def test_extraction_strategies_performance(pdf_paths: List[str]):
     console.print(table)
     logger.info(f"--- Teste de Desempenho de Extração (com Threads) Concluído ---")
 
-# Exemplo de como chamar a nova função de teste (pode ser adicionado ao final do arquivo ou em um script de teste separado)
 r'''
 # Lista de PDFs para o teste de desempenho
 
@@ -1339,3 +1323,4 @@ test_extraction_strategies_performance(pdf_paths_for_perf_test)
 
 
 '''
+

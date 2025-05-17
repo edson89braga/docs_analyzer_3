@@ -91,4 +91,7 @@ TODO:
 > prompt refinado
 > novo layout formulário para respostas da LLM
 
+FIX:
+> Check se remove uploads está sendo garantido
+
 '''

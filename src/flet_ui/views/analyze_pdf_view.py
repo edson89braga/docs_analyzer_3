@@ -178,6 +178,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                             _logger.warning(f"Índices inválidos on_accept: src={src_idx}, dest={dest_idx}, len={len(current_files)}")
                             update_selected_files_display(current_files)
                         
+                        page.update(current_batch_name_text, selected_files_list_view)
                         #e.control.update() # Atualiza o DragTarget
 
                     return on_drag_will_accept, on_drag_accept_handler, on_drag_leave
@@ -245,7 +246,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             selected_files_list_view.height = min(len(_files) * 65, 300) # Altura dinâmica, max 300px
             analyze_button.disabled = False
         
-        page.update(current_batch_name_text, selected_files_list_view, analyze_button)
+        #page.update(current_batch_name_text, selected_files_list_view, analyze_button)
 
     def move_file_in_list(index: int, direction: int):
         current_files_data = page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED)
@@ -260,6 +261,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         page.session.set(KEY_SESSION_CURRENT_PDF_FILES_ORDERED, current_files)
         update_selected_files_display(current_files)
         clear_cached_analysis_results()
+        page.update(current_batch_name_text, selected_files_list_view)
 
     def remove_file_from_list(index: int):
         current_files_data = page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED)
@@ -278,6 +280,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
 
         update_selected_files_display(current_files)
         clear_cached_analysis_results() # Remover um arquivo invalida o cache de análise conjunta
+        page.update(current_batch_name_text, selected_files_list_view)
 
     result_textfield = ft.TextField(
         label="...",
@@ -437,7 +440,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                 if page.session.contains_key(CACHE_KEY_PDF_LAST_LLM_RESPONSE_BATCH):
                     page.session.remove(CACHE_KEY_PDF_LAST_LLM_RESPONSE_BATCH)
                 
-                threading.Timer(0.05, update_selected_files_display).start()
+                # Não chamar update_selected_files_display aqui, pois o batch_upload_complete_handler o fará
         
         elif file_path_or_message == "Seleção cancelada":
             _logger.info("Seleção de arquivos cancelada.")
@@ -474,6 +477,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
 
         # Atualiza a exibição final da lista de arquivos (que já foi sendo atualizada individualmente)
         update_selected_files_display() 
+        page.update(current_batch_name_text, selected_files_list_view, analyze_button, upload_button)
         # Se houve sucesso em algum upload, pode ser necessário invalidar caches
         if successful_uploads:
              clear_cached_analysis_results() # Invalida se o CONTEÚDO da lista de sucesso mudou o lote
@@ -589,7 +593,6 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             nonlocal pdf_paths_ordered, batch_display_name # Importante para threads
             try:
                 pdf_analyzer = PDFDocumentAnalyzer()
-
                 # --- Fase 1A: Verificar Cache para processed_page_data ---
                 # O cache agora precisa ser baseado no CONJUNTO ORDENADO de arquivos.
                 # Uma forma é criar uma chave de cache a partir dos nomes dos arquivos e suas ordens.
@@ -609,7 +612,24 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                     # --- Fase 1: Extração e Pré-processamento ---
                     # pdf_analyzer receberá a lista de caminhos e retornará um único processed_page_data_combined
                     # onde as chaves dos dicionários de página serão prefixadas (ex: "file0_page0", "file1_page0")
-                    processed_page_data_combined, all_texts_for_analysis_combined, all_global_page_keys_ordered = pdf_analyzer.extract_texts_and_preprocess_batch(pdf_paths_ordered)
+                    
+                    _logger.info(f"[DEBUG] ANALYSIS_THREAD: Iniciando com pdf_paths_ordered: {pdf_paths_ordered}")
+                    # VERIFICAÇÃO ADICIONAL ANTES DE CHAMAR O PROCESSADOR
+                    valid_pdf_paths_for_processor = []
+                    for p_path in pdf_paths_ordered:
+                        if os.path.exists(p_path):
+                            valid_pdf_paths_for_processor.append(p_path)
+                        else:
+                            _logger.error(f"ANALYSIS_THREAD: Arquivo {p_path} NÃO encontrado no disco ANTES de chamar pdf_processor.")
+                    
+                    if not valid_pdf_paths_for_processor:
+                        _logger.error("ANALYSIS_THREAD: Nenhum arquivo PDF válido encontrado no disco para processar.")
+                        # Você pode querer levantar um erro aqui ou retornar/mostrar uma mensagem de erro
+                        raise FileNotFoundError("Nenhum dos arquivos selecionados pôde ser encontrado para processamento.")
+
+                    processed_page_data_combined, all_texts_for_analysis_combined, \
+                    all_global_page_keys_ordered = \
+                        pdf_analyzer.extract_texts_and_preprocess_batch(valid_pdf_paths_for_processor) # USA A LISTA VALIDADA
 
                     #actual_indices, texts_for_storage, texts_for_analysis = \
                     #    pdf_analyzer.extract_texts_and_preprocess(pdf_path)
