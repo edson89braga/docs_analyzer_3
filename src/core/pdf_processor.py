@@ -250,7 +250,6 @@ def count_tokens(text: str, model_name: str) -> int:
 
 def print_text_intelligibility(content_by_page: list[tuple[int, str]]):
     print('\n')
-    texts_normalized = [(idx, preprocess_text_basic(text)) for idx, text in content_by_page]
     texts_normalized = [(idx, preprocess_text_advanced(text)) for idx, text in texts_normalized]
     for p_idx, text in texts_normalized:
         is_intelligible = is_text_intelligible(text) 
@@ -430,6 +429,7 @@ class PDFDocumentAnalyzer:
             
             # 4. Montar dicionário de dados por página
             processed_page_data: Dict[int, Dict[str, Any]] = {}
+
             for i, original_page_index in enumerate(actual_indices):
                 text_stored = texts_for_storage[original_page_index]
                 
@@ -487,8 +487,6 @@ class PDFDocumentAnalyzer:
         all_texts_for_analysis_combined: List[str] = []
         all_global_page_keys_ordered: List[str] = [] 
 
-        current_global_page_offset = 0 
-
         for file_idx, pdf_path in enumerate(pdf_paths_ordered):
             if not os.path.exists(pdf_path):
                 logger.error(f"PDF não encontrado no lote: {pdf_path} (Índice {file_idx}). Pulando.")
@@ -507,23 +505,25 @@ class PDFDocumentAnalyzer:
                 texts_for_analysis_single_file = [preprocess_text_advanced(text) for _, text in extracted_pages_content_single_file]
                 
                 for i, text_to_analyze in enumerate(texts_for_analysis_single_file):
+                    
                     page_idx_in_file = actual_indices_in_file[i]
                     global_page_key = self._generate_global_page_key(file_idx, page_idx_in_file)
-                    
-                    all_texts_for_analysis_combined.append(text_to_analyze)
                     all_global_page_keys_ordered.append(global_page_key)
-
+                    
                     text_stored = texts_for_storage_single_file[page_idx_in_file]
+                    all_texts_for_analysis_combined.append(text_to_analyze)
+                    
+
                     combined_processed_page_data[global_page_key] = {
                         'texto': text_stored,
                         'number_words': count_unique_words(text_stored),
                         'number_tokens': count_tokens(text_stored, model_name=model_name_for_tokens),
                         'inteligible': is_text_intelligible(text_stored),
+                        'tf_idf_score': 0.0, 
+                        'semelhantes': [],
                         'file_index': file_idx, 
                         'page_index_in_file': page_idx_in_file,
-                        'original_pdf_path': pdf_path, 
-                        'tf_idf_score': 0.0, 
-                        'semelhantes': []    
+                        'original_pdf_path': pdf_path
                     }
 
             except Exception as e:
@@ -843,6 +843,7 @@ import easyocr
 from pdf2image import convert_from_path
 from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError, PDFInfoNotInstalledError
 
+@timing_decorator()
 def extrair_texto_pdf(
     pdf_path: str,
     paginas_alvo: Optional[List[int]] = None,
@@ -850,7 +851,7 @@ def extrair_texto_pdf(
     poppler_path: Optional[str] = r'C:\Users\edson.eab\OneDrive - Polícia Federal\Scripts Python\Proj_App   -- LLM-API - Docs_Analyzer_3\poppler-22.04.0\Library\bin',
     ocr_model_dir: str = 'modelos_ocr',
     language_codes: List[str] = ['pt'], # Ex: ['en', 'pt']
-    gpu_enabled: bool = False
+    gpu_enabled: bool = True
 ) -> Dict[int, str]:
     """
     Extrai texto de páginas específicas de um PDF usando OCR com EasyOCR.
@@ -1000,19 +1001,19 @@ def extrair_texto_pdf(
     logger.info(f"Extração OCR concluída. {len(resultados_finais)} página(s) processada(s).")
     return resultados_finais
 
-'''
+r'''
 Exemplo de uso:
-pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf'
+pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf'  # 199-203
 pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf'  # 16 e 6
 
-Extrair apenas as páginas 2, 5 e 8 (índices 1, 4 e 7 no sistema zero-based)
-paginas_alvo = [15] # indices
+Extrair apenas as páginas 2, 5 e 8 (índices 1, 4 e 7 no sistema (zero-based)
+paginas_alvo = [200, 201, 202] # indices
 
 for pagina, texto in texto_extraido.items():
    print(f"\n--- PÁGINA {pagina} ---")
    print(texto)
 
-   result = extrair_texto_pdf(pdf_path, paginas_alvo, poppler_path=poppler_path)
+result = extrair_texto_pdf(pdf_path, paginas_alvo)   , gpu_enabled=False)
 
 for pagina, texto in result.items():
    with open(f"pagina_{pagina}_texto.txt", "w", encoding="utf-8") as f:

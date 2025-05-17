@@ -170,6 +170,11 @@ from rich.table import Table
 def timing_decorator(calc_by_item=False):
     """Decorador para calcular o tempo de execução de funções decoradas.
     """
+    if not logger:
+        import logging
+        logging.basicConfig(level=logging.INFO)
+        logger = logging.getLogger(__name__)
+
     def decorator(func):
         def wrapper(*args, **kwargs):
             start_time = time()  # Marca o tempo de início
