@@ -37,9 +37,10 @@ initialize_nltk_data()
 ### pdf_extraction_strategies:
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Optional
+
 import pdfplumber
-# Para o PyPdfExtractor (exemplo de flexibilidade)
-# import pypdf
+from PyPDF2 import PdfReader
+import fitz
 
 class PDFTextExtractorStrategy(ABC):
     """Interface abstrata para estratégias de extração de texto de PDFs."""
@@ -50,7 +51,7 @@ class PDFTextExtractorStrategy(ABC):
         pass
 
     @abstractmethod
-    def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None) -> List[Tuple[int, str]]:
+    def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
         """
         Extrai textos de páginas específicas de um PDF.
 
@@ -72,7 +73,7 @@ class PdfPlumberExtractor(PDFTextExtractorStrategy):
             return len(pdf.pages)
 
     @timing_decorator()
-    def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None) -> List[Tuple[int, str]]:
+    def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
         content_by_page = []
         try:
             with pdfplumber.open(pdf_path) as pdf:
@@ -89,6 +90,10 @@ class PdfPlumberExtractor(PDFTextExtractorStrategy):
                     page_pdf = pdf.pages[p_idx]
                     text = page_pdf.extract_text() or ""  # Garante que o texto não seja None
                     content_by_page.append((p_idx, text))
+            
+            if check_inteligible:
+                print_text_intelligibility(content_by_page)
+
             return content_by_page
         except Exception as e:
             # Idealmente, o logger viria daqui ou seria injetado.
@@ -97,39 +102,70 @@ class PdfPlumberExtractor(PDFTextExtractorStrategy):
             raise RuntimeError(f"PdfPlumber extraction error for {pdf_path}: {e}")
 
 class PyPdfExtractor(PDFTextExtractorStrategy):
-    """Estratégia de extração de texto usando pypdf (Exemplo de flexibilidade)."""
+    """Estratégia de extração de texto usando pypdf """
 
     def get_total_pages(self, pdf_path: str) -> int:
         try:
-            # from pypdf import PdfReader # Mova o import para o topo se usar frequentemente
-            # reader = PdfReader(pdf_path)
-            # return len(reader.pages)
-            raise NotImplementedError("PyPdfExtractor.get_total_pages não implementado neste exemplo.")
+            reader = PdfReader(pdf_path)
+            return len(reader.pages)
+            #raise NotImplementedError("PyPdfExtractor.get_total_pages não implementado neste exemplo.")
         except Exception as e:
             raise RuntimeError(f"PyPdf extraction error (get_total_pages) for {pdf_path}: {e}")
 
-    def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None) -> List[Tuple[int, str]]:
-        # content_by_page = []
-        # try:
-        #     from pypdf import PdfReader # Mova o import para o topo se usar frequentemente
-        #     reader = PdfReader(pdf_path)
-        #     total_pages_in_pdf = len(reader.pages)
-
-        #     if page_indices is None:
-        #         indices_to_process = list(range(total_pages_in_pdf))
-        #     else:
-        #         indices_to_process = [idx for idx in page_indices if 0 <= idx < total_pages_in_pdf]
+    def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
+        content_by_page = []
+        try:
+            reader = PdfReader(pdf_path)
+            total_pages_in_pdf = len(reader.pages)
+            if page_indices is None:
+                indices_to_process = list(range(total_pages_in_pdf))
+            else:
+                indices_to_process = [idx for idx in page_indices if 0 <= idx < total_pages_in_pdf]
+          
+            for p_idx in indices_to_process:
+                page_pdf = reader.pages[p_idx]
+                text = page_pdf.extract_text() or ""
+                content_by_page.append((p_idx, text))
             
-        #     for p_idx in indices_to_process:
-        #         page_pdf = reader.pages[p_idx]
-        #         text = page_pdf.extract_text() or ""
-        #         content_by_page.append((p_idx, text))
-        #     return content_by_page
-        # except Exception as e:
-        #     raise RuntimeError(f"PyPdf extraction error for {pdf_path}: {e}")
-        raise NotImplementedError("PyPdfExtractor.extract_texts_from_pages não implementado neste exemplo. Descomente e instale pypdf para usar.")
+            if check_inteligible:
+                print_text_intelligibility(content_by_page)
+                
+            return content_by_page
+        except Exception as e:
+            raise RuntimeError(f"PyPdf extraction error for {pdf_path}: {e}")
+        #raise NotImplementedError("PyPdfExtractor.extract_texts_from_pages não implementado neste exemplo. Descomente e instale pypdf para usar.")
 
+class FitzExtractor(PDFTextExtractorStrategy):
+    """Estratégia de extração de texto usando Docling"""
 
+    def get_total_pages(self, pdf_path: str) -> int:
+        try:
+            doc = fitz.open(pdf_path)
+            return len(doc)
+        except Exception as e:
+            raise RuntimeError(f"PyPdf extraction error (get_total_pages) for {pdf_path}: {e}")
+
+    def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
+        content_by_page = []
+        try:
+            doc = fitz.open(pdf_path)
+            total_pages_in_pdf = len(doc)
+            if page_indices is None:
+                indices_to_process = list(range(total_pages_in_pdf))
+            else:
+                indices_to_process = [idx for idx in page_indices if 0 <= idx < total_pages_in_pdf]
+          
+            for p_idx in indices_to_process:
+                text = doc[p_idx].get_text() or ""
+                content_by_page.append((p_idx, text))
+
+            if check_inteligible:
+                print_text_intelligibility(content_by_page)
+
+            return content_by_page
+        except Exception as e:
+            raise RuntimeError(f"PyPdf extraction error for {pdf_path}: {e}")
+        
 ### text_processing_utils:
 import re
 from langdetect import detect
@@ -213,6 +249,19 @@ def count_tokens(text: str, model_name: str) -> int:
     """Wrapper para a função de contagem de tokens utilitária."""
     return util_count_tokens(text, model_name=model_name)
 
+def print_text_intelligibility(content_by_page: list[tuple[int, str]]):
+    print('\n')
+    texts_normalized = [(idx, preprocess_text_basic(text)) for idx, text in content_by_page]
+    texts_normalized = [(idx, preprocess_text_advanced(text)) for idx, text in texts_normalized]
+    for p_idx, text in texts_normalized:
+        is_intelligible = is_text_intelligible(text) 
+        if not is_intelligible:
+            try:
+                lang = detect(text)
+                logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
+            except LangDetectException:
+                logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
+    print('\n')
 
 ### text_analysis_utils:
 import numpy as np
@@ -308,7 +357,7 @@ class PDFDocumentAnalyzer:
     Classe principal para processamento e análise de documentos PDF.
     Orquestra a extração de texto, pré-processamento, análise e classificação de páginas.
     """
-    def __init__(self, extractor_strategy: PDFTextExtractorStrategy = PdfPlumberExtractor()):
+    def __init__(self, extractor_strategy: PDFTextExtractorStrategy = FitzExtractor()):
         self.extractor = extractor_strategy
 
     def get_pdf_page_count(self, pdf_path: str) -> int:
@@ -798,68 +847,253 @@ class PDFDocumentAnalyzer:
         # MODIFICADO: Retornar as duas contagens de tokens
         return str_pages_considered, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
 
+import easyocr
+from pdf2image import convert_from_path
+from pdf2image.exceptions import PDFPageCountError, PDFSyntaxError, PDFInfoNotInstalledError
+
+def extrair_texto_pdf(
+    pdf_path: str,
+    paginas_alvo: Optional[List[int]] = None,
+    dpi: int = 300,
+    poppler_path: Optional[str] = r'C:\Users\edson.eab\OneDrive - Polícia Federal\Scripts Python\Proj_App   -- LLM-API - Docs_Analyzer_3\poppler-22.04.0\Library\bin',
+    ocr_model_dir: str = 'modelos_ocr',
+    language_codes: List[str] = ['pt'], # Ex: ['en', 'pt']
+    gpu_enabled: bool = False
+) -> Dict[int, str]:
+    """
+    Extrai texto de páginas específicas de um PDF usando OCR com EasyOCR.
+
+    Args:
+        pdf_path (str): Caminho para o arquivo PDF.
+        paginas_alvo (Optional[List[int]]): Lista de números de páginas para extrair 
+                                           (índice 0-based). Se None, extrai todas as páginas.
+        dpi (int): Resolução para conversão do PDF para imagem (pontos por polegada).
+        poppler_path (Optional[str]): Caminho para o diretório bin do Poppler.
+                                      Se None, pdf2image tentará encontrar o Poppler no PATH.
+        ocr_model_dir (str): Pasta para armazenar/carregar modelos EasyOCR.
+        language_codes (List[str]): Códigos de idioma para EasyOCR (ex: ['pt'], ['en']).
+        gpu_enabled (bool): Se True, tenta usar GPU para EasyOCR.
+
+    Returns:
+        Dict[int, str]: Dicionário onde a chave é o número da página (1-based) e 
+                        o valor é o texto extraído.
+    
+    Raises:
+        FileNotFoundError: Se o pdf_path não existir.
+        ImportError: Se easyocr ou pdf2image não estiverem instalados.
+        PDFInfoNotInstalledError: Se o Poppler não for encontrado.
+        Exception: Para outros erros de OCR ou conversão de PDF.
+    """
+    if not os.path.exists(pdf_path):
+        raise FileNotFoundError(f"Arquivo PDF não encontrado: {pdf_path}")
+
+    if easyocr is None or convert_from_path is None:
+        logger.error("EasyOCR ou pdf2image não estão instalados. A extração de OCR não pode prosseguir.")
+        raise ImportError("Dependências EasyOCR ou pdf2image não estão instaladas.")
+
+    # Garante que o diretório de modelos OCR exista
+    os.makedirs(ocr_model_dir, exist_ok=True)
+
+    # Inicializa o EasyOCR Reader.
+    # Considerar inicializar o reader uma vez fora desta função se for chamada frequentemente.
+    logger.info(f"Inicializando EasyOCR reader com idiomas: {language_codes}, GPU: {gpu_enabled}. Modelos em: {ocr_model_dir}")
+    try:
+        reader = easyocr.Reader(
+            lang_list=language_codes,
+            gpu=gpu_enabled,
+            model_storage_directory=ocr_model_dir,
+            download_enabled=True, # Permite baixar modelos se não existirem
+            # recog_network='crnn' # Exemplo de configuração de modelo específico
+        )
+    except Exception as e:
+        logger.error(f"Falha ao inicializar o EasyOCR Reader: {e}", exc_info=True)
+        raise
+
+    resultados_finais: Dict[int, str] = {}
+    
+    try:
+        # Obter informações sobre o PDF (número total de páginas)
+        # pdfinfo = pdfinfo_from_path(pdf_path, poppler_path=poppler_path) # Alternativa para pegar total de páginas
+        # total_pages_pdf = pdfinfo['pages']
+
+        imagens_para_ocr: List[Tuple[int, Any]] = [] # (original_page_index_0_based, image_object)
+
+        if paginas_alvo is not None:
+            if not paginas_alvo: # Lista vazia
+                logger.info("Lista 'paginas_alvo' está vazia. Nenhuma página será processada por OCR.")
+                return resultados_finais
+            
+            # Valida e normaliza os índices das páginas alvo (0-based)
+            paginas_alvo_unicas_ordenadas = sorted(list(set(int(p) for p in paginas_alvo if isinstance(p, int) and p >= 0)))
+            
+            if not paginas_alvo_unicas_ordenadas:
+                logger.warning("Nenhuma página alvo válida após validação.")
+                return resultados_finais
+
+            min_idx_alvo = paginas_alvo_unicas_ordenadas[0]
+            max_idx_alvo = paginas_alvo_unicas_ordenadas[-1]
+
+            logger.info(f"Convertendo páginas do PDF (range {min_idx_alvo+1} a {max_idx_alvo+1}) para imagens com DPI {dpi}.")
+            paginas_convertidas_bloco = convert_from_path(
+                pdf_path,
+                dpi=dpi,
+                first_page=min_idx_alvo + 1, # 1-based
+                last_page=max_idx_alvo + 1,  # 1-based
+                poppler_path=poppler_path,
+                fmt='jpeg', # Formato da imagem, pode ser 'png', 'ppm', etc.
+                thread_count=2 # Otimização para conversão
+            )
+            
+            for target_page_idx_0_based in paginas_alvo_unicas_ordenadas:
+                idx_no_bloco = target_page_idx_0_based - min_idx_alvo
+                if 0 <= idx_no_bloco < len(paginas_convertidas_bloco):
+                    imagens_para_ocr.append((target_page_idx_0_based, paginas_convertidas_bloco[idx_no_bloco]))
+                else:
+                    logger.warning(f"Índice {idx_no_bloco} fora dos limites para página alvo {target_page_idx_0_based+1}. Imagem não encontrada no bloco convertido.")
+        
+        else: # Processar todas as páginas
+            logger.info(f"Convertendo todas as páginas do PDF para imagens com DPI {dpi}.")
+            paginas_convertidas_bloco = convert_from_path(
+                pdf_path,
+                dpi=dpi,
+                poppler_path=poppler_path,
+                fmt='jpeg',
+                thread_count=2
+            )
+            for idx, img in enumerate(paginas_convertidas_bloco):
+                imagens_para_ocr.append((idx, img)) # idx é o índice da página (0-based)
+
+        logger.info(f"Total de {len(imagens_para_ocr)} imagens prontas para OCR.")
+
+        # Processar cada imagem selecionada com OCR
+        for original_page_idx_0_based, imagem_obj in imagens_para_ocr:
+            num_pagina_real_1_based = original_page_idx_0_based + 1
+            logger.debug(f"Aplicando OCR na página {num_pagina_real_1_based}...")
+            
+            # Aplicar OCR na imagem da página
+            # Para converter o objeto de imagem PIL para algo que o EasyOCR aceita (como bytes ou ndarray):
+            # import numpy as np
+            # imagem_array = np.array(imagem_obj)
+            # resultados_ocr = reader.readtext(imagem_array, ...)
+            # OU, se o EasyOCR aceitar diretamente o objeto PIL (testar):
+            resultados_ocr_pagina = reader.readtext(
+                image=imagem_obj, # EasyOCR geralmente aceita caminhos de arquivo, bytes, ou numpy array.
+                                    # Objetos PIL Image podem precisar de conversão.
+                                    # Se `imagem_obj` for um objeto PIL.Image:
+                                    # import numpy
+                                    # image=numpy.array(imagem_obj)
+                detail=0,       # detail=0 retorna apenas o texto
+                paragraph=True, # Tenta agrupar texto em parágrafos
+                batch_size=8,  # Ajustar conforme a VRAM da GPU ou capacidade da CPU
+                # y_ths=0.5, # Ajustes finos de detecção de linha
+                # low_text=0.4 # Limite inferior de confiança do texto
+                # contrast_ths=0.1, # Ajuste de contraste (se necessário, geralmente não)
+                # adjust_contrast=0.5 # Fator de ajuste de contraste (se necessário)
+            )
+            texto_pagina_ocr = "\n".join(resultados_ocr_pagina).strip()
+            
+            resultados_finais[num_pagina_real_1_based] = texto_pagina_ocr
+            logger.debug(f"Página {num_pagina_real_1_based} OCRizada. Texto (primeiros 50 chars): '{texto_pagina_ocr[:50].replace('\n', ' ')}...'")
+
+    except PDFInfoNotInstalledError:
+        logger.error("Poppler não está instalado ou não foi encontrado no PATH. Verifique a instalação do Poppler.", exc_info=True)
+        raise
+    except (PDFPageCountError, PDFSyntaxError) as e:
+        logger.error(f"Erro ao processar o PDF com pdf2image: {e}", exc_info=True)
+        raise
+    except Exception as e:
+        logger.error(f"Ocorreu um erro durante a extração de texto com OCR: {e}", exc_info=True)
+        raise
+    
+    logger.info(f"Extração OCR concluída. {len(resultados_finais)} página(s) processada(s).")
+    return resultados_finais
+
+# Exemplo de uso:
+# pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf'
+# pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf'  # 16 e 6
+
+# Extrair apenas as páginas 2, 5 e 8 (índices 1, 4 e 7 no sistema zero-based)
+# paginas_alvo = [15] # indices
+
+#for pagina, texto in texto_extraido.items():
+#    print(f"\n--- PÁGINA {pagina} ---")
+#    print(texto)
+
+# r = extrair_texto_pdf(pdf_path, paginas_alvo, poppler_path=poppler_path)
+
+'''
+for pagina, texto in texto_extraido.items():
+    with open(f"pagina_{pagina}_texto.txt", "w", encoding="utf-8") as f:
+        f.write(texto)
+'''
+
 
 ### --- Teste-Exemplo de uso --------------------------------------------------------------
 
-def test_example(pdf_path: str, token_limit_for_summary: int = 100000, page_indices_to_process: Optional[List[int]] = None):
-    if not os.path.exists(pdf_path):
-        print(f"Arquivo PDF de exemplo não encontrado: {pdf_path}")
+def test_example(pdf_paths: List[str], token_limit_for_summary: int = 100000): # Modificado para List[str]
+    if not pdf_paths:
+        print("Nenhum caminho de PDF fornecido para o teste.")
         return
+    
+    for pdf_path_item in pdf_paths:
+        if not os.path.exists(pdf_path_item):
+            print(f"Arquivo PDF de exemplo não encontrado: {pdf_path_item}")
+            return # Interrompe se um arquivo não for encontrado
 
     # 2. Instanciar o analisador de documentos com a estratégia escolhida
     analyzer = PDFDocumentAnalyzer()
 
-    # 3. Obter o número total de páginas (opcional, apenas para informação)
+    # 3. Informar os arquivos que serão processados
+    pdf_names_display = ", ".join([os.path.basename(p) for p in pdf_paths])
+    print(f"Analisando o(s) documento(s) PDF: {pdf_names_display}...\n")
+    
     try:
-        total_pages = analyzer.get_pdf_page_count(pdf_path)
-        print(f"O PDF '{os.path.basename(pdf_path)}' possui {total_pages} páginas.\n")
-    except Exception as e:
-        print(f"Erro ao obter contagem de páginas: {e}")
-        return
-
-    # 4. Analisar o documento PDF (todas as páginas ou um subconjunto)
-    # Para analisar páginas específicas, ex: page_indices = [0, 2, 4]
-    # Para analisar todas as páginas: page_indices = None
-    print(f"Analisando o documento PDF: {pdf_path}...")
-    try:
-        # page_indices_to_process = [i for i in range(min(5, total_pages))] # Ex: primeiras 5 páginas
+        # 4. Analisar o(s) documento(s) PDF em lote
+        # O método analyze_pdf_document_batch processa todas as páginas de todos os arquivos.
+        processed_data_batch = analyzer.analyze_pdf_document_batch(pdf_paths)
         
-        processed_data = analyzer.analyze_pdf_document(pdf_path, page_indices=page_indices_to_process)
-        
-        if not processed_data:
-            print("Nenhum dado foi processado.")
+        if not processed_data_batch:
+            print("Nenhum dado foi processado do(s) PDF(s).")
             return
 
-        print(f"\n--- Dados Processados por Página (primeiras 3 páginas ou menos) ---")
-        for i, (page_idx, data) in enumerate(processed_data.items()):
-            if i >= 3 and page_indices_to_process is None : # Limita a exibição para não poluir
+        print(f"\n--- Dados Processados por Página (primeiras 5 páginas globais ou menos) ---")
+        # Limita a exibição para não poluir o console em lotes grandes
+        display_limit = 5 
+        items_displayed_count = 0
+        for global_page_key, data in processed_data_batch.items():
+            if items_displayed_count >= display_limit:
                 print("...")
                 break
-            print(f"  Página {page_idx + 1}:")
+            
+            file_idx = data['file_index']
+            page_idx_in_file = data['page_index_in_file']
+            original_pdf_path_for_item = data['original_pdf_path'] # Renomeado para evitar conflito de nome
+            
+            print(f"  Arquivo {file_idx + 1} ({os.path.basename(original_pdf_path_for_item)}), Página {page_idx_in_file + 1} (Chave Global: {global_page_key}):")
             print(f"    Texto (primeiros 50 chars): '{data['texto'][:50]}...'")
             print(f"    Inteligível: {data['inteligible']}")
             print(f"    Palavras Únicas: {data['number_words']}")
-            print(f"    Tokens: {data['number_tokens']}")
+            print(f"    Tokens: {data['number_tokens']}") # model_name_for_tokens é usado internamente
             print(f"    Score TF-IDF: {data['tf_idf_score']:.4f}")
-            print(f"    Páginas Semelhantes (índices): {[s_idx + 1 for s_idx in data['semelhantes']]}")
+            print(f"    Páginas Semelhantes (chaves): {analyzer.format_global_keys_for_display(data['semelhantes'])}")
+            items_displayed_count +=1
         
-        # 5. Filtrar e classificar páginas
-        print("\n--- Classificando Páginas ---")
+        # 5. Filtrar e classificar páginas (baseado nos dados combinados)
+        print("\n--- Classificando Páginas (Resultado Combinado) ---")
         
         (relevant_indices, 
          unintelligible_indices, 
          count_selected, 
          count_discarded_similarity, 
-         count_discarded_unintelligible) = analyzer.filter_and_classify_pages(processed_data)
+         count_discarded_unintelligible) = analyzer.filter_and_classify_pages(processed_data_batch)
         
-        total_pages_in_report = len(processed_data) # Total de páginas que o processed_data continha
+        total_pages_in_report = len(processed_data_batch)
 
-        print(f"  Total de páginas analisadas (que tinham texto extraível): {total_pages_in_report}")
-        print(f"  Páginas Selecionadas como Relevantes: {count_selected} (Índices: {[idx + 1 for idx in relevant_indices]})")
-        print(f"  Páginas Descartadas por Ininteligibilidade: {count_discarded_unintelligible} (Índices: {[idx + 1 for idx in unintelligible_indices]})")
+        print(f"  Total de páginas globais analisadas (que tinham texto extraível): {total_pages_in_report}")
+        print(f"  Páginas Selecionadas como Relevantes: {count_selected} (Chaves: {analyzer.format_global_keys_for_display(relevant_indices)})")
+        print(f"  Páginas Descartadas por Ininteligibilidade: {count_discarded_unintelligible} (Chaves: {analyzer.format_global_keys_for_display(unintelligible_indices)})")
         print(f"  Páginas Descartadas por Similaridade (Redundância): {count_discarded_similarity}")
 
-        # Opcional: Calcular proporções
         if total_pages_in_report > 0:
             perc_selected = (count_selected / total_pages_in_report) * 100
             perc_discard_sim = (count_discarded_similarity / total_pages_in_report) * 100
@@ -871,12 +1105,13 @@ def test_example(pdf_path: str, token_limit_for_summary: int = 100000, page_indi
         # 6. Agrupar textos relevantes respeitando o limite de tokens
         if relevant_indices:
             print(f"\n--- Agrupando Texto Relevante (limite de {token_limit_for_summary} tokens) ---")
+            # model_name_for_tokens é usado internamente por group_texts_by_relevance_and_token_limit
             str_pages, aggregated_text, tokens_antes, tokens_depois = analyzer.group_texts_by_relevance_and_token_limit(
-                processed_page_data=processed_data,
-                relevant_page_indices=relevant_indices,
+                processed_page_data=processed_data_batch,
+                relevant_page_indices=relevant_indices, # Já são global_page_key
                 token_limit=token_limit_for_summary
             )
-            print(f"  Páginas consideradas para o texto agregado: {str_pages}\n")
+            print(f"  Páginas consideradas para o texto agregado (chaves formatadas): {str_pages}\n")
             print(f"  Texto Agregado (primeiros 300 caracteres):\n'{aggregated_text[:300]}...'\n")
             print(f"  Tokens das páginas selecionadas (antes da supressão): {tokens_antes}\n")
             print(f"  Tokens do texto agregado final (após supressão): {tokens_depois}\n")
@@ -887,23 +1122,220 @@ def test_example(pdf_path: str, token_limit_for_summary: int = 100000, page_indi
         else:
             print("\nNenhuma página relevante encontrada para agregação.")
         
-        return processed_data
+        # Não retorna mais processed_data, pois o teste é para exibição/verificação
     
-    except FileNotFoundError as fnf_err:
+    except FileNotFoundError as fnf_err: # Embora já verificado no início
         print(f"Erro: {fnf_err}")
-    except RuntimeError as rt_err: # Captura erros de extração, por exemplo
+    except RuntimeError as rt_err:
         print(f"Erro de execução: {rt_err}")
     except Exception as e:
         print(f"Ocorreu um erro inesperado durante a análise: {e}")
         import traceback
         traceback.print_exc()
 
+# Exemplo de como chamar a função test_example (atualizado para lista)
 r'''
+# Para testar com um único arquivo:
+# pdf_paths_to_test = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.013511_2025-29.pdf']
+
+# Para testar com múltiplos arquivos:
+pdf_paths_to_test = [
+    r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.013511_2025-29.pdf', # Exemplo de arquivo 1
+    r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf', # Exemplo de arquivo 2
+    # r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf' # Exemplo de arquivo 3 (opcional)
+]
+
+python -i teste_interativo.py
+
+pdf_paths = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf']
+
+pdf_paths = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\01_08500.014072_2025-71.pdf',
+             r'C:\Users\edson.eab\Downloads\PDFs-Testes\11_08500.014072_2025-71.pdf']
+
+test_example(pdf_paths)
 
 pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.013511_2025-29.pdf'
 pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf'
 pdf_path = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf'
 token_limit_for_summary = 100000
 processed_data = test_example(pdf_path)
+
+'''
+
+from rich.console import Console
+from rich.table import Table
+import time # Para medição de tempo manual
+import threading # Para execução paralela
+
+# Função worker que será executada em cada thread
+def _worker_extract_strategy_performance(
+    pdf_path: str,
+    strategy_instance: PDFTextExtractorStrategy,
+    results_list: list, # Lista para coletar resultados (compartilhada entre threads)
+    lock: threading.Lock # Lock para acesso seguro à results_list
+):
+    """
+    Função executada por cada thread para testar uma estratégia em um PDF.
+    """
+    pdf_name = os.path.basename(pdf_path)
+    strategy_name = strategy_instance.__class__.__name__
+    
+    # Logger específico para a thread para melhor rastreamento, se necessário,
+    # ou usar o logger global. Por simplicidade, usamos o logger global.
+    # logger.info(f"Thread iniciada para: {pdf_name} com {strategy_name}")
+
+    total_pages_str = "N/A"
+    time_extraction_str = "N/A"
+    total_chars_extracted_str = "N/A"
+    error_obs_thread = None
+
+    try:
+        # 1. Obter número de páginas
+        # Medição de tempo para get_total_pages pode ser menos crítica,
+        # mas incluída para consistência se desejado.
+        # _start_time_pages_thread = time.perf_counter()
+        total_pages = strategy_instance.get_total_pages(pdf_path)
+        # _time_pages_thread = time.perf_counter() - _start_time_pages_thread
+        total_pages_str = str(total_pages)
+
+        # 2. Extrair texto de todas as páginas e medir tempo
+        start_time_extraction_thread = time.perf_counter()
+        extracted_content_tuples = strategy_instance.extract_texts_from_pages(pdf_path, page_indices=None, check_inteligible=True)
+        time_extraction_thread = time.perf_counter() - start_time_extraction_thread
+
+        total_chars_extracted = sum(len(text) for _, text in extracted_content_tuples)
+        
+        time_extraction_str = f"{time_extraction_thread:.4f}"
+        time_extraction_str_by_page = f"{time_extraction_thread / total_pages:.4f}"
+        total_chars_extracted_str = str(total_chars_extracted)
+        
+        # Log dentro da thread (será intercalado no console)
+        logger.info(f"  Resultado Thread '{strategy_name}' para '{pdf_name}': {time_extraction_thread:.4f}s, {total_pages_str} pgs, {total_chars_extracted_str} chars.")
+
+    except NotImplementedError:
+        error_obs_thread = "Não Implementada"
+        logger.warning(f"  Thread '{strategy_name}' para '{pdf_name}': Não implementada.")
+    except Exception as e:
+        error_msg_thread = f"Erro: {type(e).__name__}"
+        error_obs_thread = error_msg_thread
+        logger.error(f"  ERRO Thread '{strategy_name}' para '{pdf_name}': {e}", exc_info=False) # exc_info=False para não poluir tanto o log de threads
+    
+    # Adiciona o resultado à lista compartilhada de forma thread-safe
+    with lock:
+        results_list.append({
+            "PDF": pdf_name,
+            "Strategy": strategy_name,
+            "Pages": total_pages_str,
+            "Extraction Time (s)": time_extraction_str,
+            "Extraction Time/Page (s)": time_extraction_str_by_page,
+            "Total Chars": total_chars_extracted_str,
+            "Error/Obs": error_obs_thread,
+            "_sort_key_pdf": pdf_name, # Para ordenação posterior
+            "_sort_key_strategy": strategy_name # Para ordenação posterior
+        })
+    # logger.info(f"Thread finalizada para: {pdf_name} com {strategy_name}")
+
+def test_extraction_strategies_performance(pdf_paths: List[str]):
+    """
+    Testa e compara o desempenho de diferentes estratégias de extração de texto
+    em uma lista de arquivos PDF, usando threads para processar cada estratégia em paralelo por PDF.
+    """
+    if not pdf_paths:
+        logger.warning("Nenhum caminho de PDF fornecido para o teste de desempenho de extração.")
+        return
+
+    valid_pdf_paths = []
+    for pdf_path_item in pdf_paths:
+        if not os.path.exists(pdf_path_item):
+            logger.error(f"Arquivo PDF de teste não encontrado: {pdf_path_item}. Pulando este arquivo.")
+        else:
+            valid_pdf_paths.append(pdf_path_item)
+
+    if not valid_pdf_paths:
+        logger.error("Nenhum arquivo PDF válido encontrado para o teste de desempenho.")
+        return
+
+    strategies_to_test: List[PDFTextExtractorStrategy] = [
+        FitzExtractor(),
+        PdfPlumberExtractor(),
+        PyPdfExtractor(),
+    ]
+
+    results_data_collected = [] # Lista para coletar resultados das threads
+    threads_list = []
+    results_collection_lock = threading.Lock() # Lock para proteger o acesso a results_data_collected
+
+    logger.info(f"--- Iniciando Teste de Desempenho de Extração (com Threads) para {len(valid_pdf_paths)} PDF(s) ---")
+    start_total_test_time = time.perf_counter()
+
+    for pdf_path_current in valid_pdf_paths:
+        pdf_name_current = os.path.basename(pdf_path_current)
+        logger.info(f"\nDisparando threads de extração para PDF: {pdf_name_current}")
+
+        for strategy_instance_current in strategies_to_test:
+            thread = threading.Thread(
+                target=_worker_extract_strategy_performance,
+                args=(pdf_path_current, strategy_instance_current, results_data_collected, results_collection_lock)
+            )
+            threads_list.append(thread)
+            thread.start()
+
+    # Aguarda todas as threads terminarem
+    logger.info(f"\nAguardando {len(threads_list)} threads de extração concluírem...")
+    for thread_item in threads_list:
+        thread_item.join()
+    
+    end_total_test_time = time.perf_counter()
+    total_test_duration = end_total_test_time - start_total_test_time
+    logger.info(f"Todas as threads concluídas. Tempo total do teste de desempenho: {total_test_duration:.2f}s")
+
+    # Ordenar os resultados para uma apresentação mais consistente na tabela
+    # (Opcional, mas bom se a ordem de conclusão das threads variar)
+    results_data_sorted = sorted(results_data_collected, key=lambda x: (x["_sort_key_pdf"], x["_sort_key_strategy"]))
+
+    # Imprimir tabela com Rich
+    if not results_data_sorted:
+        logger.info("\nNenhum resultado de desempenho para exibir na tabela.")
+        return
+
+    console = Console()
+    table = Table(title=f"Comparativo de Desempenho (Threads) - {len(valid_pdf_paths)} PDFs",
+                  show_header=True, header_style="bold magenta", show_lines=True)
+
+    table.add_column("Arquivo PDF", style="cyan", min_width=20, overflow="fold")
+    table.add_column("Estratégia", style="magenta", min_width=20)
+    table.add_column("Páginas", justify="right", style="green")
+    table.add_column("Tempo Extração Total (s)", justify="right", style="yellow")
+    table.add_column("Tempo Extração p/Page (s)", justify="right", style="yellow")
+    table.add_column("Total Caracteres", justify="right", style="blue")
+    table.add_column("Observação/Erro", style="red", min_width=15, overflow="fold")
+
+    for item in results_data_sorted:
+        table.add_row(
+            item["PDF"],
+            item["Strategy"],
+            item["Pages"],
+            item["Extraction Time (s)"],
+            item["Extraction Time/Page (s)"],
+            item["Total Chars"],
+            item["Error/Obs"] or ""
+        )
+    
+    print("\n")
+    console.print(table)
+    logger.info(f"--- Teste de Desempenho de Extração (com Threads) Concluído ---")
+
+# Exemplo de como chamar a nova função de teste (pode ser adicionado ao final do arquivo ou em um script de teste separado)
+r'''
+# Lista de PDFs para o teste de desempenho
+
+pdf_paths_for_perf_test = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.013511_2025-29.pdf',
+r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf',
+r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf']
+
+pdf_paths_for_perf_test = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf']
+
+test_extraction_strategies_performance(pdf_paths_for_perf_test)
+
 
 '''
