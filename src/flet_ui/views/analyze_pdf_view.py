@@ -279,9 +279,6 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         result_textfield.value = ""
         page.update(result_textfield, status_extraction_text, status_text_analysis, status_llm_text)
 
-    _uploaded_file_accumulator: List[Dict[str, Any]] = []
-    _expected_file_count = 0
-
     # --- Funções de Callback ---
 
     def individual_file_upload_complete_handler(success: bool, file_path_or_message: str, file_name: Optional[str]):
@@ -376,14 +373,10 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     )
 
     def handle_upload_pdf_click(e):
-        nonlocal _uploaded_file_accumulator, _expected_file_count
         _logger.debug("Botão 'Carregar PDF' clicado.")
-        
+    
         analyze_button.disabled = True
         page.update(analyze_button)
-        
-        _uploaded_file_accumulator = [] # Reseta acumulador para este lote de seleção
-        _expected_file_count = 0 # Será definido pelo número de arquivos em FilePickerResultEvent
 
         # A função pick_files do FilePicker quando allow_multiple=True
         # vai disparar on_result UMA VEZ com e.files contendo a lista de todos os arquivos selecionados.
