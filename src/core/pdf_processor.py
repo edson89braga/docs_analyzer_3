@@ -177,6 +177,7 @@ model_name_for_tokens: str = "gpt-3.5-turbo" # Adicionado para consistência com
 def preprocess_text_basic(text: str) -> str:
     """
     Realiza pré-processamento básico: remove espaços extras e converte para minúsculas.
+    Resultado usado para as funções count_tokens, count_words, e is_text_intelligible.
     """
     text = re.sub(r'\s+', ' ', text)
     return text.lower()
@@ -185,6 +186,8 @@ def preprocess_text_advanced(text: str) -> str:
     """
     Realiza pré-processamento avançado: remove caracteres especiais e pontuação,
     exceto os necessários para datas/horários, após o pré-processamento básico.
+
+    Resultado usado apenas para as funções analyze_text_similarity e calculate_text_relevance_tfidf.
     """
     text = preprocess_text_basic(text)
     text = re.sub(r'[^\w\sÀ-ÿ.,!?;:()\'\"-]', '', text)
@@ -228,7 +231,7 @@ def is_text_intelligible(text: str, cid_threshold: float = 0.7) -> bool:
     estimated_cid_chars_length = cid_occurrences * 6 # Uma estimativa conservadora
 
     if len(cleaned_text) > 0 and estimated_cid_chars_length / len(cleaned_text) > cid_threshold:
-        logger.debug(f"Texto considerado ininteligível devido à alta proporção de (cid:N) (>{cid_threshold*100}%).") # Adicione logger se disponível
+        #logger.debug(f"Texto considerado ininteligível devido à alta proporção de (cid:N) (>{cid_threshold*100}%).") # Adicione logger se disponível
         return False
 
     try:
@@ -247,19 +250,6 @@ def is_text_intelligible(text: str, cid_threshold: float = 0.7) -> bool:
 def count_tokens(text: str, model_name: str) -> int:
     """Wrapper para a função de contagem de tokens utilitária."""
     return util_count_tokens(text, model_name=model_name)
-
-def print_text_intelligibility(content_by_page: list[tuple[int, str]]):
-    print('\n')
-    texts_normalized = [(idx, preprocess_text_advanced(text)) for idx, text in texts_normalized]
-    for p_idx, text in texts_normalized:
-        is_intelligible = is_text_intelligible(text) 
-        if not is_intelligible:
-            try:
-                lang = detect(text)
-                logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
-            except LangDetectException:
-                logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
-    print('\n')
 
 ### text_analysis_utils: #########################################################################################
 import numpy as np
@@ -349,6 +339,18 @@ logger = LoggerSetup.get_logger(__name__)
 # Importa o inicializador do NLTK para garantir que os dados sejam baixados
 # import src.core.nltk_initializer (se fosse arquivo separado)
 
+def print_text_intelligibility(texts_normalized: list[tuple[int, str]]):
+    print('\n')
+    for p_idx, text in texts_normalized:
+        is_intelligible = is_text_intelligible(text) 
+        if not is_intelligible:
+            try:
+                lang = detect(text)
+                logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
+            except LangDetectException:
+                logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
+    print('\n')
+
 class PDFDocumentAnalyzer:
     """
     Classe principal para processamento e análise de documentos PDF.
@@ -364,128 +366,86 @@ class PDFDocumentAnalyzer:
     def _generate_global_page_key(self, file_index: int, page_index_in_file: int) -> str:
         """Gera uma chave única global para uma página. Ex: 'file0_page15'"""
         return f"file{file_index}_page{page_index_in_file}"
-    
-    def extract_texts_and_preprocess(self, pdf_path: str, page_indices: Optional[List[int]] = None):
+
+    def format_global_keys_for_display(self, global_keys: List[str]) -> str:
         """
-        Processa um PDF, extrai texto de cada página e realiza análises.
-
-        Args:
-            pdf_path (str): Caminho do arquivo PDF.
-            page_indices (Optional[List[int]]): Índices das páginas a serem processadas (base 0).
-                                                 Se None, todas as páginas são processadas.
-
-        Returns:
-            Dict[int, Dict[str, Any]]: Dicionário com dados de cada página processada,
-                                       incluindo texto, contagem de palavras/tokens,
-                                       inteligibilidade, score TF-IDF e páginas semelhantes.
-        """
-        if not os.path.exists(pdf_path):
-            logger.error(f"PDF não encontrado: {pdf_path}")
-            raise FileNotFoundError(f"PDF não encontrado: {pdf_path}")
-
-        logger.info(f'Processando PDF {os.path.basename(pdf_path)}')
-
-        try:
-            # 1. Extrair texto das páginas
-            # O método extract_texts_from_pages já lida com page_indices=None para todas as páginas
-            extracted_pages_content = self.extractor.extract_texts_from_pages(pdf_path, page_indices)
-            
-            if not extracted_pages_content:
-                logger.warning(f"Nenhum texto extraído do PDF {os.path.basename(pdf_path)} para os índices fornecidos.")
-                return {}
-
-            # Mapear os textos extraídos para facilitar o acesso e manter os índices originais
-            # Mesmo que page_indices seja fornecido, a lista retornada pode ser menor
-            # se alguns índices estiverem fora do intervalo ou não tiverem conteúdo.
-            # Vamos usar os índices retornados por extract_texts_from_pages como a fonte da verdade.
-
-            actual_indices = [idx for idx, _ in extracted_pages_content]
-            
-            # 2. Pré-processar textos
-            # Texto para armazenamento e exibição (preprocessamento básico)
-            texts_for_storage = {idx: preprocess_text_basic(text) for idx, text in extracted_pages_content}
-            # Texto para análises mais profundas (preprocessamento avançado)
-            texts_for_analysis = [preprocess_text_advanced(text) for _, text in extracted_pages_content]
-
-            return actual_indices, texts_for_storage, texts_for_analysis
-
-        except Exception as e:
-            logger.error(f"Erro ao processar PDF {os.path.basename(pdf_path)}: {str(e)}")
-            raise
-
-    def analyze_similarity_and_relevance(self, pdf_path, actual_indices, texts_for_storage, texts_for_analysis) -> Dict[int, Dict[str, Any]]:
-        """
-        Continuação da função extract_texts_and_preprocess.
-        """
-        try:
-            # 3. Realizar análises de similaridade e relevância
-            # É importante que texts_for_analysis corresponda à ordem dos actual_indices
-            # se formos mapear os resultados de volta para os índices originais.
-            similarity_matrix = analyze_text_similarity(texts_for_analysis)
-            tf_idf_scores_array = calculate_text_relevance_tfidf(texts_for_analysis)
-
-            # Mapear scores TF-IDF de volta aos índices originais das páginas
-            tf_idf_scores = {actual_indices[i]: tf_idf_scores_array[i] for i in range(len(actual_indices))}
-            
-            # 4. Montar dicionário de dados por página
-            processed_page_data: Dict[int, Dict[str, Any]] = {}
-
-            for i, original_page_index in enumerate(actual_indices):
-                text_stored = texts_for_storage[original_page_index]
-                
-                is_intelligible = is_text_intelligible(text_stored) # Usa o texto com pré-processamento básico
-                if not is_intelligible:
-                    try:
-                        lang = detect(text_stored)
-                        logger.warning(f'[red]Página original {original_page_index+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text_stored)}')
-                    except LangDetectException:
-                        logger.warning(f'[red]Página original {original_page_index+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text_stored)}')
-
-
-                # `get_similar_items_indices` espera um índice relativo à matriz de similaridade,
-                # que é `i` neste loop, pois `texts_for_analysis` foi usado para criar a matriz.
-                # Os índices retornados por `get_similar_items_indices` também são relativos.
-                # Precisamos mapeá-los de volta para os `actual_indices`.
-                relative_similar_indices = get_similar_items_indices(i, similarity_matrix)
-                absolute_similar_indices = [actual_indices[sim_idx] for sim_idx in relative_similar_indices]
-
-                processed_page_data[original_page_index] = {
-                    'texto': text_stored,
-                    'number_words': count_unique_words(text_stored),
-                    'number_tokens': count_tokens(text_stored, model_name=model_name_for_tokens), # Usando a função de utils
-                    'inteligible': is_intelligible,
-                    'tf_idf_score': round(tf_idf_scores.get(original_page_index, 0.0), 4),
-                    'semelhantes': absolute_similar_indices # Lista de índices de páginas originais
-                }
-            
-            return processed_page_data
-
-        except Exception as e:
-            logger.error(f"Erro ao processar PDF {os.path.basename(pdf_path)}: {str(e)}")
-            raise
-
-    @timing_decorator()
-    def analyze_pdf_document(self, pdf_path: str, page_indices: Optional[List[int]] = None) -> Dict[int, Dict[str, Any]]:
+        Converte uma lista de global_page_key em uma string formatada para display.
+        Exemplo: ["file0_page0", "file0_page1", "file0_page2", "file1_page0", "file1_page1"] => "Arq1 Pág1-3, Arq2 Pág1-2"
         
-        actual_indices, texts_for_storage, texts_for_analysis = self.extract_texts_and_preprocess(pdf_path, page_indices)
-        processed_page_data = self.analyze_similarity_and_relevance(pdf_path, actual_indices, texts_for_storage, texts_for_analysis)
+        Args:
+            global_keys (List[str]): Lista de global_page_key (str)
+        
+        Returns:
+            str: String formatada para display
+        """
+        if not global_keys: return "Nenhuma"
+        
+        parsed_pages = []
+        for key in global_keys:
+            match = re.match(r"file(\d+)_page(\d+)", key)
+            if match:
+                file_num = int(match.group(1)) + 1 # Para ser 1-based
+                page_num = int(match.group(2)) + 1 # Para ser 1-based
+                parsed_pages.append({'file': file_num, 'page': page_num, 'original_key': key})
+        
+        if not parsed_pages: return ", ".join(global_keys) # Fallback
 
-        return processed_page_data
+        # Ordena primeiro por arquivo, depois por página
+        parsed_pages.sort(key=lambda x: (x['file'], x['page']))
+        
+        output_parts = []
+        current_file = -1
+        current_interval_start = -1
+        
+        for p_info in parsed_pages:
+            if p_info['file'] != current_file: # Mudou de arquivo
+                if current_interval_start != -1: # Fecha intervalo anterior
+                    if current_page_in_interval == current_interval_start:
+                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
+                    else:
+                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
+                current_file = p_info['file']
+                current_interval_start = p_info['page']
+                current_page_in_interval = p_info['page']
+            elif p_info['page'] == current_page_in_interval + 1: # Continua intervalo
+                current_page_in_interval = p_info['page']
+            else: # Quebrou intervalo no mesmo arquivo
+                if current_interval_start != -1:
+                    if current_page_in_interval == current_interval_start:
+                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
+                    else:
+                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
+                current_interval_start = p_info['page']
+                current_page_in_interval = p_info['page']
+        
+        # Fecha o último intervalo
+        if current_interval_start != -1:
+            if current_page_in_interval == current_interval_start:
+                output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
+            else:
+                output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
+                
+        return ", ".join(output_parts) if output_parts else "Nenhuma"
+
+    ### ======================================================================================
 
     @timing_decorator()
-    def extract_texts_and_preprocess_batch(self, pdf_paths_ordered: List[str]) -> Tuple[Dict[str, Dict[str, Any]], List[str], List[str]]:
+    def extract_texts_and_preprocess_files(self, pdf_paths_ordered: List[str]) -> Tuple[List[Tuple[int, str]], List[List[int]], List[Dict[int, str]], List[str]]:
         """
-        Processa um lote de PDFs ordenados, extrai texto e realiza análises.
-        As chaves do dicionário de resultado são prefixadas com o índice do arquivo.
-        Retorna uma tupla: (dados_processados_combinados, textos_para_analise_combinados, chaves_globais_ordenadas)
+        Extrai textos de um lote de PDFs ordenados e os pré-processa.
+        Retorna uma tupla contendo metadados dos arquivos processados, listas de índices de páginas,
+        textos pré-processados para armazenamento e textos pré-processados para análise.
+        Retorna uma tupla: (processed_files_metadata, all_indices_in_batch, 
+                            all_texts_for_storage_combined, all_texts_for_analysis_combined)
         """
         if not pdf_paths_ordered:
             logger.warning("Nenhum caminho de PDF fornecido para análise em lote.")
-            return {}, [], []
+            return [], [], [], []
 
-        combined_processed_page_data: Dict[str, Dict[str, Any]] = {}
+        processed_files_metadata: List[Tuple[int, str]] = [] # ARMAZENA (original_file_idx, pdf_path)
+        all_indices_in_batch: List[List[int]] = []
+        all_texts_for_storage_combined: List[Dict[int, str]] = []
         all_texts_for_analysis_combined: List[str] = []
-        all_global_page_keys_ordered: List[str] = [] 
 
         for file_idx, pdf_path in enumerate(pdf_paths_ordered):
             if not os.path.exists(pdf_path):
@@ -503,50 +463,65 @@ class PDFDocumentAnalyzer:
                 actual_indices_in_file = [idx for idx, _ in extracted_pages_content_single_file]
                 texts_for_storage_single_file = {idx: preprocess_text_basic(text) for idx, text in extracted_pages_content_single_file}
                 texts_for_analysis_single_file = [preprocess_text_advanced(text) for _, text in extracted_pages_content_single_file]
+
+                processed_files_metadata.append((file_idx, pdf_path)) 
+                all_indices_in_batch.append(actual_indices_in_file)
+                all_texts_for_storage_combined.append(texts_for_storage_single_file)
+                all_texts_for_analysis_combined.extend(texts_for_analysis_single_file)
                 
-                for i, text_to_analyze in enumerate(texts_for_analysis_single_file):
-                    
-                    page_idx_in_file = actual_indices_in_file[i]
-                    global_page_key = self._generate_global_page_key(file_idx, page_idx_in_file)
-                    all_global_page_keys_ordered.append(global_page_key)
-                    
-                    text_stored = texts_for_storage_single_file[page_idx_in_file]
-                    all_texts_for_analysis_combined.append(text_to_analyze)
-                    
-
-                    combined_processed_page_data[global_page_key] = {
-                        'texto': text_stored,
-                        'number_words': count_unique_words(text_stored),
-                        'number_tokens': count_tokens(text_stored, model_name=model_name_for_tokens),
-                        'inteligible': is_text_intelligible(text_stored),
-                        'tf_idf_score': 0.0, 
-                        'semelhantes': [],
-                        'file_index': file_idx, 
-                        'page_index_in_file': page_idx_in_file,
-                        'original_pdf_path': pdf_path
-                    }
-
             except Exception as e:
                 logger.error(f"Erro ao processar (extração/pré-proc) arquivo {os.path.basename(pdf_path)}: {e}", exc_info=True)
                 continue 
 
         if not all_texts_for_analysis_combined:
             logger.warning("Nenhum texto para análise combinado de todos os arquivos.")
-            # Retorna o combined_processed_page_data que pode ter sido parcialmente preenchido
-            # e listas vazias para os outros dois valores.
-            return combined_processed_page_data, [], []
+        else:
+            logger.info(f"Extração e pré-processamento em lote concluídos. Total de páginas com texto para análise: {len(all_texts_for_analysis_combined)}")
+        
+        return processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined
 
-        logger.info(f"Extração e pré-processamento em lote concluídos. Total de páginas com texto para análise: {len(all_texts_for_analysis_combined)}")
-        return combined_processed_page_data, all_texts_for_analysis_combined, all_global_page_keys_ordered
-       
+    def _build_combined_page_data(self, 
+                                        processed_files_metadata: List[Tuple[int, str]], 
+                                        all_indices_in_batch: List[List[int]],
+                                        all_texts_for_storage_combined: List[Dict[int, str]]
+                                       ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+        
+        combined_processed_page_data: Dict[str, Dict[str, Any]] = {}
+        all_global_page_keys_ordered: List[str] = [] 
+        
+        for processed_list_idx, (file_idx, pdf_path) in enumerate(processed_files_metadata):
+
+            actual_indices_in_file = all_indices_in_batch[processed_list_idx]
+            texts_for_storage_single_file = all_texts_for_storage_combined[processed_list_idx]
+
+            for page_idx_in_file in actual_indices_in_file:
+                text_stored = texts_for_storage_single_file[page_idx_in_file]
+            
+                global_page_key = self._generate_global_page_key(file_idx, page_idx_in_file)
+                all_global_page_keys_ordered.append(global_page_key)
+
+                combined_processed_page_data[global_page_key] = {
+                    'texto': text_stored,
+                    'number_words': count_unique_words(text_stored),
+                    'number_tokens': count_tokens(text_stored, model_name=model_name_for_tokens),
+                    'inteligible': is_text_intelligible(text_stored),
+                    'tf_idf_score': 0.0, 
+                    'semelhantes': [],
+                    'file_index': file_idx, 
+                    'page_index_in_file': page_idx_in_file,
+                    'original_pdf_path': pdf_path
+                }
+            
+        return combined_processed_page_data, all_global_page_keys_ordered
+
     @timing_decorator()
-    def analyze_similarity_and_relevance_batch(self, combined_processed_page_data: Dict[str, Dict[str, Any]], 
-                                               all_texts_for_analysis_combined: List[str], 
-                                               all_global_page_keys_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
+    def analyze_similarity_and_relevance_files(self, combined_processed_page_data: Dict[str, Dict[str, Any]], all_global_page_keys_ordered: List[str], 
+                                               all_texts_for_analysis_combined: List[str]) -> Dict[str, Dict[str, Any]]:
         """
-        Processa um lote de PDFs ordenados, extrai texto e realiza análises.
-        As chaves do dicionário de resultado são prefixadas com o índice do arquivo.
-        """   
+        Analisa a similaridade textual e calcula os scores TF-IDF para um conjunto combinado de textos.
+        Atualiza o dicionário `combined_processed_page_data` com os scores de TF-IDF e 
+        listas de páginas semelhantes.
+        """
 
         # --- 2. Análise de Similaridade e TF-IDF (COMBINADA para todos os arquivos) ---
         logger.info(f"Realizando análise de similaridade e TF-IDF para {len(all_texts_for_analysis_combined)} páginas combinadas.")
@@ -572,13 +547,26 @@ class PDFDocumentAnalyzer:
         return combined_processed_page_data
 
     @timing_decorator()
-    def analyze_pdf_document_batch(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
+    def analyze_pdf_documents(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
         
-        combined_processed_page_data, all_texts_for_analysis_combined, all_global_page_keys_ordered = self.extract_texts_and_preprocess_batch(pdf_paths_ordered)
-        combined_processed_page_data = self.analyze_similarity_and_relevance_batch(combined_processed_page_data, all_texts_for_analysis_combined, all_global_page_keys_ordered)
+        processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined = self.extract_texts_and_preprocess_files(pdf_paths_ordered)
+        if not processed_files_metadata:
+            logger.warning("Nenhum arquivo PDF produziu dados na fase de extração.")
+            return {}
+    
+        combined_processed_page_data, all_global_page_keys_ordered = self._build_combined_page_data(processed_files_metadata, 
+                                                                            all_indices_in_batch, all_texts_for_storage_combined)
+
+        if not all_texts_for_analysis_combined:
+            logger.warning("Nenhum texto para análise combinado de todos os arquivos. Pulando análise de similaridade e relevância.")
+            return combined_processed_page_data
+        
+        combined_processed_page_data = self.analyze_similarity_and_relevance_files(combined_processed_page_data, all_global_page_keys_ordered, all_texts_for_analysis_combined)
 
         return combined_processed_page_data
-    
+   
+    ### ======================================================================================
+
     @timing_decorator()
     def filter_and_classify_pages(
         self, 
@@ -690,63 +678,13 @@ class PDFDocumentAnalyzer:
             discarded_by_unintelligibility_count
         )
 
-    def format_global_keys_for_display(self, global_keys: List[str]) -> str:
-        if not global_keys: return "Nenhuma"
-        
-        parsed_pages = []
-        for key in global_keys:
-            match = re.match(r"file(\d+)_page(\d+)", key)
-            if match:
-                file_num = int(match.group(1)) + 1 # Para ser 1-based
-                page_num = int(match.group(2)) + 1 # Para ser 1-based
-                parsed_pages.append({'file': file_num, 'page': page_num, 'original_key': key})
-        
-        if not parsed_pages: return ", ".join(global_keys) # Fallback
-
-        # Ordena primeiro por arquivo, depois por página
-        parsed_pages.sort(key=lambda x: (x['file'], x['page']))
-        
-        output_parts = []
-        current_file = -1
-        current_interval_start = -1
-        
-        for p_info in parsed_pages:
-            if p_info['file'] != current_file: # Mudou de arquivo
-                if current_interval_start != -1: # Fecha intervalo anterior
-                    if current_page_in_interval == current_interval_start:
-                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
-                    else:
-                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
-                current_file = p_info['file']
-                current_interval_start = p_info['page']
-                current_page_in_interval = p_info['page']
-            elif p_info['page'] == current_page_in_interval + 1: # Continua intervalo
-                current_page_in_interval = p_info['page']
-            else: # Quebrou intervalo no mesmo arquivo
-                if current_interval_start != -1:
-                    if current_page_in_interval == current_interval_start:
-                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
-                    else:
-                        output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
-                current_interval_start = p_info['page']
-                current_page_in_interval = p_info['page']
-        
-        # Fecha o último intervalo
-        if current_interval_start != -1:
-            if current_page_in_interval == current_interval_start:
-                output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
-            else:
-                output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
-                
-        return ", ".join(output_parts) if output_parts else "Nenhuma"
-
     @timing_decorator()
     def group_texts_by_relevance_and_token_limit(
         self,
         processed_page_data: Dict[str, Dict[str, Any]], # Chave é global_page_key (str)
         relevant_page_indices: List[str], # Lista de global_page_key (str)
         token_limit: int,
-    ) -> Tuple[str, str, int, int]: # <--- MODIFICADO: Adicionado retorno para contagens de tokens
+    ) -> Tuple[str, str, int, int]: 
         """
         Agrupa textos de páginas relevantes, respeitando um limite de tokens.
         Os textos são concatenados na ordem original das páginas,
@@ -768,12 +706,11 @@ class PDFDocumentAnalyzer:
                 - Total de tokens das páginas selecionadas ANTES de qualquer truncamento.
                 - Total de tokens do texto acumulado FINAL (após truncamento, se houver).
         """
-        current_total_tokens_final = 0 # Renomeado para clareza, este será o total final
-        # NOVO: Variável para rastrear tokens totais das páginas selecionadas antes do truncamento
-        total_tokens_before_truncation = 0
-        considered_page_indices_for_output = []
-
+        current_total_tokens_final = 0 # Total final
+        total_tokens_before_truncation = 0 # Variável para rastrear tokens totais das páginas selecionadas antes do truncamento
         texts_for_concatenation = {}
+
+        assert len(relevant_page_indices) == len(set(relevant_page_indices))
 
         limit_reached = False
         for page_idx in relevant_page_indices:
@@ -783,14 +720,13 @@ class PDFDocumentAnalyzer:
                 continue
 
             page_text = processed_page_data[page_idx]['texto']
-            # Usar a função count_tokens que agora aceita model_name
+            
             page_tokens = count_tokens(page_text, model_name=model_name_for_tokens)
 
-            # NOVO: Adicionar tokens desta página ao total antes do truncamento
+            # Adicionar tokens desta página ao total antes do truncamento
             # Isso acontece independentemente de a página ser totalmente incluída, parcialmente ou não.
             # Estamos interessados no total das páginas que *tentamos* incluir.
-            if page_idx not in considered_page_indices_for_output:
-                total_tokens_before_truncation += page_tokens
+            total_tokens_before_truncation += page_tokens
 
             if limit_reached:
                 continue
@@ -798,45 +734,148 @@ class PDFDocumentAnalyzer:
             if current_total_tokens_final + page_tokens <= token_limit:
                 texts_for_concatenation[page_idx] = page_text
                 current_total_tokens_final += page_tokens
-                if page_idx not in considered_page_indices_for_output:
-                    considered_page_indices_for_output.append(page_idx)
             else:
                 remaining_token_budget = token_limit - current_total_tokens_final
                 if remaining_token_budget > 0:
-                    # Usar a função reduce_text_to_limit que agora aceita model_name
+                    
+                    # Usar a função reduce_text_to_limit 
                     partial_text = reduce_text_to_limit(page_text, remaining_token_budget, model_name=model_name_for_tokens)
                     texts_for_concatenation[page_idx] = partial_text
+                    
                     # Recalcular tokens do texto parcial para precisão
                     current_total_tokens_final += count_tokens(partial_text, model_name=model_name_for_tokens)
-                    if page_idx not in considered_page_indices_for_output:
-                        considered_page_indices_for_output.append(page_idx)
+                    
                     logger.info(f'Texto da página {page_idx} reduzido para caber no limite de tokens.')
                     limit_reached = True
 
-        #sorted_indices_for_concatenation = sorted(texts_for_concatenation.keys())
-        accumulated_text_parts = []
-        final_considered_indices_for_output = []
-        
-        # accumulated_text_parts = [texts_for_concatenation[idx] for idx in sorted_indices_for_concatenation]
-        # Itera na ordem de relevância (que já considera os melhores de cada arquivo)
-        for page_idx_global_key in relevant_page_indices: 
-            if page_idx_global_key in texts_for_concatenation: # Se foi selecionado para inclusão (total ou parcial)
-                accumulated_text_parts.append(texts_for_concatenation[page_idx_global_key])
-                final_considered_indices_for_output.append(page_idx_global_key) # Adiciona na ordem de relevância/processamento
+        def get_sortable_page_key(global_key: str) -> Tuple[int, int]:
+            # Função para extrair (file_idx, page_idx_in_file) para ordenação
+            # formato exato de _generate_global_page_key: exemplo: "file0_page10"
+            parts = global_key.replace("file", "").replace("page", "").split('_')
+            return int(parts[0]), int(parts[1])
 
+        keys_of_included_texts = list(texts_for_concatenation.keys())
+        logically_sorted_keys = sorted(keys_of_included_texts, key=get_sortable_page_key)
+
+        accumulated_text_parts = [texts_for_concatenation[key] for key in logically_sorted_keys]
         accumulated_text = " ".join(accumulated_text_parts).strip()
-        
-        # RECALCULAR tokens finais do texto agregado para máxima precisão,
-        # pois o join(" ") pode adicionar/remover tokens.
+
+        # Recalcula tokens finais do texto agregado para máxima precisão, pois o join(" ") pode adicionar/remover tokens.
         final_aggregated_tokens = count_tokens(accumulated_text, model_name=model_name_for_tokens)
 
-        #str_pages_considered = get_string_intervalos(sorted(considered_page_indices_for_output), incrementa_1=True)
-        
-        #str_pages_considered = ", ".join(final_considered_indices_for_output)
-        str_pages_considered = self.format_global_keys_for_display(final_considered_indices_for_output)
+        str_pages_considered = self.format_global_keys_for_display(logically_sorted_keys)      
 
-        # MODIFICADO: Retornar as duas contagens de tokens
         return str_pages_considered, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
+
+    ### Métodos single_file com diferencial de argumentar page_indices. Avaliar se mantém ou descontinua. 
+
+    def extract_texts_and_preprocess(self, pdf_path: str, page_indices: Optional[List[int]] = None):
+        """
+        Processa um PDF, extrai texto de cada página e realiza análises.
+
+        Args:
+            pdf_path (str): Caminho do arquivo PDF.
+            page_indices (Optional[List[int]]): Índices das páginas a serem processadas (base 0).
+                                                 Se None, todas as páginas são processadas.
+
+        Returns:
+            Dict[int, Dict[str, Any]]: Dicionário com dados de cada página processada,
+                                       incluindo texto, contagem de palavras/tokens,
+                                       inteligibilidade, score TF-IDF e páginas semelhantes.
+        """
+        if not os.path.exists(pdf_path):
+            logger.error(f"PDF não encontrado: {pdf_path}")
+            raise FileNotFoundError(f"PDF não encontrado: {pdf_path}")
+
+        logger.info(f'Processando PDF {os.path.basename(pdf_path)}')
+
+        try:
+            # 1. Extrair texto das páginas
+            # O método extract_texts_from_pages já lida com page_indices=None para todas as páginas
+            extracted_pages_content = self.extractor.extract_texts_from_pages(pdf_path, page_indices)
+            
+            if not extracted_pages_content:
+                logger.warning(f"Nenhum texto extraído do PDF {os.path.basename(pdf_path)} para os índices fornecidos.")
+                return {}
+
+            # Mapear os textos extraídos para facilitar o acesso e manter os índices originais
+            # Mesmo que page_indices seja fornecido, a lista retornada pode ser menor
+            # se alguns índices estiverem fora do intervalo ou não tiverem conteúdo.
+            # Vamos usar os índices retornados por extract_texts_from_pages como a fonte da verdade.
+
+            actual_indices = [idx for idx, _ in extracted_pages_content]
+            
+            # 2. Pré-processar textos
+            # Texto para armazenamento e exibição (preprocessamento básico)
+            texts_for_storage = {idx: preprocess_text_basic(text) for idx, text in extracted_pages_content}
+            # Texto para análises mais profundas (preprocessamento avançado)
+            texts_for_analysis = [preprocess_text_advanced(text) for _, text in extracted_pages_content]
+
+            return actual_indices, texts_for_storage, texts_for_analysis
+
+        except Exception as e:
+            logger.error(f"Erro ao processar PDF {os.path.basename(pdf_path)}: {str(e)}")
+            raise
+
+    def analyze_similarity_and_relevance(self, pdf_path, actual_indices, texts_for_storage, texts_for_analysis) -> Dict[int, Dict[str, Any]]:
+        """
+        Continuação da função extract_texts_and_preprocess.
+        """
+        try:
+            # 3. Realizar análises de similaridade e relevância
+            # É importante que texts_for_analysis corresponda à ordem dos actual_indices
+            # se formos mapear os resultados de volta para os índices originais.
+            similarity_matrix = analyze_text_similarity(texts_for_analysis)
+            tf_idf_scores_array = calculate_text_relevance_tfidf(texts_for_analysis)
+
+            # Mapear scores TF-IDF de volta aos índices originais das páginas
+            tf_idf_scores = {actual_indices[i]: tf_idf_scores_array[i] for i in range(len(actual_indices))}
+            
+            # 4. Montar dicionário de dados por página
+            processed_page_data: Dict[int, Dict[str, Any]] = {}
+
+            for i, original_page_index in enumerate(actual_indices):
+                text_stored = texts_for_storage[original_page_index]
+                
+                is_intelligible = is_text_intelligible(text_stored) # Usa o texto com pré-processamento básico
+                if not is_intelligible:
+                    try:
+                        lang = detect(text_stored)
+                        logger.warning(f'[red]Página original {original_page_index+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text_stored)}')
+                    except LangDetectException:
+                        logger.warning(f'[red]Página original {original_page_index+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text_stored)}')
+
+
+                # `get_similar_items_indices` espera um índice relativo à matriz de similaridade,
+                # que é `i` neste loop, pois `texts_for_analysis` foi usado para criar a matriz.
+                # Os índices retornados por `get_similar_items_indices` também são relativos.
+                # Precisamos mapeá-los de volta para os `actual_indices`.
+                relative_similar_indices = get_similar_items_indices(i, similarity_matrix)
+                absolute_similar_indices = [actual_indices[sim_idx] for sim_idx in relative_similar_indices]
+
+                processed_page_data[original_page_index] = {
+                    'texto': text_stored,
+                    'number_words': count_unique_words(text_stored),
+                    'number_tokens': count_tokens(text_stored, model_name=model_name_for_tokens), # Usando a função de utils
+                    'inteligible': is_intelligible,
+                    'tf_idf_score': round(tf_idf_scores.get(original_page_index, 0.0), 4),
+                    'semelhantes': absolute_similar_indices # Lista de índices de páginas originais
+                }
+            
+            return processed_page_data
+
+        except Exception as e:
+            logger.error(f"Erro ao processar PDF {os.path.basename(pdf_path)}: {str(e)}")
+            raise
+
+    @timing_decorator()
+    def analyze_pdf_document(self, pdf_path: str, page_indices: Optional[List[int]] = None) -> Dict[int, Dict[str, Any]]:
+        
+        actual_indices, texts_for_storage, texts_for_analysis = self.extract_texts_and_preprocess(pdf_path, page_indices)
+        processed_page_data = self.analyze_similarity_and_relevance(pdf_path, actual_indices, texts_for_storage, texts_for_analysis)
+
+        return processed_page_data
+
 
 ### Func OCR #########################################################################################
 import easyocr
@@ -1022,7 +1061,7 @@ for pagina, texto in result.items():
 
 ### Funcs Testes #########################################################################################
 
-def test_example_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 100000): # Modificado para List[str]
+def test_examples_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 100000): # Modificado para List[str]
     if not pdf_paths:
         print("Nenhum caminho de PDF fornecido para o teste.")
         return
@@ -1042,7 +1081,7 @@ def test_example_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 1
     try:
         # 4. Analisar o(s) documento(s) PDF em lote
         # O método analyze_pdf_document_batch processa todas as páginas de todos os arquivos.
-        processed_data_batch = analyzer.analyze_pdf_document_batch(pdf_paths)
+        processed_data_batch = analyzer.analyze_pdf_documents(pdf_paths)
         
         if not processed_data_batch:
             print("Nenhum dado foi processado do(s) PDF(s).")
@@ -1324,4 +1363,208 @@ test_extraction_strategies_performance(pdf_paths_for_perf_test)
 
 
 '''
+
+### Funcs Testes extras:
+
+def build_key_map_for_parts(processor: PDFDocumentAnalyzer, part_pdf_paths: List[str]) -> Tuple[Dict[str, str], List[str]]:
+    """
+    Constrói um mapa de chaves das partes para as chaves equivalentes do cenário de PDF único.
+    Retorna o mapa e a lista ordenada de chaves globais das partes.
+    """
+    key_map_parts_to_single: Dict[str, str] = {}
+    
+    # Executa os passos iniciais para obter as chaves globais ordenadas das partes
+    processed_files_metadata_p, indices_p, storage_p, _ = \
+        processor.extract_texts_and_preprocess_files(part_pdf_paths)
+
+    _, all_global_page_keys_ordered_p = \
+        processor._build_combined_page_data(processed_files_metadata_p, indices_p, storage_p)
+
+    # Cria o mapa: a chave da parte mapeia para uma chave como se fosse do PDF único (file_index 0)
+    for i, part_key in enumerate(all_global_page_keys_ordered_p):
+        # A chave equivalente no cenário de PDF único teria file_index 0 e page_index_in_file sequencial
+        single_equivalent_key = f"file0_page{i}" 
+        key_map_parts_to_single[part_key] = single_equivalent_key
+        
+    return key_map_parts_to_single, all_global_page_keys_ordered_p
+
+def adjust_result_parts(
+    result_parts_raw: Dict[str, Dict[str, Any]], 
+    key_map_parts_to_single: Dict[str, str],
+    original_pdf_path_single: str
+) -> Dict[str, Dict[str, Any]]:
+    """Ajusta o resultado das partes para ser comparável com o resultado do PDF único."""
+    result_parts_adjusted: Dict[str, Dict[str, Any]] = {}
+
+    for part_key, page_data_part in result_parts_raw.items():
+        if part_key not in key_map_parts_to_single:
+            logger.warning(f"Chave da parte '{part_key}' não encontrada no mapa de chaves. Pulando esta página.")
+            continue
+
+        single_key_equivalent = key_map_parts_to_single[part_key]
+        
+        adjusted_page_data = page_data_part.copy()
+        adjusted_page_data['file_index'] = 0 # Corrigido para o cenário de PDF único
+        adjusted_page_data['original_pdf_path'] = original_pdf_path_single # Corrigido
+        
+        # page_index_in_file é o índice da página DENTRO do arquivo original único
+        # Derivado da single_key_equivalent (formato "0_X")
+        try:
+            page_index_str = single_key_equivalent.split('_page')[-1] 
+            adjusted_page_data['page_index_in_file'] = int(page_index_str)
+        except (IndexError, ValueError):
+            logger.error(f"Não foi possível derivar page_index_in_file de '{single_key_equivalent}'.")
+            # Pode ser necessário pular esta página ou atribuir um valor padrão.
+            # Por agora, mantenha o antigo se falhar, mas logue o erro.
+
+        # Ajustar chaves 'semelhantes'
+        adjusted_semelhantes = []
+        if 'semelhantes' in page_data_part and isinstance(page_data_part['semelhantes'], list):
+            for sk_part in page_data_part['semelhantes']:
+                if sk_part in key_map_parts_to_single:
+                    adjusted_semelhantes.append(key_map_parts_to_single[sk_part])
+                else:
+                    logger.warning(f"Chave semelhante '{sk_part}' da parte não encontrada no mapa para '{part_key}'.")
+        adjusted_page_data['semelhantes'] = sorted(adjusted_semelhantes) # Ordenar para comparação consistente
+
+        result_parts_adjusted[single_key_equivalent] = adjusted_page_data
+        
+    return result_parts_adjusted
+
+def compare_page_results(key: str, data_single: Dict[str, Any], data_part_adj: Dict[str, Any]) -> bool:
+    """Compara os dados de uma única página, reportando diferenças."""
+    import math
+    is_equivalent = True
+    logger.info(f"\n--- Comparando página com chave (equivalente single): {key} ---")
+
+    fields_to_compare = [
+        'texto', 'number_words', 'number_tokens', 
+        'inteligible', 'file_index', 'page_index_in_file', 'original_pdf_path'
+    ]
+    float_fields = ['tf_idf_score']
+
+    for field in fields_to_compare:
+        val_single = data_single.get(field)
+        val_part = data_part_adj.get(field)
+        if val_single != val_part:
+            logger.warning(f"  DIFERENÇA em '{field}':")
+            logger.warning(f"    Single: {val_single}")
+            logger.warning(f"    Partes: {val_part}")
+            is_equivalent = False
+        else:
+            logger.info(f"  OK '{field}': {val_single}")
+
+    for field in float_fields:
+        val_single = data_single.get(field, 0.0)
+        val_part = data_part_adj.get(field, 0.0)
+        if not math.isclose(val_single, val_part, rel_tol=1e-4, abs_tol=1e-4): # Tolerância para floats
+            logger.warning(f"  DIFERENÇA em '{field}':")
+            logger.warning(f"    Single: {val_single}")
+            logger.warning(f"    Partes: {val_part}")
+            is_equivalent = False
+        else:
+            logger.info(f"  OK '{field}': {val_single}")
+            
+    # Comparar 'semelhantes' (como conjuntos, pois a ordem foi ajustada para sorted list)
+    semelhantes_single = set(data_single.get('semelhantes', []))
+    semelhantes_part = set(data_part_adj.get('semelhantes', []))
+    if semelhantes_single != semelhantes_part:
+        logger.warning(f"  DIFERENÇA em 'semelhantes':")
+        logger.warning(f"    Single: {sorted(list(semelhantes_single))}")
+        logger.warning(f"    Partes: {sorted(list(semelhantes_part))}")
+        is_equivalent = False
+    else:
+        logger.info(f"  OK 'semelhantes': {sorted(list(semelhantes_single))}")
+        
+    return is_equivalent
+
+def test_bacths_results():
+    """Função principal do teste interativo."""
+    original_pdf = r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf'
+    parts_pdfs = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\01_08500.014072_2025-71.pdf',
+                  r'C:\Users\edson.eab\Downloads\PDFs-Testes\11_08500.014072_2025-71.pdf']
+
+    if not original_pdf or not parts_pdfs:
+        logger.info("Inputs inválidos. Encerrando o teste.")
+        return
+
+    processor = PDFDocumentAnalyzer()
+
+    # --- Cenário 1: PDF Único ---
+    logger.info(f"\n=== Processando PDF ÚNICO: {original_pdf} ===")
+    result_single_pdf = processor.analyze_pdf_documents([original_pdf])
+    if not result_single_pdf:
+        logger.error("Falha ao processar o PDF único. Não é possível continuar a comparação.")
+        return
+
+    # --- Cenário 2: PDFs Particionados ---
+    logger.info(f"\n=== Processando PDFs PARTICIONADOS: {parts_pdfs} ===")
+    result_parts_raw = processor.analyze_pdf_documents(parts_pdfs)
+    if not result_parts_raw:
+        logger.error("Falha ao processar os PDFs particionados. Não é possível continuar a comparação.")
+        return
+
+    # Construir o mapa de chaves para ajustar os resultados das partes
+    key_map, _ = build_key_map_for_parts(processor, parts_pdfs)
+    if not key_map:
+         logger.error("Mapa de chaves não pôde ser construído. Verifique os logs de 'build_key_map_for_parts'.")
+         return
+
+    # Ajustar os resultados das partes para serem comparáveis
+    result_parts_adjusted = adjust_result_parts(result_parts_raw, key_map, original_pdf)
+
+    # --- Comparação ---
+    logger.info("\n=== COMPARAÇÃO DOS RESULTADOS ===")
+    
+    # Verificar se o número de páginas processadas é o mesmo
+    num_pages_single = len(result_single_pdf)
+    num_pages_parts = len(result_parts_adjusted)
+
+    logger.info(f"Número de páginas (após extração e combinação):")
+    logger.info(f"  PDF Único: {num_pages_single}")
+    logger.info(f"  PDFs Particionados (ajustado): {num_pages_parts}")
+
+    if num_pages_single == 0 and num_pages_parts == 0:
+        logger.info("Ambos os cenários resultaram em zero páginas processadas. Teste inconclusivo nesse aspecto, mas os fluxos rodaram.")
+        return
+        
+    if num_pages_single != num_pages_parts:
+        logger.error(f"DIFERENÇA CRÍTICA: Número de páginas processadas diverge! Single: {num_pages_single}, Partes: {num_pages_parts}")
+        logger.error("Isso pode indicar problemas na extração de texto ou na lógica de combinação das partes.")
+        logger.info("Chaves do PDF único:" + str(sorted(result_single_pdf.keys())))
+        logger.info("Chaves dos PDFs Particionados (ajustado):" + str(sorted(result_parts_adjusted.keys())))
+        # Não adianta prosseguir com a comparação página a página se o número de páginas difere muito
+        # ou se as chaves não batem.
+        #return # Descomente se quiser parar aqui em caso de divergência no número de páginas
+
+    all_pages_equivalent = True
+    
+    # Comparar cada página
+    # Usar as chaves do resultado do PDF único como referência, pois são o "padrão ouro"
+    sorted_single_keys = sorted(result_single_pdf.keys())
+
+    for single_key in sorted_single_keys:
+        if single_key not in result_parts_adjusted:
+            logger.error(f"Página com chave '{single_key}' (do PDF único) NÃO ENCONTRADA no resultado ajustado das partes.")
+            all_pages_equivalent = False
+            continue # Pula para a próxima chave do PDF único
+
+        page_data_single = result_single_pdf[single_key]
+        page_data_part_adj = result_parts_adjusted[single_key]
+
+        if not compare_page_results(single_key, page_data_single, page_data_part_adj):
+            all_pages_equivalent = False
+            
+    # Checar se há chaves no resultado ajustado das partes que não existem no resultado do PDF único
+    # (Isso pode acontecer se a lógica de `build_key_map_for_parts` ou `adjust_result_parts` tiver problemas)
+    for part_adj_key in result_parts_adjusted.keys():
+        if part_adj_key not in result_single_pdf:
+            logger.error(f"Chave '{part_adj_key}' (do resultado ajustado das partes) NÃO ENCONTRADA no resultado do PDF único.")
+            all_pages_equivalent = False
+
+
+    if all_pages_equivalent and num_pages_single == num_pages_parts and num_pages_single > 0 :
+        logger.info("\n\nRESULTADO FINAL: SUCESSO! Os resultados do PDF único e dos PDFs particionados (após ajustes) são equivalentes.")
+    else:
+        logger.error("\n\nRESULTADO FINAL: FALHA! Foram encontradas divergências entre os resultados. Verifique os logs acima.")
 

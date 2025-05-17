@@ -170,11 +170,6 @@ from rich.table import Table
 def timing_decorator(calc_by_item=False):
     """Decorador para calcular o tempo de execução de funções decoradas.
     """
-    if not logger:
-        import logging
-        logging.basicConfig(level=logging.INFO)
-        logger = logging.getLogger(__name__)
-
     def decorator(func):
         def wrapper(*args, **kwargs):
             start_time = time()  # Marca o tempo de início
@@ -182,9 +177,11 @@ def timing_decorator(calc_by_item=False):
             end_time = time()  # Marca o tempo de término
             total_time = end_time - start_time
             print('\n')
-            logger.info(f"F: {func.__name__} - Tempo execução total : {total_time:.4f}s")
+            print(f"F: {func.__name__} - Tempo execução total : {total_time:.4f}s")
+            #logger.info(f"F: {func.__name__} - Tempo execução total : {total_time:.4f}s")
             if calc_by_item and args and type(args) != str and isinstance(args[0], collections.abc.Iterable):
-                logger.info(f"F: {func.__name__} - Tempo p/item - Loops: {len(args[0])} : {total_time/len(args[0]):.4f}s")
+                print(f"F: {func.__name__} - Tempo p/item - Loops: {len(args[0])} : {total_time/len(args[0]):.4f}s")
+                #logger.info(f"F: {func.__name__} - Tempo p/item - Loops: {len(args[0])} : {total_time/len(args[0]):.4f}s")
             print('\n')
             return result
         return wrapper
@@ -426,3 +423,77 @@ def normalize_key(text: str) -> str:
     # Remove underscores no início/fim e múltiplos underscores
     text = re.sub(r'_+', '_', text).strip('_')
     return text
+
+cleanup_logger = logging.getLogger("temp_files_cleanup")
+
+import shutil, atexit
+
+def cleanup_old_temp_files(upload_temp_dir: str, max_age_seconds: int = 24 * 60 * 60):
+    """
+    Limpa arquivos e subdiretórios na pasta especificada que são mais antigos
+    que max_age_seconds (padrão: 24 horas).
+
+    Args:
+        upload_temp_dir (str): O caminho para a pasta de uploads temporários.
+        max_age_seconds (int): A idade máxima em segundos que um arquivo/diretório
+                               pode ter para não ser removido.
+    """
+    if not os.path.isdir(upload_temp_dir):
+        cleanup_logger.warning(f"Diretório temporário '{upload_temp_dir}' não encontrado. Nada a limpar.")
+        return
+
+    cleanup_logger.info(f"Iniciando limpeza de arquivos antigos em '{upload_temp_dir}' (mais de {max_age_seconds / 3600:.1f} horas).")
+    current_time = time.time()
+    items_removed_count = 0
+    items_failed_to_remove_count = 0
+
+    # Itera sobre todos os itens (arquivos e diretórios) na pasta temporária
+    for item_name in os.listdir(upload_temp_dir):
+        item_path = os.path.join(upload_temp_dir, item_name)
+        try:
+            # Obtém o tempo da última modificação do item
+            item_mod_time = os.path.getmtime(item_path)
+            item_age_seconds = current_time - item_mod_time
+
+            if item_age_seconds > max_age_seconds:
+                if os.path.isfile(item_path):
+                    os.remove(item_path)
+                    cleanup_logger.info(f"Arquivo antigo removido: {item_path} (idade: {item_age_seconds / 3600:.1f} horas)")
+                    items_removed_count += 1
+                elif os.path.isdir(item_path):
+                    # Para diretórios, você pode querer remover recursivamente
+                    # CUIDADO: shutil.rmtree remove o diretório e todo o seu conteúdo.
+                    # Certifique-se de que é seguro fazer isso e que os diretórios
+                    # realmente contêm apenas dados temporários que podem ser descartados.
+                    shutil.rmtree(item_path)
+                    cleanup_logger.info(f"Diretório antigo e seu conteúdo removidos: {item_path} (idade: {item_age_seconds / 3600:.1f} horas)")
+                    items_removed_count += 1
+                else:
+                    cleanup_logger.debug(f"Item '{item_path}' não é arquivo nem diretório (ex: link simbólico). Ignorando.")
+
+        except FileNotFoundError:
+            # O arquivo pode ter sido removido por outro processo entre listdir e getmtime/remove
+            cleanup_logger.debug(f"Item '{item_path}' não encontrado durante a limpeza (pode já ter sido removido).")
+        except PermissionError:
+            cleanup_logger.error(f"Erro de permissão ao tentar remover '{item_path}'. Verifique as permissões.")
+            items_failed_to_remove_count += 1
+        except Exception as e:
+            cleanup_logger.error(f"Erro inesperado ao processar ou remover '{item_path}': {e}")
+            items_failed_to_remove_count += 1
+
+    cleanup_logger.info(f"Limpeza concluída. {items_removed_count} itens removidos, {items_failed_to_remove_count} falhas.")
+
+def register_temp_files_cleanup(temp_dir_to_clean: str):
+    # 2. No seu módulo principal, onde você quer que a limpeza seja registrada:
+    """Registra a função de limpeza para ser chamada na saída do programa."""
+    if not temp_dir_to_clean:
+        cleanup_logger.error("Caminho do diretório temporário não fornecido para registro da limpeza. A limpeza no atexit não será registrada.")
+        return
+        
+    cleanup_logger.info(f"Registrando a função de limpeza de arquivos temporários para o diretório '{temp_dir_to_clean}' no atexit.")
+    # Usa functools.partial para passar argumentos para a função registrada com atexit
+    # Ou uma lambda, mas partial é geralmente mais limpo para isso.
+    from functools import partial
+    cleanup_func_with_args = partial(cleanup_old_temp_files, temp_dir_to_clean)
+    atexit.register(cleanup_func_with_args)
+

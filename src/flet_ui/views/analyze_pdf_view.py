@@ -3,15 +3,13 @@ import flet as ft
 import os, threading
 from typing import Optional, Dict, Any, List
 
-# Imports do projeto
 from src.flet_ui.components import (
     show_snackbar,
     show_loading_overlay,
     hide_loading_overlay,
-    ManagedFilePicker # Usaremos o componente robusto
+    ManagedFilePicker 
 )
 from src.flet_ui import theme
-# Imports do Core (Backend)
 from src.core.pdf_processor import PDFDocumentAnalyzer
 from src.core.ai_orchestrator import analyze_text_with_llm
 
@@ -20,73 +18,51 @@ from src.settings import UPLOAD_TEMP_DIR
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
 
-# Estado da View (para manter referência ao arquivo e resultados)
-# Como não temos uma classe de View, podemos usar page.session ou page.client_storage
-# de forma mais granular ou, para estado de "sessão de análise", page.session é adequado.
-# Ou, para simplicidade neste exemplo, variáveis no escopo do módulo se a view for
-# recriada a cada navegação (o que acontece com a abordagem de content_only).
-# Para compartilhar o PDF entre `/analyze_pdf` e `/chat_pdf`, `page.session` é o ideal.
-
-KEY_SESSION_CURRENT_PDF_PATH = "current_pdf_path_for_analysis"
 KEY_SESSION_CURRENT_PDF_NAME = "current_pdf_name_for_analysis"
+KEY_SESSION_CURRENT_PDF_FILES_ORDERED = "current_pdf_files_ordered_for_analysis"
 KEY_SESSION_PDF_ANALYZER_DATA = "pdf_analyzer_processed_page_data"
 KEY_SESSION_PDF_CLASSIFIED_INDICES = "pdf_classified_indices_data"
 KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "pdf_aggregated_text_info" 
 KEY_SESSION_PDF_LAST_LLM_RESPONSE = "pdf_last_llm_response"
-KEY_SESSION_CURRENT_PDF_FILES_ORDERED = "current_pdf_files_ordered_for_analysis"
-
-def clear_pdf_session_data(page, clear_all_pdf_data: bool = False): # Adicionar parâmetro
-    """Limpa dados de sessão relacionados ao PDF."""
-    keys_to_clear = [
-        KEY_SESSION_PDF_ANALYZER_DATA, # Estas chaves agora serão prefixadas/sufixadas
-        KEY_SESSION_PDF_CLASSIFIED_INDICES,
-        KEY_SESSION_PDF_AGGREGATED_TEXT_INFO,
-        KEY_SESSION_PDF_LAST_LLM_RESPONSE
-    ]
-    if clear_all_pdf_data: # Chamado ao carregar um lote completamente novo
-        keys_to_clear.append(KEY_SESSION_CURRENT_PDF_FILES_ORDERED)
-        # Se as chaves de cache usam um prefixo comum derivado do lote,
-        # você pode iterar sobre todas as chaves da sessão e remover as que correspondem.
-        all_session_keys = list(page.session.keys())
-        for k_session in all_session_keys:
-            if k_session.startswith("pdf_analyzer_processed_page_data_") or \
-               k_session.startswith("pdf_classified_indices_data_") or \
-               k_session.startswith("pdf_aggregated_text_info_") or \
-               k_session.startswith("pdf_last_llm_response_"):
-                page.session.remove(k_session)
-    
-    for k in keys_to_clear: # Limpa as chaves base, se ainda usadas para algo
-        if page.session.contains_key(k):
-            page.session.remove(k)
-    _logger.debug("Dados de sessão do(s) PDF(S) e caches de análise limpos.")
-
 
 def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     _logger.info("Criando conteúdo da view de Análise de PDF.")
 
     # ListView para exibir e ordenar arquivos selecionados
     selected_files_list_view = ft.ListView(expand=False, spacing=5, height=150) # Altura inicial
-    drag_feedback_text = ft.Text("") # Para dar feedback sobre o arraste
     
     current_batch_name_text = ft.Text("Nenhum arquivo PDF selecionado.", italic=True)
+
+    status_extraction_text = ft.Text("", italic=True, size=12)
+    status_text_analysis = ft.Text("", italic=True, size=12)
+    status_llm_text = ft.Text("", italic=True, size=12)
+
+    result_textfield = ft.TextField(
+        label="...",
+        multiline=True,
+        read_only=True,
+        min_lines=10,
+        max_lines=25,
+        expand=True,
+        # value="Aguardando análise...", # Placeholder
+        border_color=theme.PRIMARY,
+        text_size=14
+    )
 
     # --- Controles da UI ---
     upload_button = ft.ElevatedButton(
         "Carregar PDF",
         icon=ft.Icons.UPLOAD_FILE,
-        #on_click=handle_upload_pdf_click
     )
     analyze_button = ft.ElevatedButton(
         "Analisar PDF",
         icon=ft.Icons.TEXT_SNIPPET_OUTLINED,
-        #on_click=handle_analyze_pdf_click,
         tooltip="Processa o PDF carregado e envia para análise pela LLM",
         disabled=True
     )
     copy_button = ft.IconButton(
         icon=ft.Icons.COPY_ALL_OUTLINED,
         tooltip="Copiar Resultado",
-        #on_click=handle_copy_result_click
     )
 
     def update_selected_files_display(files_ordered: Optional[List[Dict[str, Any]]] = None):
@@ -111,6 +87,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             current_batch_name_text.value = "Nenhum arquivo PDF selecionado."
             selected_files_list_view.height = 0 # Esconde se vazio
             analyze_button.disabled = True
+            clear_cached_analysis_results()
         else:
             for idx, file_info in enumerate(_files):
                 _logger.debug(f"VIEW_DEBUG: Iterando em update_selected_files_display - idx: {idx}, file_info_item: {file_info} (tipo: {type(file_info)})")
@@ -246,7 +223,8 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             selected_files_list_view.height = min(len(_files) * 65, 300) # Altura dinâmica, max 300px
             analyze_button.disabled = False
         
-        #page.update(current_batch_name_text, selected_files_list_view, analyze_button)
+        page.session.set(KEY_SESSION_CURRENT_PDF_NAME, current_batch_name_text.value)
+        #page.update(current_batch_name_text, selected_files_list_view, analyze_button) A chamada deve ser garantida pelo chamador.
 
     def move_file_in_list(index: int, direction: int):
         current_files_data = page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED)
@@ -282,23 +260,6 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         clear_cached_analysis_results() # Remover um arquivo invalida o cache de análise conjunta
         page.update(current_batch_name_text, selected_files_list_view)
 
-    result_textfield = ft.TextField(
-        label="...",
-        multiline=True,
-        read_only=True,
-        min_lines=10,
-        max_lines=25,
-        expand=True,
-        # value="Aguardando análise...", # Placeholder
-        border_color=theme.PRIMARY,
-        text_size=14
-    )
-
-    selected_file_text = ft.Text("", italic=True) # Nenhum arquivo PDF selecionado.
-    status_extraction_text = ft.Text("", italic=True, size=12)
-    status_text_analysis = ft.Text("", italic=True, size=12)
-    status_llm_text = ft.Text("", italic=True, size=12)
-
     def clear_cached_analysis_results():
         """Limpa caches relacionados aos resultados da análise combinada."""
         keys_to_clear = [
@@ -312,100 +273,16 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                 page.session.remove(k)
         _logger.debug("Caches de resultados de análise (combinada) limpos devido a mudança na lista de arquivos.")
         # Também reseta a UI de resultados
-        result_textfield.value = ""
         status_extraction_text.value = "Lista de arquivos modificada. Reanálise necessária."
         status_text_analysis.value = ""
         status_llm_text.value = ""
+        result_textfield.value = ""
         page.update(result_textfield, status_extraction_text, status_text_analysis, status_llm_text)
-
-    # --- Funções de Callback ---
-    def on_files_upload_complete(all_uploaded_files: List[Dict[str, Any]]):
-        hide_loading_overlay(page)
-        analyze_button.disabled = False
-        #page.update(upload_button, analyze_button)
-
-        successful_uploads = [f for f in all_uploaded_files if f['success']]
-        failed_uploads = [f for f in all_uploaded_files if not f['success']]
-
-        if failed_uploads:
-            for failed_file in failed_uploads:
-                show_snackbar(page, f"Erro no upload de '{failed_file['name']}': {failed_file['path_or_message']}", color=theme.COLOR_ERROR, duration=7000)
-            _logger.error(f"{len(failed_uploads)} falhas de upload.")
-
-        if not successful_uploads:
-            _logger.warning("Nenhum arquivo foi carregado com sucesso.")
-            if not failed_uploads: # Se não houve falhas mas também não houve sucesso (ex: cancelou tudo)
-                 show_snackbar(page, "Nenhum arquivo PDF foi carregado.", color=theme.COLOR_WARNING)
-            # Mantém o estado anterior da lista de arquivos (ou vazia se era o primeiro upload)
-            update_selected_files_display()
-            return
-
-        _logger.info(f"{len(successful_uploads)} arquivos PDF carregados com sucesso.")
-        show_snackbar(page, f"{len(successful_uploads)} PDF(s) carregado(s)!", color=theme.COLOR_SUCCESS)
-
-        # Limpa dados de um lote anterior e caches de análise
-        clear_pdf_session_data(page, clear_all_pdf_data=True) # Função a ser criada para limpar TUDO
-        clear_cached_analysis_results()
-
-        new_files_for_session = []
-        for i, file_info in enumerate(successful_uploads):
-            new_files_for_session.append({
-                "name": file_info['name'],
-                "path": file_info['path_or_message'], # Em sucesso, é o path
-                "original_index": i # Índice original da seleção, pode ser útil
-            })
-        
-        page.session.set(KEY_SESSION_CURRENT_PDF_FILES_ORDERED, new_files_for_session)
-        update_selected_files_display(new_files_for_session)
-        # analyze_button.disabled = False # update_selected_files_display já cuida disso
-
-        #selected_file_text.value = f"Arquivo selecionado: {file_name}"
-        #status_extraction_text.value = ""
-        #status_text_analysis.value = "PDF carregado. Clique em 'Analisar PDF' para processar."
-        #result_textfield.value = "" # Limpa resultado anterior
-
-        #page.session.set(KEY_SESSION_CURRENT_PDF_PATH, file_path_or_message)
-        #page.session.set(KEY_SESSION_CURRENT_PDF_NAME, file_name)
-        
-        #elif file_path_or_message == "Seleção cancelada": # Identifica o cancelamento
-        #    selected_file_text.value = "Seleção de arquivo cancelada."
-        #    analyze_button.disabled = True # Mantém desabilitado
-        #    _logger.info("Upload cancelado pelo usuário.")
-        #else:
-        #    selected_file_text.value = "Falha ao carregar o arquivo."
-                    
-        #page.update(upload_button, analyze_button, selected_file_text, status_extraction_text, status_text_analysis, result_textfield) # Garante que tudo atualize
 
     _uploaded_file_accumulator: List[Dict[str, Any]] = []
     _expected_file_count = 0
-    _expected_file_count_from_picker = 0 # Será definido pelo FilePickerResultEvent
 
-    def setup_for_new_selection(expected_count: int):
-        """Chamado por _on_file_picker_result ANTES de processar a fila."""
-        nonlocal _uploaded_file_accumulator, _expected_file_count_from_picker
-        _uploaded_file_accumulator = []
-        _expected_file_count_from_picker = expected_count
-        _logger.debug(f"Setup para nova seleção: esperando {expected_count} arquivos.")
-
-    def Simple_individual_file_upload_complete(success: bool, file_path_or_message: str, file_name: Optional[str]):
-        _logger.critical(f"VIEW_CALLBACK: individual_file_upload_complete para '{file_name}', Success: {success}")
-        if success and file_name:
-            # Apenas log, não atualize a lista complexa por enquanto
-            _logger.info(f"Upload individual de '{file_name}' OK (teste simplificado).")
-            # current_files = page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED) or []
-            # ... (não modificar a sessão ou a lista por enquanto) ...
-            # update_selected_files_display() # NÃO CHAMAR
-            selected_file_text.value = f"{file_name} carregado." # Supondo que você tenha um ft.Text simples para isso
-            page.update(selected_file_text)
-
-        elif file_path_or_message == "Seleção cancelada":
-            _logger.info("Seleção de arquivos cancelada (teste simplificado).")
-            selected_file_text.value = "Seleção cancelada."
-            page.update(selected_file_text)
-        else: 
-            _logger.error(f"Falha no upload de '{file_name}' (teste simplificado): {file_path_or_message}")
-            selected_file_text.value = f"Falha no upload de {file_name}."
-            page.update(selected_file_text)
+    # --- Funções de Callback ---
 
     def individual_file_upload_complete_handler(success: bool, file_path_or_message: str, file_name: Optional[str]):
         # Este callback é chamado para CADA arquivo.
@@ -451,7 +328,6 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     def batch_upload_complete_handler(batch_results: List[Dict[str, Any]]):
         _logger.info(f"VIEW_BATCH_COMPLETE: Lote finalizado com {len(batch_results)} resultados.")
         hide_loading_overlay(page) # Se houver algum global
-        upload_button.disabled = False # Reabilita o botão de upload
 
         successful_uploads = [r for r in batch_results if r['success']]
         failed_count = len(batch_results) - len(successful_uploads)
@@ -477,12 +353,10 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
 
         # Atualiza a exibição final da lista de arquivos (que já foi sendo atualizada individualmente)
         update_selected_files_display() 
-        page.update(current_batch_name_text, selected_files_list_view, analyze_button, upload_button)
+        page.update(current_batch_name_text, selected_files_list_view, analyze_button)
         # Se houve sucesso em algum upload, pode ser necessário invalidar caches
         if successful_uploads:
-             clear_cached_analysis_results() # Invalida se o CONTEÚDO da lista de sucesso mudou o lote
-        
-        page.update(upload_button) # Garante que o botão de upload seja atualizado
+            clear_cached_analysis_results() # Invalida se o CONTEÚDO da lista de sucesso mudou o lote
 
     # Recupera a instância global do FilePicker
     file_picker_instance = page.data.get("global_file_picker")
@@ -507,24 +381,6 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         
         analyze_button.disabled = True
         page.update(analyze_button)
-
-        #selected_file_text.value = "Selecionando arquivo..."
-        #status_extraction_text.value = "Aguardando para extração de textos..." # Feedback inicial
-        #status_text_analysis.value = ""
-        #status_llm_text.value = ""
-        #result_textfield.value = ""
-        
-        #page.update(
-        #    upload_button, analyze_button, selected_file_text,
-        #    status_extraction_text, status_text_analysis, status_llm_text,
-        #    result_textfield
-        #)
-
-        #clear_pdf_session_data(page, clear_all_pdf_data=True)
-        
-        # NÃO limpa a sessão de arquivos aqui, pois queremos adicionar à lista existente
-        # A limpeza ocorrerá em on_files_upload_complete se o usuário quiser recomeçar
-        # Ou adicionar um botão "Limpar Lista de Arquivos"
         
         _uploaded_file_accumulator = [] # Reseta acumulador para este lote de seleção
         _expected_file_count = 0 # Será definido pelo número de arquivos em FilePickerResultEvent
@@ -540,13 +396,6 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             allow_multiple=True, # PERMITE MÚLTIPLOS
             dialog_title_override="Selecione um ou mais PDFs para análise conjunta"
         )
-
-    def on_upload_progress_handler(file_name: str, progress: float):
-        if progress == 0.0:
-            status_extraction_text.value = f"Enviando '{file_name}'..."
-        else:
-            status_extraction_text.value = f"Enviando '{file_name}': {progress*100:.0f}%"
-        page.update(status_extraction_text)
 
     def update_text_status(text_field, texto, format: str=None):
         text_field.value = texto
@@ -567,12 +416,6 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         # Extrai apenas os caminhos dos arquivos na ordem correta
         pdf_paths_ordered = [file_info['path'] for file_info in ordered_files_to_analyze]
         batch_display_name = current_batch_name_text.value # Usa o nome do lote já formatado
-
-        #pdf_path = page.session.get(KEY_SESSION_CURRENT_PDF_PATH)
-        #pdf_name = page.session.get(KEY_SESSION_CURRENT_PDF_NAME)
-        #if not pdf_path or not pdf_name:
-        #    show_snackbar(page, "Nenhum arquivo PDF carregado para análise.", color=theme.COLOR_WARNING)
-        #    return
 
         _logger.info(f"Iniciando processamento do lote: {batch_display_name}")
         show_loading_overlay(page, f"A processar Leitura, Extração e Classificação do conteúdo \nPDF(s) '{batch_display_name}'...")
@@ -599,7 +442,6 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                 cache_key_segment = "_".join(os.path.basename(p) for p in pdf_paths_ordered)
                 CACHE_KEY_ANALYZER_DATA_BATCH = f"{KEY_SESSION_PDF_ANALYZER_DATA}_{cache_key_segment}"
                 processed_page_data_combined = page.session.get(CACHE_KEY_ANALYZER_DATA_BATCH)
-                #processed_page_data = page.session.get(KEY_SESSION_PDF_ANALYZER_DATA)
 
                 if processed_page_data_combined:
                     _logger.info(f"Dados processados do lote '{batch_display_name}' encontrados no cache.")
@@ -627,17 +469,14 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                         # Você pode querer levantar um erro aqui ou retornar/mostrar uma mensagem de erro
                         raise FileNotFoundError("Nenhum dos arquivos selecionados pôde ser encontrado para processamento.")
 
-                    processed_page_data_combined, all_texts_for_analysis_combined, \
-                    all_global_page_keys_ordered = \
-                        pdf_analyzer.extract_texts_and_preprocess_batch(valid_pdf_paths_for_processor) # USA A LISTA VALIDADA
+                    processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined = \
+                        pdf_analyzer.extract_texts_and_preprocess_files(valid_pdf_paths_for_processor) # USA A LISTA VALIDADA
 
-                    #actual_indices, texts_for_storage, texts_for_analysis = \
-                    #    pdf_analyzer.extract_texts_and_preprocess(pdf_path)
-
-                    if not processed_page_data_combined:
+                    if not processed_files_metadata or not all_texts_for_analysis_combined:
                         raise ValueError("Nenhum texto extraível encontrado nos PDFs do lote.")
                     
-                    page.session.set(CACHE_KEY_ANALYZER_DATA_BATCH, processed_page_data_combined)
+                    processed_page_data_combined, all_global_page_keys_ordered = pdf_analyzer._build_combined_page_data(processed_files_metadata, 
+                                                                            all_indices_in_batch, all_texts_for_storage_combined)
 
                     # Atualiza UI após Fase 1 (da thread)
                     page.run_thread(update_text_status, status_extraction_text, f"Fase 1 concluída: {len(processed_page_data_combined)} páginas com texto extraído.")
@@ -645,9 +484,9 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                     # page.update() será chamado implicitamente por page.run_threadsafe se o controle for parte da UI
 
                     # --- Fase 2: Análise de Similaridade e Relevância ---
-                    processed_page_data_combined = pdf_analyzer.analyze_similarity_and_relevance_batch(
-                        processed_page_data_combined, all_texts_for_analysis_combined, all_global_page_keys_ordered
-                    )
+                    processed_page_data_combined = pdf_analyzer.analyze_similarity_and_relevance_files(
+                        processed_page_data_combined, all_global_page_keys_ordered, all_texts_for_analysis_combined)
+
                     if not processed_page_data_combined: # Deve ser raro se a Fase 1 passou
                         raise ValueError("Falha na análise de similaridade/relevância.")
 
@@ -655,7 +494,8 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                     page.run_thread(update_text_status, status_text_analysis, "Fase 2 concluída: Páginas processadas.")
                     page.run_thread(update_text_status, status_llm_text, "Fase 3: Classificando páginas e preparando para LLM...")
                     
-                    page.session.set(KEY_SESSION_PDF_ANALYZER_DATA, processed_page_data_combined) # SALVA NO CACHE
+                    page.session.set(CACHE_KEY_ANALYZER_DATA_BATCH, processed_page_data_combined) # SALVA NO CACHE
+                    page.session.set(KEY_SESSION_PDF_ANALYZER_DATA, processed_page_data_combined)
 
                 CACHE_KEY_CLASSIFIED_BATCH = f"{KEY_SESSION_PDF_CLASSIFIED_INDICES}_{cache_key_segment}"
                 classified_data_batch = page.session.get(CACHE_KEY_CLASSIFIED_BATCH)
@@ -676,6 +516,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                     # --- Fase 3: Classificação e Agregação ---
                     classified_data_batch  = pdf_analyzer.filter_and_classify_pages(processed_page_data_combined)
                     page.session.set(CACHE_KEY_CLASSIFIED_BATCH, classified_data_batch)
+                    page.session.set(KEY_SESSION_PDF_CLASSIFIED_INDICES, classified_data_batch)
 
                     (relevant_indices, unintelligible_indices, count_selected,
                     count_discarded_similarity, count_discarded_unintelligible) = classified_data_batch
@@ -701,7 +542,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                     
                 else:
                     # TODO: O token_limit pode vir de configurações do usuário/LLM no futuro
-                    token_limit_for_aggregation = 180000 # TODO: Passar como parâmetro
+                    token_limit_for_aggregation = 180000 
                     str_pages_considered, aggregated_text, tokens_antes, tokens_depois = \
                         pdf_analyzer.group_texts_by_relevance_and_token_limit(
                             processed_page_data=processed_page_data_combined,
@@ -711,6 +552,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                     _logger.info(f"Texto agregado. Páginas: {str_pages_considered}. Tokens Antes: {tokens_antes}, Depois: {tokens_depois}")
                     
                     page.session.set(CACHE_KEY_AGGREGATED_TEXT_INFO_BATCH, (str_pages_considered, aggregated_text, tokens_antes, tokens_depois))
+                    page.session.set(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, (str_pages_considered, aggregated_text, tokens_antes, tokens_depois))
 
                 page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}, \n\nTexto final agregado das págs {str_pages_considered}.\n Consultando LLM...")
                 
@@ -730,6 +572,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
                 page.run_thread(hide_loading_overlay, page) # Esconde o overlay global
                 if llm_response:
                     page.session.set(CACHE_KEY_PDF_LAST_LLM_RESPONSE, llm_response) # SALVA NO CACHE
+                    page.session.set(KEY_SESSION_PDF_LAST_LLM_RESPONSE, llm_response)
                     _logger.info(f"Resposta da LLM para '{batch_display_name}' salva na sessão.")
                     page.run_thread(update_text_status, result_textfield, llm_response, {"format": "normal"})
                     page.run_thread(update_text_status, status_llm_text, f"Classificação: {info_classificacao}. \n\nTexto final agregado das págs {str_pages_considered}. \n\nAnálise de '{batch_display_name}' concluída pela LLM.")
@@ -792,11 +635,10 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             ft.Divider(),
             ft.Row([upload_button, analyze_button], alignment=ft.MainAxisAlignment.START, spacing=10),
             
-            current_batch_name_text, # Substituído
+            current_batch_name_text,
             ft.Text("Arquivos para Análise (arraste para reordenar):", style=ft.TextThemeStyle.LABEL_MEDIUM),
             ft.Container(selected_files_list_view, expand=True), 
             
-            selected_file_text,
             status_extraction_text,
             status_text_analysis,
             status_llm_text,
@@ -819,40 +661,43 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     # Recarregar o estado da UI se um PDF já estiver na sessão
     # (Ex: usuário navegou para outra aba e voltou)
     pdf_name_on_session = page.session.get(KEY_SESSION_CURRENT_PDF_NAME)
+    
+    processed_page_data = page.session.get(KEY_SESSION_PDF_ANALYZER_DATA)
+    classified_data = page.session.get(KEY_SESSION_PDF_CLASSIFIED_INDICES)
+    aggregated_info = page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
     last_llm_response_on_session = page.session.get(KEY_SESSION_PDF_LAST_LLM_RESPONSE)
+    
     if pdf_name_on_session:
-        selected_file_text.value = f"Arquivo carregado: {pdf_name_on_session}"
+        current_batch_name_text.value = pdf_name_on_session
         
-        processed_page_data = page.session.get(KEY_SESSION_PDF_ANALYZER_DATA)
         if processed_page_data:    
             status_extraction_text.value = f"Fase 1 e 2 (Extração/Análise PDF) carregadas do cache."
             status_text_analysis.value = f"{len(processed_page_data)} páginas processadas."
         
-        classified_data = page.session.get(KEY_SESSION_PDF_CLASSIFIED_INDICES)
-        aggregated_info = page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
         if classified_data and aggregated_info:
-            relevant_indices, unintelligible_indices, count_selected, \
-            count_discarded_similarity, count_discarded_unintelligible = classified_data
+            _, _, count_selected, count_discarded_similarity, count_discarded_unintelligible = classified_data
             
             info_classificacao = (
                 f"\nPáginas Relevantes: {count_selected}, "
                 f"\nIrrelevantes por similaridade: {count_discarded_similarity},"
                 f"\nDescartadas (Ininteligíveis): {count_discarded_unintelligible} "
             )
-            str_pages_considered, aggregated_text, tokens_antes, tokens_depois = aggregated_info
+            str_pages_considered, _, _, _ = aggregated_info
 
             status_llm_text.value = f"Classificação: {info_classificacao}. \n\nTexto final agregado das págs {str_pages_considered}."
         
         if last_llm_response_on_session:
+            status_llm_text.value = f"Classificação: {info_classificacao}. \n\nTexto final agregado das págs {str_pages_considered}. \n\nAnálise de '{pdf_name_on_session}' concluída pela LLM."
             result_textfield.value = last_llm_response_on_session
             _logger.info(f"Última resposta da LLM para '{pdf_name_on_session}' carregada da sessão.")
+
         else:
-            selected_file_text.value += "\nClique em 'Analisar PDF' para processar."
+            status_llm_text.value += "\nClique em 'Analisar PDF' para processar."
 
         analyze_button.disabled = False
-        # Poderia também recarregar o resultado se estiver salvo, mas pode ser custoso/complexo
+
     else:
-        #selected_file_text.value = "Nenhum arquivo PDF selecionado."
+        current_batch_name_text.value = "Nenhum arquivo PDF selecionado."
         analyze_button.disabled = True
 
     update_selected_files_display() 
@@ -863,12 +708,7 @@ def create_chat_pdf_content(page: ft.Page) -> ft.Control:
     _logger.info("Criando conteúdo da view Chat com PDF.")
 
     current_pdf_name = page.session.get(KEY_SESSION_CURRENT_PDF_NAME)
-    aggregated_info = page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
-    
     processed_text_for_chat = None
-    if aggregated_info:
-        # A ordem na tupla é (str_pages_considered, aggregated_text, tokens_antes, tokens_depois)
-        processed_text_for_chat = aggregated_info[1] 
 
     show_snackbar(
         page,
@@ -898,6 +738,12 @@ def create_chat_pdf_content(page: ft.Page) -> ft.Control:
         expand=True,
         spacing=20
     )
+
+    #aggregated_info = page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
+    
+    #if aggregated_info:
+    #    # A ordem na tupla é (str_pages_considered, aggregated_text, tokens_antes, tokens_depois)
+    #    processed_text_for_chat = aggregated_info[1] 
 
     #if not current_pdf_name or not processed_text_for_chat:
     #    info_text = ft.Text(

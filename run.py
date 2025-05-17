@@ -54,10 +54,12 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING) # Manter acesso em
 logging.getLogger("starlette").setLevel(logging.WARNING)
 
 from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS
+from src.utils import register_temp_files_cleanup
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
-    ...
+    register_temp_files_cleanup(UPLOAD_TEMP_DIR)
+    
     # Configura e inicia a aplicação Flet
     ft.app(
         target=main,                 # Função principal a ser executada
