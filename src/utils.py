@@ -443,7 +443,7 @@ def cleanup_old_temp_files(upload_temp_dir: str, max_age_seconds: int = 24 * 60 
         return
 
     cleanup_logger.info(f"Iniciando limpeza de arquivos antigos em '{upload_temp_dir}' (mais de {max_age_seconds / 3600:.1f} horas).")
-    current_time = time.time()
+    current_time = time()
     items_removed_count = 0
     items_failed_to_remove_count = 0
 

@@ -379,7 +379,7 @@ class PDFDocumentAnalyzer:
             str: String formatada para display
         """
         if not global_keys: return "Nenhuma"
-        
+
         parsed_pages = []
         for key in global_keys:
             match = re.match(r"file(\d+)_page(\d+)", key)
@@ -424,7 +424,11 @@ class PDFDocumentAnalyzer:
                 output_parts.append(f"Arq{current_file} Pág{current_interval_start}")
             else:
                 output_parts.append(f"Arq{current_file} Pág{current_interval_start}-{current_page_in_interval}")
-                
+        
+        if output_parts:
+            if all(part.startswith('Arq1 ') for part in output_parts): 
+                output_parts = [part.replace('Arq1 ', '') for part in output_parts]
+
         return ", ".join(output_parts) if output_parts else "Nenhuma"
 
     ### ======================================================================================
