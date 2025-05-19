@@ -106,3 +106,6 @@ def configure_theme(page: ft.Page):
         # )
     )
     # print("Tema configurado a partir de src/flet_ui/theme.py")
+
+WIDTH_CONTAINER_CONFIGS = 700
+

@@ -262,7 +262,8 @@ class FirebaseClientFirestore:
                 params=params,
                 timeout=timeout
             )
-            response.raise_for_status()
+            if not (method.upper() == "GET" and response.status_code == 404):
+                response.raise_for_status() # Levanta HTTPError para outros erros 4xx/5xx ou para 404 em não-GET
             return response
         except requests.exceptions.HTTPError as http_err:
             status_code = http_err.response.status_code

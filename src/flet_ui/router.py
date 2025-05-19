@@ -3,20 +3,54 @@ import flet as ft
 import re
 from typing import Optional, Dict, Callable, Any
 
-from .theme import COLOR_ERROR, PADDING_L 
-from .layout import create_app_bar, create_navigation_rail, create_navigation_drawer, create_footer, _find_nav_index_for_route, icones_navegacao
+from .theme import COLOR_WARNING, COLOR_ERROR, PADDING_L 
+from .layout import create_app_bar, _find_nav_index_for_route, icones_navegacao
+from .components import show_snackbar
 
 from .views.login_view import create_login_view
 from .views.signup_view import create_signup_view 
 from .views.home_view import create_home_view 
 from .views.profile_view import create_profile_view
+from .views.proxy_settings_view import create_proxy_settings_content
 from .views.llm_settings_view import create_llm_settings_view
-from .views.analyze_pdf_view import create_analyze_pdf_content, create_chat_pdf_content
-from .views.knowledge_base_view import create_knowledge_base_content
+from .views.analyze_pdf_view1 import create_analyze_pdf_content
+from .views.others_view import create_chat_pdf_content
 
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
 
+
+def create_placeholder_content(page: ft.Page, module_name: str) -> ft.Control:
+    logger.info(f"Acessando conteúdo placeholder para: {module_name}")
+    show_snackbar(
+        page,
+        f"{module_name}: Módulo ainda não programado.",
+        color=COLOR_WARNING,
+        duration=3000
+    )
+    return ft.Column( # Retorna um Column para consistência com outras content_creators
+        [
+            ft.Text(f"{module_name}", style=ft.TextThemeStyle.HEADLINE_MEDIUM),
+            ft.Text("Esta funcionalidade será implementada em versões futuras."),
+            ft.Icon(ft.icons.CONSTRUCTION, size=50, opacity=0.5)
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        expand=True,
+        spacing=20
+    )
+
+def create_knowledge_base_content(page: ft.Page) -> ft.Control:
+    return create_placeholder_content(page, "Banco de Pareceres")
+
+def create_wiki_rotinas_content(page: ft.Page) -> ft.Control:
+    return create_placeholder_content(page, "Wiki PF - Rotinas")
+
+def create_correicao_processos_content(page: ft.Page) -> ft.Control:
+    return create_placeholder_content(page, "Correição de Flagrantes e IPLs")
+
+def create_roteiro_investigacoes_content(page: ft.Page) -> ft.Control:
+    return create_placeholder_content(page, "Roteiros de Investigações")
 
 # Mapeamento de rotas para funções que criam o *conteúdo* (não a View inteira)
 # route_content_mapping
@@ -25,10 +59,14 @@ _content_creators = {
     "/signup": create_signup_view, 
     "/home": create_home_view,
     "/profile": create_profile_view,
+    "/settings/proxy": create_proxy_settings_content,
     "/settings/llm": create_llm_settings_view,
     "/analyze_pdf": create_analyze_pdf_content, 
     "/chat_pdf": create_chat_pdf_content, 
     "/knowledge_base": create_knowledge_base_content,    
+    "/wiki_rotinas": create_wiki_rotinas_content,
+    "/correicao_processos": create_correicao_processos_content,
+    "/roteiro_investigacoes": create_roteiro_investigacoes_content,
 }
 
 # Mapeamento para rotas parametrizadas (se houver)
@@ -255,6 +293,4 @@ def route_change_content_only(
         )
 
     page.update() # Atualiza a página inteira com a nova estrutura e conteúdo
-
-
 

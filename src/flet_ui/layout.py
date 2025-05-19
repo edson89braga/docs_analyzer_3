@@ -1,51 +1,59 @@
 # src/flet_ui/layout.py
 """
 Define elementos de layout reutilizáveis como AppBar e NavigationRail.
+
 """
-from turtle import width
 import flet as ft
 from typing import List, Dict, Any, Optional
 # Importa definições de tema se necessário (ex: para padding ou cores)
 from src.flet_ui import theme
 
+SIZE_ICONS_NAVRAIL = 30
+
 icones_navegacao: List[Dict[str, Any]] = [
     {
         "label": "Início", # Imagem do departamento
-        "icon": ft.Icons.HOME_OUTLINED,
-        "selected_icon": ft.Icons.HOME,
+        "icon": ft.Icon(ft.Icons.HOME_OUTLINED, size=SIZE_ICONS_NAVRAIL),
+        "selected_icon": ft.Icon(ft.Icons.HOME, size=SIZE_ICONS_NAVRAIL),
         "route": "/home"
     },
     {
         "label": "Análise Inicial", # Antiga "Análise Inicial"
-        "icon": ft.Icons.FIND_IN_PAGE_OUTLINED,
-        "selected_icon": ft.Icons.FIND_IN_PAGE,
+        "icon": ft.Icon(ft.Icons.FIND_IN_PAGE_OUTLINED, size=SIZE_ICONS_NAVRAIL),
+        "selected_icon": ft.Icon(ft.Icons.FIND_IN_PAGE, size=SIZE_ICONS_NAVRAIL),
         "route": "/analyze_pdf" # Nova rota para a funcionalidade principal
     },
     {
         "label": "Chat with PDF",
-        "icon": ft.Icons.QUESTION_ANSWER_OUTLINED,
-        "selected_icon": ft.Icons.QUESTION_ANSWER,
+        "icon": ft.Icon(ft.Icons.QUESTION_ANSWER_OUTLINED,size=SIZE_ICONS_NAVRAIL),
+        "selected_icon": ft.Icon(ft.Icons.QUESTION_ANSWER,size=SIZE_ICONS_NAVRAIL),
         "route": "/chat_pdf"
     },
     {
         "label": "Banco Pareceres",
-        "icon": ft.Icons.LIBRARY_BOOKS_OUTLINED,
-        "selected_icon": ft.Icons.LIBRARY_BOOKS,
+        "icon": ft.Icon(ft.Icons.LIBRARY_BOOKS_OUTLINED,size=SIZE_ICONS_NAVRAIL),
+        "selected_icon": ft.Icon(ft.Icons.LIBRARY_BOOKS,size=SIZE_ICONS_NAVRAIL),
         "route": "/knowledge_base"
     },
-    #{
-    #    "label": "Meu Perfil",
-    #    "icon": ft.Icons.ACCOUNT_CIRCLE_OUTLINED,
-    #    "selected_icon": ft.Icons.ACCOUNT_CIRCLE,
-    #    "route": "/profile"
-    #},
-    #{
-    #    "label": "Config. LLM",
-    #    "icon": ft.Icons.SETTINGS_APPLICATIONS_OUTLINED,
-    #    "selected_icon": ft.Icons.SETTINGS_APPLICATIONS,
-    #    "route": "/settings/llm"
-    #},
-    # Adicionar outras seções futuras aqui
+
+    {
+        "label": "Wiki PF - Rotinas",
+        "icon": ft.Icon(ft.Icons.MENU_BOOK_OUTLINED, size=SIZE_ICONS_NAVRAIL),
+        "selected_icon": ft.Icon(ft.Icons.MENU_BOOK, size=SIZE_ICONS_NAVRAIL),
+        "route": "/wiki_rotinas"
+    },
+    {
+        "label": "Correições", 
+        "icon": ft.Icon(ft.Icons.RULE_FOLDER_OUTLINED,size=SIZE_ICONS_NAVRAIL),
+        "selected_icon": ft.Icon(ft.Icons.RULE_FOLDER,size=SIZE_ICONS_NAVRAIL),
+        "route": "/correicao_processos"
+    },
+    {
+        "label": "Roteiros Investigação", 
+        "icon": ft.Icon(ft.Icons.MAP_OUTLINED, size=SIZE_ICONS_NAVRAIL),
+        "selected_icon": ft.Icon(ft.Icons.MAP, size=SIZE_ICONS_NAVRAIL),
+        "route": "/roteiro_investigacoes"
+    }
 ]
 
 # Mapeamento inverso para destacar o item correto na NavRail principal
@@ -57,8 +65,9 @@ route_to_base_nav_index: Dict[str, int] = {
     "/analyze_pdf": 1,
     "/chat_pdf": 2, 
     "/knowledge_base": 3,
-    # Se houver outras rotas de settings, mapear para o mesmo índice se fizer sentido
-    # "/settings/application": 4, (se /settings fosse o item da NavRail)
+    "/wiki_rotinas": 4,
+    "/correicao_processos": 5,
+    "/roteiro_investigacoes": 6,
 }
 
 def _find_nav_index_for_route(route: str) -> int:
@@ -93,7 +102,6 @@ def _find_nav_index_for_route(route: str) -> int:
                  selected_index = index
 
     return selected_index
-
 
 def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
     """Cria a AppBar padrão para a aplicação."""
@@ -150,8 +158,8 @@ def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
             padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
             items=[
                 ft.PopupMenuItem(text="Perfil", icon=ft.Icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")), # Rota de perfil
-                ft.PopupMenuItem(text="Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=lambda _: show_proxy_settings_dialog(page)),
-                ft.PopupMenuItem(text="LLM - Models", icon=ft.Icons.PERSON_OUTLINE, on_click=lambda _: page.go("/settings/llm")), # Rota de perfil
+                ft.PopupMenuItem(text="Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=lambda _: page.go("/settings/proxy")),
+                ft.PopupMenuItem(text="Provedores LLM", icon=ft.Icons.MODEL_TRAINING_OUTLINED, on_click=lambda _: page.go("/settings/llm")), # Rota de perfil
                 ft.PopupMenuItem(),  # Divisor
                 ft.PopupMenuItem(text="Sair", icon=ft.Icons.LOGOUT, on_click=lambda _: handle_logout(page)) # Ação de Logout
             ]
@@ -212,7 +220,8 @@ def create_navigation_rail(page: ft.Page, selected_route: str) -> ft.NavigationR
             ft.NavigationRailDestination(
                 icon=modulo["icon"],
                 selected_icon=modulo["selected_icon"],
-                label=modulo["label"]
+                label=modulo["label"],
+                
             ) for modulo in icones_navegacao
         ],
         on_change=navigate
@@ -348,13 +357,15 @@ def handle_logout(page: ft.Page):
     # Uma forma seria passar um parâmetro na rota: page.go("/login?logout=true")
     # E a view de login verificaria esse parâmetro para mostrar o snackbar.
 
-from src.settings import (K_PROXY_ENABLED, K_PROXY_PASSWORD_SAVED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, K_PROXY_PASSWORD, 
-                            PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT)
-from src.config_manager import get_proxy_settings, save_proxy_settings
 from src.flet_ui.components import show_snackbar, ValidatedTextField, ManagedAlertDialog
 
 def show_proxy_settings_dialog(page: ft.Page):
+    # dialog_funtion substituído por uma view própria
     _logger.info("Abrindo diálogo de configurações de proxy.")
+
+    from src.settings import (K_PROXY_ENABLED, K_PROXY_PASSWORD_SAVED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, K_PROXY_PASSWORD, 
+                            PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT)
+    from src.config_manager import get_proxy_settings, save_proxy_settings
 
     def host_validator(value: str) -> Optional[str]:
         # Validação básica, pode ser melhorada (ex: regex para IP/hostname)

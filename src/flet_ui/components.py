@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional, Callable, Type, Union
 import os, shutil, time, threading
 
 from src.flet_ui import theme
+from src.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
 
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
@@ -414,7 +415,8 @@ class ValidatedTextField(ft.Column):
         on_submit: Optional[Callable] = None,
         # ... outros parâmetros de ft.TextField ou ft.Column podem ser adicionados
     ):
-        super().__init__(spacing=1, expand=expand, col=col) # Pouco espaçamento entre textfield e erro
+        self._disabled = disabled 
+        super().__init__(spacing=1, expand=expand, col=col, disabled=disabled) # Pouco espaçamento entre textfield e erro
         self._validator = validator
         self._on_change_validated = on_change_validated
         self._is_valid = True
@@ -447,6 +449,19 @@ class ValidatedTextField(ft.Column):
         # Validação inicial se houver valor
         if value is not None:
             self.validate(show_error=False) # Valida, mas não mostra erro inicialmente se já tiver valor
+
+    @property
+    def disabled(self) -> bool:
+        return self._disabled
+
+    @disabled.setter
+    def disabled(self, value: bool):
+        self._disabled = value
+        # Atualiza o text_field interno APENAS SE ele já existir
+        if hasattr(self, 'text_field') and self.text_field:
+            self.text_field.disabled = value
+            if self.page:
+                self.text_field.update()
 
     def _handle_change(self, e: ft.ControlEvent):
         self.validate()
@@ -1792,5 +1807,25 @@ class ManagedAlertDialog(ft.AlertDialog):
         self._trigger_close_with_timer()
 
 
+def wrapper_cotainer_1(int_content):
+    return ft.Container(
+            content=ft.Column( # Container para centralizar e aplicar padding
+                    [ ft.Container(
+                            content=int_content, 
+                            padding=ft.padding.only(right=15), #padding.right para distanciar o scroll
+                            alignment=ft.alignment.top_center,
+                            expand=True, 
 
+                        ) 
+                    ],   
+                    alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER, # Centraliza a coluna na página
+                    scroll=ft.ScrollMode.ALWAYS,
+                    expand=True, 
+                ),
+                padding=ft.padding.symmetric(vertical=30, horizontal=20),
+                alignment=ft.alignment.top_center, 
+                width = WIDTH_CONTAINER_CONFIGS, # expand=True, 
+                #border=ft.border.all(2, ft.Colors.BLUE_ACCENT_100)
+            )
 

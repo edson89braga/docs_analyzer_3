@@ -10,9 +10,10 @@ from typing import List, Optional, Any, TYPE_CHECKING
 from .cloud_logger_handler import CloudLogHandler, ClientLogUploader, AdminLogUploader
 from src.settings import (PATH_LOGS, CLOUD_LOGGER_FOLDER, APP_VERSION)
 
+from src.services.firebase_manager import FbManagerStorage
+from src.services.firebase_client import FirebaseClientStorage
+
 if TYPE_CHECKING:
-    from src.services.firebase_client import FirebaseClientStorage
-    from src.services.firebase_manager import FbManagerStorage
     from .cloud_logger_handler import LogUploaderStrategy
 
 modules_to_log = []
@@ -329,8 +330,6 @@ class LoggerSetup:
         )
 
         if cloud_log_handler:
-            if cls._cloud_handler_modules_filter: # Usa o filtro salvo da inicialização
-                cls._apply_module_filter(cloud_log_handler, cls._cloud_handler_modules_filter)
             cls._instance.addHandler(cloud_log_handler)
             print("LoggerSetup: CloudLogHandler adicionado ao logger raiz.")
             return True

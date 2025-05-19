@@ -12,9 +12,11 @@ from src.flet_ui.components import (
     hide_loading_overlay,
     show_confirmation_dialog,
     ValidatedTextField,
-    CardWithHeader
+    CardWithHeader,
+    wrapper_cotainer_1
 )
 from src.flet_ui import theme
+from src.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
@@ -300,33 +302,10 @@ def create_profile_view(page: ft.Page) -> ft.View:
             danger_zone_section,
         ],
         spacing=10,
-        width=700, # Definir uma largura máxima para o conteúdo do perfil
+        width=WIDTH_CONTAINER_CONFIGS, # Definir uma largura máxima para o conteúdo do perfil
         #scroll=ft.ScrollMode.ADAPTIVE
         # alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
         # horizontal_alignment=ft.CrossAxisAlignment.CENTER # Centraliza a coluna na página
     )
-
-    return ft.Container(content=ft.Column( # Container para centralizar e aplicar padding
-                [ ft.Container(profile_content_column, expand=True, padding=ft.padding.only(right=15)) ], 
-                alignment=ft.MainAxisAlignment.START, # Coluna já alinha no topo
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER, # Centraliza a coluna na página
-                expand=True, scroll=ft.ScrollMode.ALWAYS
-            ),
-            padding=ft.padding.symmetric(vertical=30, horizontal=20),
-            alignment=ft.alignment.top_center, expand=True, 
-            #border=ft.border.all(2, ft.Colors.BLUE_ACCENT_100)
-        )
-
-    return ft.View(
-        route="/profile",
-        controls=[
-            ft.Container( # Container para centralizar e aplicar padding
-                content=profile_content_column ,
-                alignment=ft.alignment.top_center, # Alinha o CardWithHeader no centro
-                padding=ft.padding.symmetric(vertical=30, horizontal=20),
-                expand=True
-            )
-        ],
-        scroll=ft.ScrollMode.ADAPTIVE # Permite scroll se o conteúdo for maior que a tela
-    )
+    return wrapper_cotainer_1(profile_content_column)
 

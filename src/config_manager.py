@@ -43,7 +43,9 @@ def get_proxy_settings() -> Optional[Dict[str, Any]]:
         config[K_PROXY_IP_URL] = keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_IP_URL) or PROXY_URL_DEFAULT
         config[K_PROXY_PORT] = keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_PORT) or PROXY_PORT_DEFAULT
         config[K_PROXY_USERNAME] = keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME)            
-        logger.info(f"Proxy details loaded: IP={config.get(K_PROXY_IP_URL)}, Port={config.get(K_PROXY_PORT)}, User={config.get(K_PROXY_USERNAME)}")
+        
+        if enabled_str and enabled_str.lower() in ('true', '1'):
+            logger.info(f"Proxy details loaded: IP={config.get(K_PROXY_IP_URL)}, Port={config.get(K_PROXY_PORT)}, User={config.get(K_PROXY_USERNAME)}")
             
         return config
 
@@ -53,8 +55,9 @@ def get_proxy_settings() -> Optional[Dict[str, Any]]:
         return config_start
 
 def delete_proxy_settings(logger: logging.Logger) -> None:
-    logger.info(f"Deletando configs proxy do Keyring (Service: {PROXY_KEYRING_SERVICE})")
-    try: keyring.delete_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME)
+    try: 
+        keyring.delete_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME)
+        logger.info(f"Deletando configs proxy do Keyring (Service: {PROXY_KEYRING_SERVICE})")
     except keyring.errors.PasswordDeleteError: logger.debug("Username não existia para deletar.")
     try: keyring.delete_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD)
     except keyring.errors.PasswordDeleteError: logger.debug("Senha não existia para deletar.")
