@@ -1,7 +1,6 @@
 ''' TODO: Criar pytestes para este módulo. '''
 
 from rich import print
-from sympy import limit
 from src.utils import timing_decorator
 
 ### nltk_initializer:
@@ -35,7 +34,7 @@ initialize_nltk_data()
 
 ### pdf_extraction_strategies: #########################################################################################
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union, Set
 
 import pdfplumber
 from PyPDF2 import PdfReader
@@ -367,18 +366,19 @@ class PDFDocumentAnalyzer:
         """Gera uma chave única global para uma página. Ex: 'file0_page15'"""
         return f"file{file_index}_page{page_index_in_file}"
 
-    def format_global_keys_for_display(self, global_keys: List[str]) -> str:
+    def format_global_keys_for_display(self, global_keys: Union[List[str], Set[str]]) -> str:
         """
         Converte uma lista de global_page_key em uma string formatada para display.
         Exemplo: ["file0_page0", "file0_page1", "file0_page2", "file1_page0", "file1_page1"] => "Arq1 Pág1-3, Arq2 Pág1-2"
         
         Args:
-            global_keys (List[str]): Lista de global_page_key (str)
+            global_keys (Union[List[str], Set[str]]): Lista ou conjunto de global_page_key (str)
         
         Returns:
             str: String formatada para display
         """
-        if not global_keys: return "Nenhuma"
+        if not global_keys: 
+            return "Nenhuma"
 
         parsed_pages = []
         for key in global_keys:
@@ -388,7 +388,8 @@ class PDFDocumentAnalyzer:
                 page_num = int(match.group(2)) + 1 # Para ser 1-based
                 parsed_pages.append({'file': file_num, 'page': page_num, 'original_key': key})
         
-        if not parsed_pages: return ", ".join(global_keys) # Fallback
+        if not parsed_pages: 
+            return ", ".join(global_keys) # Fallback
 
         # Ordena primeiro por arquivo, depois por página
         parsed_pages.sort(key=lambda x: (x['file'], x['page']))
@@ -442,9 +443,10 @@ class PDFDocumentAnalyzer:
         Retorna uma tupla: (processed_files_metadata, all_indices_in_batch, 
                             all_texts_for_storage_combined, all_texts_for_analysis_combined)
         """
+        start_time = time.perf_counter()
         if not pdf_paths_ordered:
             logger.warning("Nenhum caminho de PDF fornecido para análise em lote.")
-            return [], [], [], []
+            return [], [], [], [], 0
 
         processed_files_metadata: List[Tuple[int, str]] = [] # ARMAZENA (original_file_idx, pdf_path)
         all_indices_in_batch: List[List[int]] = []
@@ -482,14 +484,16 @@ class PDFDocumentAnalyzer:
         else:
             logger.info(f"Extração e pré-processamento em lote concluídos. Total de páginas com texto para análise: {len(all_texts_for_analysis_combined)}")
         
-        return processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined
+        end_time = time.perf_counter()
+        return processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined, end_time - start_time
 
     def _build_combined_page_data(self, 
                                         processed_files_metadata: List[Tuple[int, str]], 
                                         all_indices_in_batch: List[List[int]],
                                         all_texts_for_storage_combined: List[Dict[int, str]]
                                        ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
-        
+        start_time = time.perf_counter()
+
         combined_processed_page_data: Dict[str, Dict[str, Any]] = {}
         all_global_page_keys_ordered: List[str] = [] 
         
@@ -515,8 +519,8 @@ class PDFDocumentAnalyzer:
                     'page_index_in_file': page_idx_in_file,
                     'original_pdf_path': pdf_path
                 }
-            
-        return combined_processed_page_data, all_global_page_keys_ordered
+        end_time = time.perf_counter()
+        return combined_processed_page_data, all_global_page_keys_ordered, end_time - start_time
 
     @timing_decorator()
     def analyze_similarity_and_relevance_files(self, combined_processed_page_data: Dict[str, Dict[str, Any]], all_global_page_keys_ordered: List[str], 
@@ -526,7 +530,7 @@ class PDFDocumentAnalyzer:
         Atualiza o dicionário `combined_processed_page_data` com os scores de TF-IDF e 
         listas de páginas semelhantes.
         """
-
+        start_time = time.perf_counter()
         # --- 2. Análise de Similaridade e TF-IDF (COMBINADA para todos os arquivos) ---
         logger.info(f"Realizando análise de similaridade e TF-IDF para {len(all_texts_for_analysis_combined)} páginas combinadas.")
         try:
@@ -548,24 +552,25 @@ class PDFDocumentAnalyzer:
             # Por ora, os scores/semelhantes podem ficar zerados/vazios.
 
         logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(combined_processed_page_data)}")
-        return combined_processed_page_data
+        end_time = time.perf_counter()
+        return combined_processed_page_data, end_time - start_time
 
     @timing_decorator()
     def analyze_pdf_documents(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
-        
-        processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined = self.extract_texts_and_preprocess_files(pdf_paths_ordered)
+
+        processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined, _ = self.extract_texts_and_preprocess_files(pdf_paths_ordered)
         if not processed_files_metadata:
             logger.warning("Nenhum arquivo PDF produziu dados na fase de extração.")
             return {}
     
-        combined_processed_page_data, all_global_page_keys_ordered = self._build_combined_page_data(processed_files_metadata, 
+        combined_processed_page_data, all_global_page_keys_ordered, _ = self._build_combined_page_data(processed_files_metadata, 
                                                                             all_indices_in_batch, all_texts_for_storage_combined)
 
         if not all_texts_for_analysis_combined:
             logger.warning("Nenhum texto para análise combinado de todos os arquivos. Pulando análise de similaridade e relevância.")
             return combined_processed_page_data
         
-        combined_processed_page_data = self.analyze_similarity_and_relevance_files(combined_processed_page_data, all_global_page_keys_ordered, all_texts_for_analysis_combined)
+        combined_processed_page_data, _ = self.analyze_similarity_and_relevance_files(combined_processed_page_data, all_global_page_keys_ordered, all_texts_for_analysis_combined)
 
         return combined_processed_page_data
    
@@ -643,8 +648,8 @@ class PDFDocumentAnalyzer:
                     key=lambda p_idx_key: processed_page_data[p_idx_key]['number_words']
                 )
                 logger.info(f'Do grupo de páginas semelhantes (considerando apenas inteligíveis e não processadas) '
-                            f'{[p + 1 for p in sorted(list(group_to_evaluate))]}, '
-                            f'a página {most_relevant_in_group + 1} foi selecionada.')
+                            f'{[p for p in sorted(list(group_to_evaluate))]}, '
+                            f'a página {most_relevant_in_group} foi selecionada.')
                 
                 # NOVO: Contabilizar páginas descartadas por similaridade
                 for group_member_idx in group_to_evaluate:
@@ -676,10 +681,8 @@ class PDFDocumentAnalyzer:
 
         return (
             final_relevant_indices_list, 
-            sorted(list(unintelligible_indices_set)), 
-            selected_relevant_count, 
-            discarded_by_similarity_count, 
-            discarded_by_unintelligibility_count
+            unintelligible_indices_set,
+            discarded_by_similarity_count          
         )
 
     @timing_decorator()
@@ -705,7 +708,7 @@ class PDFDocumentAnalyzer:
 
         Returns:
             Tuple[str, str, int, int]: Tupla contendo:
-                - String formatada dos intervalos de páginas consideradas.
+                - intervalos de páginas consideradas.
                 - Texto acumulado das páginas selecionadas (e possivelmente truncadas).
                 - Total de tokens das páginas selecionadas ANTES de qualquer truncamento.
                 - Total de tokens do texto acumulado FINAL (após truncamento, se houver).
@@ -760,6 +763,7 @@ class PDFDocumentAnalyzer:
 
         keys_of_included_texts = list(texts_for_concatenation.keys())
         logically_sorted_keys = sorted(keys_of_included_texts, key=get_sortable_page_key)
+        #str_pages_considered = self.format_global_keys_for_display(logically_sorted_keys)      
 
         accumulated_text_parts = [texts_for_concatenation[key] for key in logically_sorted_keys]
         accumulated_text = " ".join(accumulated_text_parts).strip()
@@ -767,9 +771,7 @@ class PDFDocumentAnalyzer:
         # Recalcula tokens finais do texto agregado para máxima precisão, pois o join(" ") pode adicionar/remover tokens.
         final_aggregated_tokens = count_tokens(accumulated_text, model_name=model_name_for_tokens)
 
-        str_pages_considered = self.format_global_keys_for_display(logically_sorted_keys)      
-
-        return str_pages_considered, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
+        return keys_of_included_texts, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
 
     ### Métodos single_file com diferencial de argumentar page_indices. Avaliar se mantém ou descontinua. 
 

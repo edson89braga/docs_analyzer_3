@@ -3,7 +3,7 @@ import flet as ft
 from src.flet_ui.components import show_snackbar
 from src.flet_ui import theme # Para COLOR_WARNING
 
-from src.flet_ui.views.analyze_pdf_view1 import KEY_SESSION_CURRENT_PDF_NAME
+from src.flet_ui.views.analyze_pdf_view1 import KEY_SESSION_CURRENT_BATCH_NAME
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
@@ -12,7 +12,7 @@ _logger = LoggerSetup.get_logger(__name__)
 def create_chat_pdf_content(page: ft.Page) -> ft.Control:
     _logger.info("Criando conteúdo da view Chat com PDF.")
 
-    current_pdf_name = page.session.get(KEY_SESSION_CURRENT_PDF_NAME)
+    current_pdf_name = page.session.get(KEY_SESSION_CURRENT_BATCH_NAME)
     processed_text_for_chat = None
 
     show_snackbar(

@@ -154,7 +154,7 @@ def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
         ft.PopupMenuButton(
             tooltip="Configurações do Usuário",
             icon=ft.Icons.SETTINGS, #SETTINGS_APPLICATIONS_OUTLINED, ACCOUNT_CIRCLE_OUTLINED,
-            icon_size=30, 
+            icon_size=26, 
             padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
             items=[
                 ft.PopupMenuItem(text="Perfil", icon=ft.Icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")), # Rota de perfil
@@ -169,7 +169,7 @@ def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
             tooltip="Mudar tema",
             padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
             on_click=toggle_theme_mode,
-            icon_size=30
+            icon_size=26
         ),
     ]
 

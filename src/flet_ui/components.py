@@ -2,8 +2,10 @@
 Componentes de UI Reutilizáveis: Contém classes ou funções que criam componentes customizados ou combinações de componentes Flet.
 '''
 import flet as ft
-from typing import List, Dict, Any, Optional, Callable, Type, Union
+from typing import List, Dict, Any, Optional, Callable, Type, Union, Tuple
 import os, shutil, time, threading
+
+from sympy import N
 
 from src.flet_ui import theme
 from src.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
@@ -1828,4 +1830,300 @@ def wrapper_cotainer_1(int_content):
                 width = WIDTH_CONTAINER_CONFIGS, # expand=True, 
                 #border=ft.border.all(2, ft.Colors.BLUE_ACCENT_100)
             )
+
+def wrapper_panel_1(int_content):
+    return ft.ExpansionPanelList(
+        controls=[int_content],
+        expand_icon_color=theme.PRIMARY,
+        elevation=2,
+        divider_color=ft.colors.TRANSPARENT, # Sem divisores visíveis entre os painéis
+        expanded_header_padding=ft.padding.all(1),
+        # animation_duration=300 # Opcional
+    )
+
+KEY_SESSION_PDF_ANALYZER_DATA, KEY_SESSION_PDF_CLASSIFIED_INDICES = [None] * 2
+KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, KEY_SESSION_PDF_LAST_LLM_RESPONSE= [None] * 2
+KEY_SESSION_CURRENT_PDF_FILES_ORDERED, KEY_SESSION_CURRENT_PDF_NAME = [None] * 2
+_logger = None
+
+class FileListManager:
+    """Encapsula a lógica de exibição e manipulação da lista de arquivos."""
+
+    def __init__(self, page: ft.Page, gui_controls: Dict[str, ft.Control], managed_file_picker_ref:List[ManagedFilePicker]):
+        self.page = page
+        self.selected_files_list_view = gui_controls["selected_files_list_view"]
+        self.current_batch_name_text = gui_controls["current_batch_name_text"]
+        self.analyze_button = gui_controls["analyze_button"]
+        self.status_extraction_text = gui_controls["status_extraction_text"]
+        self.status_text_analysis = gui_controls["status_text_analysis"]
+        self.status_llm_text = gui_controls["status_llm_text"]
+        self.text_reordenar = gui_controls["text_reordenar"]
+        self.result_textfield = gui_controls["result_textfield"]
+        self.managed_file_picker = managed_file_picker_ref[0] # Referência para chamar clear_upload_state
+
+    def clear_cached_analysis_results(self):
+        """Limpa caches relacionados aos resultados da análise combinada."""
+        keys_to_clear = [
+            KEY_SESSION_PDF_ANALYZER_DATA, KEY_SESSION_PDF_CLASSIFIED_INDICES,
+            KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, KEY_SESSION_PDF_LAST_LLM_RESPONSE
+        ]
+        if self.page.session.contains_key(KEY_SESSION_PDF_LAST_LLM_RESPONSE):
+            self.status_extraction_text.value = "Lista de arquivos modificada. Reanálise necessária."
+        else:
+            self.status_extraction_text.value = ""
+        
+        for k in keys_to_clear:
+            if self.page.session.contains_key(k): 
+                self.page.session.remove(k)
+        _logger.debug("Caches de resultados de análise (combinada) limpos.")
+        
+        
+        self.status_text_analysis.value = ""
+        self.status_llm_text.value = ""
+        self.result_textfield.value = ""
+        # CHECK: A atualização da página será feita pelo chamador ou em um ponto consolidado
+        self.page.update(self.status_extraction_text, self.status_text_analysis, self.status_llm_text, self.result_textfield, self.text_reordenar)
+
+    def update_selected_files_display(self, files_ordered: Optional[List[Dict[str, Any]]] = None):
+        self.selected_files_list_view.controls.clear()
+        _files = files_ordered or self.page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED) or []
+
+        if not isinstance(_files, list): 
+            _files = []
+
+        if not _files:
+            self.current_batch_name_text.value = "Nenhum arquivo PDF selecionado."
+            self.selected_files_list_view.height = 0 # Esconde se vazio
+            self.analyze_button.disabled = True
+            self.page.update(self.current_batch_name_text, self.selected_files_list_view, self.analyze_button)
+            self.text_reordenar.visible = False
+            self.clear_cached_analysis_results() # Limpa se a lista ficar vazia
+            self.status_extraction_text.value = ""
+            self.page.update(self.status_extraction_text)
+        else:
+            for idx, file_info in enumerate(_files):
+                if not isinstance(file_info, dict):
+                    error_tile = ft.ListTile(title=ft.Text(f"Erro: Item inválido na lista - {file_info}", color=theme.COLOR_ERROR))
+                    self.selected_files_list_view.controls.append(error_tile)
+                    continue
+
+                on_will_accept, on_accept, on_leave = self._create_drag_handlers_for_item(idx)
+
+                file_name_text = ft.Text(
+                    value=file_info.get('name', 'Nome Indisponível'),
+                    expand=True, # Permite que o texto do nome expanda e empurre os botões
+                    overflow=ft.TextOverflow.ELLIPSIS, # Adiciona "..." se o nome for muito longo
+                    #tooltip=file_info.get('name', 'Nome Indisponível') 
+                )
+                action_buttons = ft.Row([
+                        ft.IconButton(ft.Icons.ARROW_UPWARD, 
+                                      on_click=lambda _, i=idx: self.move_file_in_list(i, -1), 
+                                      disabled=(idx==0), icon_size=18, padding=3),
+                        ft.IconButton(ft.Icons.ARROW_DOWNWARD, 
+                                      on_click=lambda _, i=idx: self.move_file_in_list(i, 1), 
+                                      disabled=(idx==len(_files)-1), icon_size=18, padding=3),
+                        ft.IconButton(ft.Icons.DELETE_OUTLINE, 
+                                      on_click=lambda _, i=idx: self.remove_file_from_list(i), 
+                                      icon_color=theme.COLOR_ERROR, icon_size=18, padding=3)
+                    ], spacing=0, 
+                    alignment=ft.MainAxisAlignment.END, 
+                    width=100) # Necessário definir width aqui devido concorrência de espaço indevido com file_name_text no ListTile 
+
+                list_tile = ft.ListTile(
+                    title=file_name_text, # Usa o Text com expand=True
+                    leading=ft.Icon(ft.Icons.PICTURE_AS_PDF),
+                    trailing=action_buttons,
+                    # dense=True, # Torna o ListTile um pouco mais compacto
+                    # visual_density=ft.VisualDensity.COMPACT # Outra opção para compactar
+                ) 
+                item_container = ft.Container(
+                    content=list_tile, # O ListTile é o conteúdo visual principal
+                    # padding=ft.padding.symmetric(vertical=2),
+                    # border=ft.border.all(1, ft.colors.OUTLINE_VARIANT), # Borda de depuração
+                    # border_radius=5
+                )
+                draggable_item = ft.Draggable(
+                    group="pdf_files",
+                    content=item_container, # O container (com o ListTile dentro) é arrastável
+                    data=str(idx)
+                )
+                drop_target_item = ft.DragTarget(
+                    group="pdf_files",
+                    content=draggable_item,
+                    on_will_accept=on_will_accept,
+                    on_accept=on_accept,         
+                    on_leave=on_leave,
+                    # on_move=None, # Removido ou pode ser usado para outros feedbacks visuais durante o arraste sobre o alvo
+                )
+                 
+                _logger.info(f"VIEW_DEBUG: Criado file_name_text com value: '{file_name_text.value}' para idx {idx}")
+                self.selected_files_list_view.controls.append(drop_target_item)
+
+            if len(_files) == 1: 
+                self.current_batch_name_text.value = f"Arquivo selecionado: {_files[0]['name']}"
+                self.text_reordenar.visible = False
+            else: 
+                self.current_batch_name_text.value = f"Arquivos selecionados: {_files[0]['name']} e Outros {len(_files)-1}"
+                self.text_reordenar.visible = True
+            
+            self.selected_files_list_view.height = min(len(_files) * 65, 300)
+            self.analyze_button.disabled = False
+        
+        self.page.session.set(KEY_SESSION_CURRENT_PDF_NAME, self.current_batch_name_text.value)
+        # A atualização da página (page.update) será feita de forma mais global
+        # self.page.update(self.current_batch_name_text, self.selected_files_list_view, self.analyze_button)
+
+    def _create_drag_handlers_for_item(self, target_item_idx: int) -> Tuple[callable, callable, callable]:
+        def on_drag_will_accept(e: ft.ControlEvent):
+            e.control.content.border = ft.border.all(2, ft.colors.PINK_ACCENT_200 if e.data == "true" else ft.colors.BLACK26)
+            e.control.update()
+
+        def on_drag_leave(e: ft.ControlEvent): 
+            e.control.content.border = None
+            e.control.update()
+        
+        def on_drag_accept_handler(e: ft.DragTargetEvent): 
+            e.control.content.border = None
+            dragged_ctrl = e.page.get_control(e.src_id)
+            src_idx = None
+            if dragged_ctrl and hasattr(dragged_ctrl, 'data'):
+                try: 
+                    src_idx = int(dragged_ctrl.data)
+                except ValueError: 
+                    _logger.error(f"ON_ACCEPT: Erro ao converter src_idx '{dragged_ctrl.data}'")
+            else: 
+                _logger.error(f"ON_ACCEPT: Dados do Draggable não encontrados (src_id: {e.src_id}).")
+
+            if src_idx is None: 
+                return # Simplesmente retorna se não puder processar
+
+            dest_idx = target_item_idx
+            current_files = list(self.page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED) or [])
+            
+            if 0 <= src_idx < len(current_files) and 0 <= dest_idx < len(current_files) and src_idx != dest_idx:
+                dragged_file = current_files.pop(src_idx)
+                current_files.insert(dest_idx, dragged_file)
+                self.page.session.set(KEY_SESSION_CURRENT_PDF_FILES_ORDERED, current_files)
+                self.update_selected_files_display(current_files) # Re-renderiza com a nova ordem
+                self.clear_cached_analysis_results()
+            elif src_idx == dest_idx:
+                _logger.debug("Item solto sobre si mesmo.")
+                self.update_selected_files_display(current_files)
+            else:
+                _logger.warning(f"Índices inválidos on_accept: src={src_idx}, dest={dest_idx}, len={len(current_files)}")
+                self.update_selected_files_display(current_files)
+
+            # A atualização da UI mais ampla (page.update) deveria ser feita fora deste handler específico
+            # para evitar múltiplas atualizações pequenas. O update_selected_files_display já agenda um redraw.
+            self.page.update(self.current_batch_name_text, self.selected_files_list_view) # CHECK
+
+        return on_drag_will_accept, on_drag_accept_handler, on_drag_leave
+
+    def move_file_in_list(self, index: int, direction: int):
+        current_files = list(self.page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED) or [])
+        
+        # if not (0 <= index < len(current_files)): return
+        new_index = index + direction
+        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)): 
+            return
+        
+        current_files.insert(new_index, current_files.pop(index))
+        self.page.session.set(KEY_SESSION_CURRENT_PDF_FILES_ORDERED, current_files)
+        self.update_selected_files_display(current_files)
+        self.clear_cached_analysis_results()
+        self.page.update(self.current_batch_name_text, self.selected_files_list_view) # Atualiza a UI aqui
+
+    def remove_file_from_list(self, index: int):
+        current_files = list(self.page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED) or [])
+        
+        if not (0 <= index < len(current_files)): return
+        
+        removed_file_info = current_files.pop(index)
+        removed_file_name = removed_file_info['name'] 
+
+        self.page.session.set(KEY_SESSION_CURRENT_PDF_FILES_ORDERED, current_files)
+        
+        if self.managed_file_picker: 
+            self.managed_file_picker.clear_upload_state_for_file(removed_file_name)
+        
+        self.update_selected_files_display(current_files)
+        self.clear_cached_analysis_results()
+        self.page.update(self.current_batch_name_text, self.selected_files_list_view) # Atualiza a UI aqui
+
+
+class CompactKeyValueTable(ft.Column):
+    """
+    Simula uma tabela compacta de chave-valor usando ft.Column e ft.Row.
+    Permite que a altura de cada "linha" se ajuste ao conteúdo.
+    """
+    def __init__(
+        self,
+        data: List[Tuple[str, Any]], # Lista de tuplas (chave_str, valor_any)
+        key_col_width: Optional[int] = 220,
+        value_col_width: Optional[int] = None, # Se None, o valor expande
+        key_style: Optional[ft.TextStyle] = None,
+        value_style: Optional[ft.TextStyle] = None,
+        row_spacing: int = 4, # Espaçamento vertical entre as "linhas"
+        col_spacing: int = 8, # Espaçamento horizontal entre chave e valor
+        key_weight: ft.FontWeight = ft.FontWeight.NORMAL,
+        value_selectable: bool = True,
+        default_text_size: int = 13,
+        expand: Union[None, bool, int] = None,
+        **kwargs
+    ):
+        super().__init__(spacing=row_spacing, expand=expand, **kwargs)
+
+        self.data = data
+        self.key_col_width = key_col_width
+        self.value_col_width = value_col_width
+        self.key_style = key_style or ft.TextStyle(weight=key_weight, size=default_text_size)
+        self.value_style = value_style or ft.TextStyle(size=default_text_size)
+        self.col_spacing = col_spacing
+        self.value_selectable = value_selectable
+
+        self._build_table()
+
+    def _build_table(self):
+        self.controls.clear()
+        for key_text, value_obj in self.data:
+            key_control = ft.Container(
+                content=ft.Text(str(key_text), style=self.key_style, expand=True, no_wrap=False),
+                width=self.key_col_width,
+                #alignment=ft.alignment.center_left # Opcional
+            )
+
+            value_control_content = ft.Text(
+                str(value_obj if value_obj is not None else "N/A"),
+                style=self.value_style,
+                expand=True,
+                no_wrap=False # Permite quebra de linha
+            )
+            
+            value_container_content = ft.SelectionArea(content=value_control_content) \
+                                      if self.value_selectable else value_control_content
+
+            value_control = ft.Container(
+                content=value_container_content,
+                width=self.value_col_width, # Se definido, fixa a largura da coluna de valor
+                expand=True if self.value_col_width is None else None, # Expande se a largura não for fixa
+                #alignment=ft.alignment.center_left # Opcional
+            )
+
+            row = ft.Row(
+                controls=[
+                    key_control,
+                    value_control
+                ],
+                spacing=self.col_spacing,
+                vertical_alignment=ft.CrossAxisAlignment.START # Importante para conteúdo multinha
+            )
+            #self.controls.append(ft.Container(content=row, padding=ft.padding.only(left=15)))
+            self.controls.append(row)
+
+    def update_data(self, new_data: List[Tuple[str, Any]]):
+        """Atualiza os dados da tabela e a reconstrói."""
+        self.data = new_data
+        self._build_table()
+        if self.page: # Só atualiza se o componente estiver na página
+            self.update()
 

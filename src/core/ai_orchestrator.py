@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
+from langchain_community.callbacks.manager import get_openai_callback
 from openai import AuthenticationError, APIError # Para tratamento específico de erros OpenAI
 
 # Imports do Projeto
@@ -25,14 +26,13 @@ import flet as ft # Para obter contexto do usuário da página
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
 
-
 # --- Função Principal de Análise ---
 
 def analyze_text_with_llm(
     page: ft.Page,
     processed_text: str,
     provider: str = DEFAULT_LLM_PROVIDER,
-    model_name: Optional[str] = None,
+    model_name: Optional[str] = DEFAULT_OPENAI_MODEL,
     temperature: float = DEFAULT_TEMPERATURE,
     prompt_name: str = "GENERAL_ANALYSIS_V1"
 ) -> Optional[str]:
@@ -54,7 +54,7 @@ def analyze_text_with_llm(
     logger.info(f"Iniciando análise de texto com LLM. Provider: {provider}, Prompt: {prompt_name}")
 
     decrypted_api_key: Optional[str] = None # Gera a chave de sessão esperada (deve corresponder à lógica em LLMConfigCard)
-    service_name_firestore = f"{provider}_api_key" # Ou uma lógica de mapeamento mais robusta
+    service_name_firestore = f"{provider}" # Ou uma lógica de mapeamento mais robusta
     session_key_for_decrypted_api_key = f"decrypted_api_key_{provider}_{service_name_firestore}"
 
     # 0. Tenta obter da sessão (cache)
@@ -72,7 +72,7 @@ def analyze_text_with_llm(
             # Para este caso, se está na sessão e é None/vazia, não prosseguimos.
             if decrypted_api_key is None: # Se foi explicitamente setada como None
                 logger.error(f"Chave API para '{provider}' explicitamente definida como None na sessão. O usuário precisa configurar.")
-                return None # Ou mostrar mensagem para configurar
+                return None, None # Ou mostrar mensagem para configurar
 
     # 1. Obter Contexto do Usuário e Chave API
     if not decrypted_api_key: # Se ainda não temos uma chave válida
@@ -85,13 +85,13 @@ def analyze_text_with_llm(
             logger.error("Contexto do usuário (token/ID) não encontrado na sessão Flet. Abortando análise.")
             # Idealmente, a UI já deveria ter garantido isso, mas é uma salvaguarda.
             # A UI deve lidar com a ausência de resposta.
-            return None
+            return None, None
                     
         try:
             firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
             # O nome do serviço no Firestore precisa corresponder ao que foi salvo na Task 1.3
             # Assumindo que foi salvo como "openai_api_key" para o provedor "openai"
-            service_name_firestore = f"{provider}_api_key" # Ou uma lógica de mapeamento mais robusta
+            service_name_firestore = f"{provider}" # Ou uma lógica de mapeamento mais robusta
 
             logger.debug(f"Buscando chave API criptografada para serviço: {service_name_firestore}")
             encrypted_key_bytes = firestore_client.get_user_api_key_client(
@@ -101,7 +101,7 @@ def analyze_text_with_llm(
             if not encrypted_key_bytes:
                 logger.error(f"Chave API criptografada para '{service_name_firestore}' não encontrada no Firestore para o usuário {user_id}.")
                 # A UI deve informar o usuário para configurar a chave.
-                return None
+                return None, None
 
             logger.debug("Descriptografando chave API...")
             decrypted_api_key = credentials_manager.decrypt(encrypted_key_bytes)
@@ -109,30 +109,33 @@ def analyze_text_with_llm(
             if not decrypted_api_key:
                 logger.error(f"Falha ao descriptografar a chave API para '{service_name_firestore}' do usuário {user_id}.")
                 # Pode indicar chave de criptografia local ausente ou corrompida.
-                return None
+                return None, None
 
             logger.info(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
 
         except Exception as e:
             logger.error(f"Erro ao obter/descriptografar chave API para '{provider}': {e}", exc_info=True)
-            return None
+            return None, None
 
     # Se após todas as tentativas, decrypted_api_key ainda for None ou vazia
     if not decrypted_api_key:
         logger.error(f"Chave API para o provedor '{provider}' não está configurada ou não pôde ser obtida.")
         # A UI deve informar o usuário para configurar a chave.
-        return None
+        return None, None
     
     # 2. Obter o Prompt
     prompt_string = prompts.get_prompt(prompt_name)
     if not prompt_string:
         logger.error(f"Prompt '{prompt_name}' não encontrado no módulo de prompts.")
-        return None
+        return None, None
 
     # 3. Configurar e Executar a Cadeia LangChain
     llm = None
     chain_result: Optional[Dict[str, Any]] = None
     final_response: Optional[str] = None
+
+    final_response: Optional[str] = None
+    token_usage_info: Optional[Dict[str, int]] = None
 
     # Define a chave API no ambiente TEMPORARIAMENTE para o LangChain usar
     env_var_name = ""
@@ -152,10 +155,20 @@ def analyze_text_with_llm(
             prompt_template = PromptTemplate(input_variables=["input_text"], template=prompt_string)
             chain = LLMChain(llm=llm, prompt=prompt_template)
 
-            logger.debug("Executando cadeia LangChain...")
+            # Usar o callback do OpenAI para capturar o uso de tokens
             # A variável no dicionário de entrada DEVE corresponder a 'input_variables' do PromptTemplate
-            chain_result = chain.invoke({"input_text": processed_text})
-
+            with get_openai_callback() as cb:
+                chain_result = chain.invoke({"input_text": processed_text})
+                token_usage_info = {
+                    "input_tokens": cb.prompt_tokens,
+                    "cached_tokens": cb.prompt_tokens_cached,
+                    "output_tokens": cb.completion_tokens,
+                    "total_tokens": cb.total_tokens,
+                    "successful_requests": cb.successful_requests,
+                    "total_cost_usd": cb.total_cost
+                }
+                logger.info(f"Uso de tokens (OpenAI): {token_usage_info}")
+            
         # --- Adicionar blocos `elif provider == "azure":` etc. aqui no futuro ---
         # elif provider == "azure":
         #    env_var_name = "AZURE_OPENAI_API_KEY"
@@ -168,7 +181,7 @@ def analyze_text_with_llm(
 
         else:
             logger.error(f"Provedor LLM '{provider}' não suportado.")
-            return None
+            return None, None
 
         # Processar o resultado da cadeia
         if chain_result and isinstance(chain_result, dict):
@@ -178,9 +191,9 @@ def analyze_text_with_llm(
                 logger.info("Análise LLM concluída com sucesso.")
                 # logger.debug(f"Resposta LLM: {final_response[:100]}...") # Log truncado opcional
             else:
-                 logger.error(f"Cadeia LangChain executada, mas a resposta não contém a chave 'text' esperada. Resultado: {chain_result}")
+                logger.error(f"Cadeia LangChain executada, mas a resposta não contém a chave 'text' esperada. Resultado: {chain_result}")
         else:
-             logger.error(f"Resultado inesperado da cadeia LangChain: {chain_result}")
+            logger.error(f"Resultado inesperado da cadeia LangChain: {chain_result}")
 
 
     except AuthenticationError as auth_err:
@@ -192,7 +205,7 @@ def analyze_text_with_llm(
     except Exception as e:
         logger.error(f"Erro inesperado durante a execução da cadeia LangChain ({provider}): {e}", exc_info=True)
 
-    return final_response
+    return final_response, token_usage_info
 
 # --- (Opcional) Exemplo de uso (somente para teste direto do módulo) ---
 if __name__ == '__main__':
@@ -235,3 +248,61 @@ if __name__ == '__main__':
     #      print(f"Erro ao executar teste principal: {main_e}")
     pass
 
+
+'''
+Teste interativo com openai:
+
+import os
+from openai import OpenAI
+
+os.environ["OPENAI_API_KEY"] = api_key_test
+
+client = OpenAI()
+
+response = client.responses.create(
+    model="gpt-4.1-nano",
+    input=[
+        {"role": "user", "content": "Diga-me em que você pode me ajudar."},
+    ]
+)
+
+print(response.output_text)
+
+================================================================================================
+
+from src.settings import api_key_test
+from src.core.ai_orchestrator import *
+
+provider= "openai"
+model_name= "gpt-4.1-nano"
+temperature= 0.2
+
+llm = ChatOpenAI(
+    model_name=model_name,
+    temperature=temperature,
+    openai_api_key=api_key_test 
+)
+
+template_simples = "Qual é a capital de {assunto}?"
+prompt = PromptTemplate(input_variables=["assunto"], template=template_simples)
+
+chain = LLMChain(llm=llm, prompt=prompt)
+
+chain_result = chain.invoke({"assunto": "Afeganistão"})
+
+with get_openai_callback() as cb:
+    chain_result = chain.invoke({"assunto": "Afeganistão"})
+    # token_usage_info = cb
+    token_usage_info = {
+        "input_tokens": cb.prompt_tokens,
+        "input_tokens_cached": cb.prompt_tokens_cached,
+        "output_tokens": cb.completion_tokens,
+        "total_tokens": cb.total_tokens,
+        "successful_requests": cb.successful_requests,
+        "total_cost_usd": cb.total_cost
+    }
+    logger.info(f"Uso de tokens (OpenAI): {token_usage_info}")
+
+chain_result.get("text")
+
+'''

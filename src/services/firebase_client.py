@@ -809,6 +809,7 @@ class FbManagerAuth:
                                 self.logger.info("Tentando refresh forçado do token...")
                                 # Presume que check_and_refresh_token_if_needed está acessível
                                 # Idealmente, passá-lo ou tê-lo em um local comum.
+                                
                                 from src.flet_ui.app import check_and_refresh_token_if_needed # Ajuste o caminho se necessário
                                 
                                 if check_and_refresh_token_if_needed(page, force_refresh=True):

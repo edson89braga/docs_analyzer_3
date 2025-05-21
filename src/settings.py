@@ -5,6 +5,11 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+#TODO: DELETE:
+api_key_test = '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'
+
+cotacao_dolar_to_real = 6
+
 # --- Firebase Settings ---
 # ATENÇÃO: Obtenha esta chave no Console do Firebase -> Configurações do Projeto -> Geral -> Seus apps -> Configuração do SDK
 # Esta chave é considerada pública e segura para ser incluída no código do cliente (como este app desktop).
@@ -18,7 +23,6 @@ if FIREBASE_WEB_API_KEY == "SUA_FIREBASE_WEB_API_KEY_AQUI":
         "A autenticação NÃO funcionará. "
         "Defina-a no arquivo 'src/config/settings.py' ou como variável de ambiente."
     )
-
 
 # --- Constantes de Configuração (Centralizadas aqui) ---
 # É importante que estas sejam consistentes com o uso em outros lugares (FirebaseBackend)
@@ -89,7 +93,7 @@ def show_data_k():
 
 # --- Constantes referentes aos modelos de LLM:
 DEFAULT_LLM_PROVIDER = "openai"
-DEFAULT_OPENAI_MODEL = "gpt-3.5-turbo" # Modelo inicial padrão
+DEFAULT_OPENAI_MODEL = "gpt-4.1-nano" # Modelo inicial padrão
 DEFAULT_TEMPERATURE = 0.2 # Baixa temperatura para respostas mais factuais/consistentes
 
 

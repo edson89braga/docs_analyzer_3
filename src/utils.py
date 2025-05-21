@@ -497,3 +497,9 @@ def register_temp_files_cleanup(temp_dir_to_clean: str):
     cleanup_func_with_args = partial(cleanup_old_temp_files, temp_dir_to_clean)
     atexit.register(cleanup_func_with_args)
 
+def format_seconds_to_min_sec(total_segundos):
+    total_segundos = round(total_segundos)
+    minutos = int(total_segundos) // 60
+    segundos = int(total_segundos) % 60
+    return f"{minutos:02d}m:{segundos:02d}s"
+
