@@ -303,6 +303,7 @@ def create_footer(page: ft.Page) -> ft.BottomAppBar:
         padding=ft.padding.symmetric(horizontal=theme.PADDING_M)
     )
 
+import threading
 from src.flet_ui.components import hide_loading_overlay
 from src.logger.cloud_logger_handler import ClientLogUploader
 from src.logger.logger import LoggerSetup # Adicionado
@@ -310,52 +311,57 @@ _logger = LoggerSetup.get_logger(__name__)
 
 def handle_logout(page: ft.Page):
     """Limpa o estado de autenticação e redireciona para a tela de login."""
-    hide_loading_overlay(page)
-    user_id_logged_out = page.session.get("auth_user_id") or \
-                         (page.client_storage.get("auth_user_id") if page.client_storage else "Desconhecido")
-    _logger.info(f"Usuário {user_id_logged_out} deslogando.")
+    def _logout_logic():
+        hide_loading_overlay(page)
+        user_id_logged_out = page.session.get("auth_user_id") or \
+                            (page.client_storage.get("auth_user_id") if page.client_storage else "Desconhecido")
+        _logger.info(f"Usuário {user_id_logged_out} deslogando.")
 
-    # FLUSH ANTES DE LIMPAR O CONTEXTO DO USUÁRIO
-    if LoggerSetup._active_cloud_handler_instance: # Verifica se o handler foi criado e está ativo
-        uploader_in_use = LoggerSetup._active_cloud_handler_instance.uploader
-        # Só faz flush se o uploader for o ClientLogUploader, pois ele depende do token do usuário
-        # que está prestes a ser removido. O AdminLogUploader pode continuar logando depois.
-        if isinstance(uploader_in_use, ClientLogUploader) and uploader_in_use._current_user_token:
-            _logger.info("Logout: Forçando flush do CloudLogHandler para logs do usuário atual (ClientUploader)...")
-            try:
-                LoggerSetup._active_cloud_handler_instance.flush()
-                _logger.debug("Flush solicitado. O upload ocorrerá em segundo plano.")
-                # Não adicionar time.sleep() aqui, pois o flush é para a thread fazer.
-            except Exception as e_flush:
-                _logger.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
+        # FLUSH ANTES DE LIMPAR O CONTEXTO DO USUÁRIO
+        if LoggerSetup._active_cloud_handler_instance: # Verifica se o handler foi criado e está ativo
+            uploader_in_use = LoggerSetup._active_cloud_handler_instance.uploader
+            # Só faz flush se o uploader for o ClientLogUploader, pois ele depende do token do usuário
+            # que está prestes a ser removido. O AdminLogUploader pode continuar logando depois.
+            if isinstance(uploader_in_use, ClientLogUploader) and uploader_in_use._current_user_token:
+                _logger.info("Logout: Forçando flush do CloudLogHandler para logs do usuário atual (ClientUploader)...")
+                try:
+                    LoggerSetup._active_cloud_handler_instance.flush()
+                    _logger.debug("Flush solicitado. O upload ocorrerá em segundo plano.")
+                    # Não adicionar time.sleep() aqui, pois o flush é para a thread fazer.
+                except Exception as e_flush:
+                    _logger.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
 
-    # Limpa do client_storage se existir
-    # auth_keys_to_clear = [
-    #     "auth_id_token", "auth_user_id", "auth_user_email", 
-    #     "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at" # Adicionar novas chaves
-    # ]
-    auth_keys_to_clear = page.session.get_keys() # Pega todas as chaves
-    if page.client_storage:
+        # Limpa do client_storage se existir
+        # auth_keys_to_clear = [
+        #     "auth_id_token", "auth_user_id", "auth_user_email", 
+        #     "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at" # Adicionar novas chaves
+        # ]
+        auth_keys_to_clear = page.session.get_keys() # Pega todas as chaves
+        if page.client_storage:
+            for key in auth_keys_to_clear:
+                if key.startswith("auth_") or key.startswith("decrypted_api_key_"):
+                    if page.client_storage.contains_key(key): 
+                        page.client_storage.remove(key)
+            _logger.debug("Dados de autenticação removidos do client_storage (se existiam).")
+        
         for key in auth_keys_to_clear:
             if key.startswith("auth_") or key.startswith("decrypted_api_key_"):
-                if page.client_storage.contains_key(key): 
-                    page.client_storage.remove(key)
-        _logger.debug("Dados de autenticação removidos do client_storage (se existiam).")
-    
-    for key in auth_keys_to_clear:
-        if key.startswith("auth_") or key.startswith("decrypted_api_key_"):
-            if page.session.contains_key(key):
-                page.session.remove(key) 
-    _logger.debug("Dados de autenticação removidos da sessão Flet.")
-    
-    LoggerSetup.set_cloud_user_context(None, None) # Limpa contexto do logger de nuvem
-    _logger.info("Contexto do logger de nuvem limpo.")
-    
-    page.go("/login")
-    # Opcional: Mostrar um snackbar de logout bem-sucedido na página de login
-    # Isso é um pouco mais complexo porque o snackbar precisa ser mostrado *após* o redirecionamento.
-    # Uma forma seria passar um parâmetro na rota: page.go("/login?logout=true")
-    # E a view de login verificaria esse parâmetro para mostrar o snackbar.
+                if page.session.contains_key(key):
+                    page.session.remove(key) 
+        _logger.debug("Dados de autenticação removidos da sessão Flet.")
+        
+        LoggerSetup.set_cloud_user_context(None, None) # Limpa contexto do logger de nuvem
+        _logger.info("Contexto do logger de nuvem limpo.")
+        
+        page.go("/login") # Esta chamada de page.go() é segura aqui porque _logout_logic será executada pela thread principal via page.run_thread 
+
+    # Verifica se esta função está sendo chamada da thread principal ou de uma thread de background
+    if threading.current_thread() is threading.main_thread():
+        _logger.debug("handle_logout chamado da thread principal.")
+        _logout_logic()
+    else:
+        _logger.debug("handle_logout chamado de uma thread de background. Agendando na thread principal.")
+        page.run_thread(_logout_logic) # Garante que a lógica de logout (incluindo page.go) rode na thread principal
 
 from src.flet_ui.components import show_snackbar, ValidatedTextField, ManagedAlertDialog
 

@@ -1,7 +1,7 @@
 # src/flet_ui/app.py
 import flet as ft
-import time, os
-from typing import Dict, Any
+import time, os, threading
+from typing import Dict, Any, Optional
 
 from ..settings import APP_TITLE, APP_VERSION, FLET_SECRET_KEY
 
@@ -133,8 +133,55 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
         from src.flet_ui.layout import handle_logout # Importação tardia e local
         handle_logout(page) # Força logout
         return False
+
+# --- Nova Thread para Renovação Automática de Token ---
+_token_refresh_thread_stop_event: Optional[threading.Event] = None
+_token_refresh_thread_instance: Optional[threading.Thread] = None
+
+def _proactive_token_refresh_loop(page_ref: ft.Page, stop_event: threading.Event, interval_seconds: int = 30 * 60): # a cada 30 minutos
+    """
+    Loop que tenta renovar o token de ID proativamente.
+    Executado em uma thread separada.
+    """
+    loop_logger = LoggerSetup.get_logger("proactive_token_refresh") # Logger específico
+    loop_logger.info("Thread de renovação proativa de token iniciada.")
     
+    while not stop_event.is_set():
+        try:
+            # Verifica se o usuário ainda está autenticado na sessão Flet
+            if page_ref.session and page_ref.session.contains_key("auth_id_token"):
+                loop_logger.debug(f"Verificação proativa do token (intervalo: {interval_seconds}s).")
+                
+                # Usa uma cópia da page.session para check_and_refresh_token_if_needed,
+                # pois a 'page_ref' original pode não ser segura para threads diretamente
+
+                # Importante que a função check_and_refresh_token_if_needed seja thread-safe
+                # em relação ao acesso à page.session ou que use page.run_thread para modificá-la.
+
+                # A thread chama a função. Se a função precisar de UI/page.go, ela DEVE usar page.run_thread.
+                # A função check_and_refresh_token_if_needed já chama handle_logout, que chama page.go.
+                # Se handle_logout é chamado de uma thread de background, o page.go deve ser via page.run_thread.
+
+                if not check_and_refresh_token_if_needed(page_ref): # Passa a referência da página
+                    loop_logger.warning("Renovação proativa falhou ou usuário foi deslogado.")
+                    # Se o refresh falhar e o usuário for deslogado, a condição
+                    # page_ref.session.contains_key("auth_id_token") se tornará falsa
+                    # e o loop efetivamente pausará as tentativas de refresh até um novo login.
+            else:
+                loop_logger.debug("Usuário não autenticado na sessão. Pausando renovação proativa.")
+        except Exception as e:
+            loop_logger.error(f"Erro na thread de renovação proativa de token: {e}", exc_info=True)
+            # Evita que a thread morra por uma exceção inesperada.
+        
+        # Espera pelo intervalo ou até o evento de parada ser sinalizado
+        stop_event.wait(interval_seconds) 
+
+    loop_logger.info("Thread de renovação proativa de token terminando.")
+
+
 def main(page: ft.Page, dev_mode: bool = False): 
+    global _token_refresh_thread_stop_event, _token_refresh_thread_instance
+
     if dev_mode:
         logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando em MODO DE DESENVOLVIMENTO (UI Test).")
     else:
@@ -228,15 +275,38 @@ def main(page: ft.Page, dev_mode: bool = False):
                                 # devido ao token mockado na sessão.
     else:
         load_auth_state_from_storage(page)
-        # A função check_and_refresh_token_if_needed já é chamada dentro de load_auth_state_from_storage
-        # e também é chamada por _execute_sensitive_action em FbManagerAuth.
-        # Não precisa chamar aqui explicitamente fora do dev_mode, a menos que haja um novo requisito.
+        # Inicia a thread de renovação proativa de token APÓS o carregamento inicial do estado de auth
+        # e APENAS se o usuário estiver autenticado.
+        if page.session.contains_key("auth_id_token"):
+            if _token_refresh_thread_instance is None or not _token_refresh_thread_instance.is_alive():
+                _token_refresh_thread_stop_event = threading.Event()
+                _token_refresh_thread_instance = threading.Thread(
+                    target=_proactive_token_refresh_loop,
+                    args=(page, _token_refresh_thread_stop_event), # Passa a instância da page
+                    daemon=True
+                )
+                _token_refresh_thread_instance.start()
+            else:
+                logger.debug("Thread de renovação proativa já está rodando.")
+        else:
+            logger.info("Usuário não autenticado na inicialização, thread de renovação proativa não iniciada.")
 
     # --- Limpeza ao Fechar ---
     def on_disconnect(e):
         logger.info("Cliente desconectado ou aplicação Flet fechando...")
         LoggerSetup.set_cloud_user_context(None, None)
         logger.info("Contexto do logger de nuvem limpo ao desconectar.")
+
+        # Para a thread de renovação de token
+        if _token_refresh_thread_stop_event:
+            logger.info("Sinalizando parada para a thread de renovação proativa de token...")
+            _token_refresh_thread_stop_event.set()
+        if _token_refresh_thread_instance and _token_refresh_thread_instance.is_alive():
+            logger.debug("Aguardando thread de renovação de token finalizar...")
+            _token_refresh_thread_instance.join(timeout=5) # Espera um pouco
+            if _token_refresh_thread_instance.is_alive():
+                logger.warning("Thread de renovação de token não finalizou a tempo.")
+
     page.on_disconnect = on_disconnect
 
     # --- Navegar para a Rota Inicial ---
