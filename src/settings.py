@@ -93,8 +93,8 @@ def show_data_k():
 
 # --- Constantes referentes aos modelos de LLM:
 DEFAULT_LLM_PROVIDER = "openai"
-DEFAULT_OPENAI_MODEL = "gpt-4.1-nano" # Modelo inicial padrão
-DEFAULT_TEMPERATURE = 0.2 # Baixa temperatura para respostas mais factuais/consistentes
+DEFAULT_LLM_MODEL = "gpt-4.1-nano" # Modelo inicial padrão
+DEFAULT_TEMPERATURE = 0.3 # Baixa temperatura para respostas mais factuais/consistentes
 
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))

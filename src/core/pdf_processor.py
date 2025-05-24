@@ -250,6 +250,30 @@ def count_tokens(text: str, model_name: str) -> int:
     """Wrapper para a função de contagem de tokens utilitária."""
     return util_count_tokens(text, model_name=model_name)
 
+def criar_batches(textos, limite_tokens, codificador):
+    batches = []
+    batch_atual = []
+    tokens_batch = 0
+
+    def contar_tokens(texto, codificador):
+        return len(codificador.encode(texto))
+
+    for texto in textos:
+        tokens_texto = contar_tokens(texto, codificador)
+        if tokens_texto > limite_tokens:
+            continue  # Ignora textos que excedem o limite individual
+        if tokens_batch + tokens_texto > limite_tokens:
+            batches.append(batch_atual)
+            batch_atual = []
+            tokens_batch = 0
+        batch_atual.append(texto)
+        tokens_batch += tokens_texto
+
+    if batch_atual:
+        batches.append(batch_atual)
+
+    return batches
+
 ### text_analysis_utils: #########################################################################################
 import numpy as np
 from nltk.corpus import stopwords
@@ -268,13 +292,47 @@ def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
     return _sentence_model
 
 @timing_decorator()
-def analyze_text_similarity(pages_texts: List[str], model_name: str = 'all-MiniLM-L6-v2') -> np.ndarray:
+def analyze_text_similarity(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2', api_key:str=None) -> np.ndarray:
     """
     Analisa similaridades entre textos (páginas) usando embeddings de sentenças.
     Retorna uma matriz de similaridade.
     """
-    model = get_sentence_transformer_model(model_name)
-    embeddings = sk_normalize(model.encode(pages_texts))
+    if model_embedding == 'all-MiniLM-L6-v2':
+        print('\n', '[DEBUG]: Modelo embeddings: all-MiniLM-L6-v2', '\n')
+        model = get_sentence_transformer_model(model_embedding)
+        embeddings = sk_normalize(model.encode(pages_texts))
+    elif model_embedding == 'text-embedding-3-small':
+        print('\n', '[DEBUG]: Modelo embeddings: text-embedding-3-small', '\n')
+        try:
+            import tiktoken
+            from openai import OpenAI
+
+            os.environ["OPENAI_API_KEY"] = api_key
+            client = OpenAI()
+
+            codificador = tiktoken.encoding_for_model("text-embedding-3-small")
+            limite_tokens = 300_000
+
+            batches = criar_batches(pages_texts, limite_tokens, codificador)
+
+            embeddings, total_tokens = [], 0
+            for batch in batches:
+                response = client.embeddings.create(
+                    input=batch,
+                    model=model_embedding 
+                )
+                embeddings.extend([item.embedding for item in response.data])
+                total_tokens += (response.usage.total_tokens)
+            
+            cost_usd = (total_tokens / 1_000_000) * 0.02 # TODO: incluir e buscar de settings
+            print('\n') # TODO: incluir logger
+            print(f"Consumo de tokens no processamento de embeddings: {total_tokens} ({cost_usd:.4f} USD)  ({cost_usd*6:.4f} BRL)")
+            print('\n')
+        finally:
+            os.environ["OPENAI_API_KEY"] = ""
+    else:
+        raise ValueError(f"Modelo embeddings '{model_embedding}' desconhecido.")
+    
     similarity_matrix = cosine_similarity(embeddings)
     return similarity_matrix
 
@@ -524,7 +582,8 @@ class PDFDocumentAnalyzer:
 
     @timing_decorator()
     def analyze_similarity_and_relevance_files(self, combined_processed_page_data: Dict[str, Dict[str, Any]], all_global_page_keys_ordered: List[str], 
-                                               all_texts_for_analysis_combined: List[str]) -> Dict[str, Dict[str, Any]]:
+                                               all_texts_for_analysis_combined: List[str], model_embedding: str = 'all-MiniLM-L6-v2', api_key: str = None
+                                               ) -> Dict[str, Dict[str, Any]]:
         """
         Analisa a similaridade textual e calcula os scores TF-IDF para um conjunto combinado de textos.
         Atualiza o dicionário `combined_processed_page_data` com os scores de TF-IDF e 
@@ -534,7 +593,7 @@ class PDFDocumentAnalyzer:
         # --- 2. Análise de Similaridade e TF-IDF (COMBINADA para todos os arquivos) ---
         logger.info(f"Realizando análise de similaridade e TF-IDF para {len(all_texts_for_analysis_combined)} páginas combinadas.")
         try:
-            similarity_matrix_combined = analyze_text_similarity(all_texts_for_analysis_combined)
+            similarity_matrix_combined = analyze_text_similarity(all_texts_for_analysis_combined, model_embedding=model_embedding, api_key=api_key)
             tf_idf_scores_array_combined = calculate_text_relevance_tfidf(all_texts_for_analysis_combined)
 
             # Mapear scores TF-IDF e similaridade de volta aos dados das páginas globais
@@ -548,6 +607,7 @@ class PDFDocumentAnalyzer:
                     combined_processed_page_data[global_page_key]['semelhantes'] = absolute_similar_global_keys
         except Exception as e:
             logger.error(f"Erro durante análise combinada de similaridade/TF-IDF: {e}", exc_info=True)
+            raise
             # Pode optar por continuar sem esses dados ou retornar erro.
             # Por ora, os scores/semelhantes podem ficar zerados/vazios.
 

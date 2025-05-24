@@ -2,7 +2,7 @@
 import flet as ft
 import threading
 from typing import Optional, Dict, Any, List, Tuple
-from time import sleep
+from time import time, sleep
 #from rich import print
 
 from src.utils import format_seconds_to_min_sec
@@ -13,7 +13,7 @@ from src.flet_ui.components import (
 )
 from src.flet_ui import theme
 from src.core.pdf_processor import PDFDocumentAnalyzer
-from src.core.ai_orchestrator import analyze_text_with_llm
+from src.core.ai_orchestrator import get_api_key_in_firestore, analyze_text_with_llm
 from src.settings import UPLOAD_TEMP_DIR, cotacao_dolar_to_real
 
 from src.logger.logger import LoggerSetup
@@ -155,9 +155,10 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_PROC_METADATA_PANEL].visible=False, # visível após processamento de PDF(s)
 
         # Container 3: Resposta/Resultado da Análise
-        self.gui_controls[CTL_LLM_RESULT_INFO_TITLE] = ft.Text("Resultado da Análise LLM:", 
-                                                               style=ft.TextThemeStyle.TITLE_MEDIUM, 
-                                                               weight=ft.FontWeight.BOLD, visible=False)
+        self.gui_controls[CTL_LLM_RESULT_INFO_TITLE] = ft.Row([ft.Container(width=12), 
+                                                                ft.Text("Resultado da Análise LLM:", 
+                                                                    style=ft.TextThemeStyle.TITLE_MEDIUM, 
+                                                                    weight=ft.FontWeight.BOLD)], visible=False)
         self.gui_controls[CTL_LLM_STAUS_INFO] = ft.Text("Aguardando para exibir os resultados...", italic=True, size=14, expand=True)
         self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON] = ft.Container(
             content=ft.Row(
@@ -235,7 +236,7 @@ class AnalyzePDFViewContent(ft.Column):
         # Layout final: Coluna principal dos conteúdos e o "drawer" ao lado
         main_content_with_drawer_row = ft.Row(
             [
-                ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=5)), # Conteúdo principal expande
+                ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=20)), # Conteúdo principal expande
                 self.settings_drawer_container # Drawer
             ],
             expand=True,
@@ -406,9 +407,9 @@ class AnalyzePDFViewContent(ft.Column):
                 self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Limpa dados antigos
                 self._clear_processing_metadata_display()
                 self._clear_llm_metadata_display()
+                self._show_info_balloon_or_result(show_balloon=True)
             
             self._update_button_states()
-            self._show_info_balloon_or_result(show_balloon=True)
             
             self.page.update()
 
@@ -566,10 +567,11 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_EXPORT_BTN].disabled = not llm_response_exists
         self.gui_controls[CTL_LLM_RESULT_INFO_TITLE].visible = llm_response_exists
         
-        if not self._files_processed:
-            self.gui_controls[CTL_LLM_STAUS_INFO].value = "Aguardando para exibir os resultados..."
-        elif not llm_response_exists:
-            self.gui_controls[CTL_LLM_STAUS_INFO].value = "Clique em 'Solicitar Análise' para prosseguir "
+        if not self.gui_controls[CTL_LLM_STAUS_INFO].value or self.gui_controls[CTL_LLM_STAUS_INFO].color != theme.COLOR_ERROR:
+            if not self._files_processed:
+                self.gui_controls[CTL_LLM_STAUS_INFO].value = "Aguardando para exibir os resultados..."
+            elif not llm_response_exists:
+                self.gui_controls[CTL_LLM_STAUS_INFO].value = "Clique em 'Solicitar Análise' para prosseguir "
 
         # Força atualização dos botões
         for btn_key in [CTL_UPLOAD_BTN, CTL_PROCESS_BTN, CTL_ANALYZE_BTN, CTL_LLM_RESULT_INFO_TITLE,
@@ -686,7 +688,8 @@ class AnalyzePDFViewContent(ft.Column):
                 ("total_cost_usd",       "Custo Estimado (USD)"),
                 ("total_cost_brl",       "Custo Estimado (BRL)"), 
                 ("llm_provider_used",    "Provedor LLM"),
-                ("llm_model_used",       "Modelo Utilizado")
+                ("llm_model_used",       "Modelo Utilizado"),
+                ("processing_time",      "Tempo de processamento (s)")
             ]
             
             ordered_keys = [key for key, _ in labels]
@@ -726,6 +729,14 @@ class AnalyzePDFViewContent(ft.Column):
         # if content_area.page: content_area.update()
 
     def _show_info_balloon_or_result(self, show_balloon: bool, result_text: Optional[str] = None):
+        if not result_text:
+            result_text = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
+            if result_text is not None:
+                self.gui_controls[CTL_LLM_RESULT_TEXT].value = result_text
+                self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON].visible = False
+                self.gui_controls[CTL_LLM_RESULT_TEXT].visible = True
+                return
+        
         self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON].visible = show_balloon
         self.gui_controls[CTL_LLM_RESULT_TEXT].visible = not show_balloon
         if not show_balloon and result_text is not None:
@@ -926,7 +937,23 @@ class AnalyzePDFViewContent(ft.Column):
             txt_to_update.update()
             
 
-        def _pdf_processing_thread_func(self, pdf_paths: List[str], batch_name: str, analyze_llm_after: bool):
+        def _pdf_processing_thread_func(self, pdf_paths: List[str], batch_name: str, analyze_llm_after: bool):            
+            # TODO: Obter provedor e modelo das configurações do Drawer
+            provider = "openai"
+            model_name = "gpt-4.1-nano" 
+            model_embedding = "text-embedding-3-small" # "all-MiniLM-L6-v2"
+            
+            decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}") 
+            if decrypted_api_key:
+                _logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+            elif model_embedding == "text-embedding-3-small":
+                if not decrypted_api_key and provider == "openai": 
+                    user_token = self.page.session.get("auth_id_token")
+                    user_id = self.page.session.get("auth_user_id")
+                    decrypted_api_key = get_api_key_in_firestore(user_token, user_id, provider)
+                    assert decrypted_api_key
+                    self.page.session.set(f"decrypted_api_key_{provider}", decrypted_api_key)
+            
             try:
                 _logger.info(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
                 self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
@@ -941,13 +968,16 @@ class AnalyzePDFViewContent(ft.Column):
 
                 self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
                 processed_page_data_combined, processing_time_3 = self.pdf_analyzer.analyze_similarity_and_relevance_files(
-                                    processed_page_data_combined, all_global_page_keys_ordered, all_analysis_texts)
+                                    processed_page_data_combined, all_global_page_keys_ordered, all_analysis_texts, 
+                                    model_embedding=model_embedding, api_key=decrypted_api_key)
 
                 if not processed_page_data_combined:
                     raise ValueError("Nenhum dado processável encontrado nos PDFs.")
                 
                 #print('\n[DEBUG]:\n', processed_page_data_combined, '\n\n')
                 self.page.session.set(KEY_SESSION_PDF_ANALYZER_DATA, processed_page_data_combined)
+                
+                point_time = time()
                 self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
 
                 classified_data = self.pdf_analyzer.filter_and_classify_pages(processed_page_data_combined)
@@ -955,12 +985,15 @@ class AnalyzePDFViewContent(ft.Column):
                 
                 relevant_indices, unintelligible_indices, count_similars = classified_data
                 count_sel, count_unint = len(relevant_indices), len(unintelligible_indices)
-                #print('\n[DEBUG]:\n', relevant_indices, '\n\n', unintelligible_indices, '\n\n') 
 
                 if not relevant_indices:
                     raise ValueError("Nenhuma página relevante encontrada após classificação.")
 
+                if time() - point_time < 1: sleep(1) # Apenas Garante visibilidade do text_progressing
+
+                point_time = time()
                 self.page.run_thread(self._update_status_callback, "Etapa 4/5: Filtrando páginas...")
+
                 token_limit_pref = 180000 # TODO: Ler do drawer/configurações
                 aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(
                     processed_page_data_combined, relevant_indices, token_limit_pref
@@ -996,6 +1029,8 @@ class AnalyzePDFViewContent(ft.Column):
                 self.parent_view._files_processed = True
                 _logger.info(f"Thread: Processamento de PDF para '{batch_name}' concluído.")
 
+                if time() - point_time < 1: sleep(1) 
+
                 self.page.run_thread(self._update_status_callback, "Aguardando para exibir os resultados...", False, True)
 
                 if analyze_llm_after:
@@ -1026,10 +1061,10 @@ class AnalyzePDFViewContent(ft.Column):
                 model_name = "gpt-4.1-nano" 
                 
                 # Simulação de obtenção de chave API da sessão (deve ser carregada/salva via UI de config LLM)
-                decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}_{provider}_api_key") # Exemplo
+                decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}_{provider}") # Exemplo
                 if not decrypted_api_key and provider == "openai": # Tenta um fallback se estiver no dev_mode
                      if self.page.data.get("dev_mode", False): # Precisa de uma forma de saber se está em dev_mode
-                         decrypted_api_key = self.page.session.get("decrypted_api_key_OpenAI_openai_api_key") # Chave mock
+                         decrypted_api_key = self.page.session.get("decrypted_api_key_openai_openai") # Chave mock
                          _logger.warning("Usando chave API OpenAI mockada de dev_mode para análise LLM.")
 
                 if not decrypted_api_key:
@@ -1037,7 +1072,7 @@ class AnalyzePDFViewContent(ft.Column):
                     # Mas o orchestrator precisa do provider correto.
                     pass # ai_orchestrator tentará carregar
 
-                llm_response, token_usage_info = analyze_text_with_llm(self.page, aggregated_text, provider, model_name)
+                llm_response, token_usage_info, processing_time_llm = analyze_text_with_llm(self.page, "UNIQUE_ANALYSIS_V1", aggregated_text, provider, model_name)
 
                 if llm_response:
                     self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, llm_response)
@@ -1048,7 +1083,8 @@ class AnalyzePDFViewContent(ft.Column):
                     llm_meta_for_gui = token_usage_info
                     llm_meta_for_gui.update({
                         "llm_provider_used": provider.capitalize(),
-                        "llm_model_used": model_name
+                        "llm_model_used": model_name,
+                        "processing_time": format_seconds_to_min_sec(processing_time_llm)
                     }) 
                         
                     self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_for_gui)

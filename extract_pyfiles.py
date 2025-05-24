@@ -24,7 +24,7 @@ def scan_and_consolidate_python_files(output_file='python_files_consolidated.txt
         
         for root, dirs, files in os.walk(repo_root):
             # Skip virtual environments and other common directories to ignore
-            if 'venv' in root or 'env' in root or '.git' in root or '__pycache__' in root or 'tests' in root:
+            if 'venv' in root or 'env' in root or '.git' in root or '__pycache__' in root or 'tests' in root or 'legacy' in root:
                 continue
                 
             for file in files:
