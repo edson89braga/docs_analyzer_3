@@ -262,10 +262,11 @@ def criar_batches(textos, limite_tokens, codificador):
         tokens_texto = contar_tokens(texto, codificador)
         if tokens_texto > limite_tokens:
             continue  # Ignora textos que excedem o limite individual
-        if tokens_batch + tokens_texto > limite_tokens:
+        if batch_atual and (tokens_batch + tokens_texto > limite_tokens):
             batches.append(batch_atual)
             batch_atual = []
             tokens_batch = 0
+        
         batch_atual.append(texto)
         tokens_batch += tokens_texto
 
@@ -318,8 +319,8 @@ def analyze_text_similarity(pages_texts: List[str], model_embedding: str = 'all-
             embeddings, total_tokens = [], 0
             for batch in batches:
                 response = client.embeddings.create(
+                    model=model_embedding,
                     input=batch,
-                    model=model_embedding 
                 )
                 embeddings.extend([item.embedding for item in response.data])
                 total_tokens += (response.usage.total_tokens)
@@ -328,6 +329,9 @@ def analyze_text_similarity(pages_texts: List[str], model_embedding: str = 'all-
             print('\n') # TODO: incluir logger
             print(f"Consumo de tokens no processamento de embeddings: {total_tokens} ({cost_usd:.4f} USD)  ({cost_usd*6:.4f} BRL)")
             print('\n')
+        except Exception as e:
+            print('\n', f"Erro ao processar embeddings-openai: {e}", '\n!!!!\n')
+            return analyze_text_similarity(pages_texts, model_embedding='all-MiniLM-L6-v2')
         finally:
             os.environ["OPENAI_API_KEY"] = ""
     else:

@@ -37,6 +37,16 @@ class FormatAnaliseInicial(BaseModel):
     justificativa_assunto_re: Optional[str] 
     justificativa_destinacao: str 
 
+# Conversão para modelo em esquema JSON, se necessário:
+schema = FormatAnaliseInicial.model_json_schema()
+response_format = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "FormatAnaliseInicial",
+        "schema": schema,
+        "strict": False
+    }
+}
 
 # Dicts e Listas de referência p/ placeholders:
 
@@ -436,4 +446,32 @@ def get_prompt(prompt_name: str) -> Optional[str]:
     """
     return _PROMPTS.get(prompt_name)
 
+'''
+TODO: Agrupar:
 
+# quanto à origem:
+2. TIPO DE DOCUMENTO DE ORIGEM
+3. ÓRGÃO DE ORIGEM
+4.1 UF DE ORIGEM
+4.2 MUNICÍPIO DE ORIGEM
+
+# quanto ao(s) fato(s) documentado(s):
+1. DESCRIÇÃO GERAL
+5. RESUMO DO FATO
+6.1 UF DO FATO
+6.2 MUNICÍPIO DO FATO
+7. TIPO DE LOCAL
+8. VALOR DE APURAÇÃO
+14. PESSOAS ENVOLVIDAS
+15. LINHA DO TEMPO
+16. OBSERVAÇÕES
+
+# quanto à área temática e destinação: 
+9. TIPIFICAÇÃO PENAL
+10. ÁREA DE ATRIBUIÇÃO
+13. DESTINAÇÃO
+
+# quanto ao tipo de procedimento a gerar:
+11. TIPO A AUTUAR
+12. ASSUNTO DO RE
+'''

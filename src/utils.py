@@ -356,6 +356,14 @@ def get_municipios_by_uf(uf):
         return [municipio['nome'] for municipio in response.json()]
     else:
         return []
+
+    '''
+    for uf in dict_municipios:
+        logtime(f'Capturando municipios de: {uf}...')
+        dict_municipios[uf] = get_municipios_by_uf(uf)
+        logger.info(f'Concluído com lista de {len(dict_municipios[uf])} municipios.\n')
+    with open('bd\\dict_municipios.pck', 'wb') as f: pickle.dump(dict_municipios, f)
+    '''
     
 def convert_moeda(valor):
     """

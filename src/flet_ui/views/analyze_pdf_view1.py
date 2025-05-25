@@ -5,8 +5,6 @@ from typing import Optional, Dict, Any, List, Tuple
 from time import time, sleep
 #from rich import print
 
-from src.utils import format_seconds_to_min_sec
-
 from src.flet_ui.components import (
     show_snackbar, show_loading_overlay, hide_loading_overlay,
     ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable 
@@ -15,6 +13,21 @@ from src.flet_ui import theme
 from src.core.pdf_processor import PDFDocumentAnalyzer
 from src.core.ai_orchestrator import get_api_key_in_firestore, analyze_text_with_llm
 from src.settings import UPLOAD_TEMP_DIR, cotacao_dolar_to_real
+
+from src.utils import format_seconds_to_min_sec, LISTA_UFS, MUNICIPIOS_POR_UF
+
+from src.core.prompts import (
+    FormatAnaliseInicial,
+    tipos_doc,
+    origens_doc,
+    tipos_locais,
+    areas_de_atribuição,
+    tipo_a_autuar,
+    assuntos_re,
+    lista_delegacias_especializadas,
+    lista_delegacias_interior,
+    lista_corregedorias,
+)
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
@@ -45,7 +58,7 @@ CTL_PROC_METADATA_PANEL_TITLE = "proc_metadata_panel_title"
 CTL_PROC_METADATA_CONTENT = "proc_metadata_content"
 CTL_LLM_RESULT_TEXT = "llm_result_text"
 CTL_LLM_RESULT_INFO_TITLE = "llm_result_info_title"
-CTL_LLM_STAUS_INFO = "llm_status_info"
+CTL_LLM_STATUS_INFO = "llm_status_info"
 CTL_LLM_RESULT_INFO_BALLOON = "llm_result_info_balloon"
 CTL_LLM_METADATA_PANEL = "llm_metadata_panel"
 CTL_LLM_METADATA_PANEL_TITLE = "llm_metadata_panel_title"
@@ -159,12 +172,12 @@ class AnalyzePDFViewContent(ft.Column):
                                                                 ft.Text("Resultado da Análise LLM:", 
                                                                     style=ft.TextThemeStyle.TITLE_MEDIUM, 
                                                                     weight=ft.FontWeight.BOLD)], visible=False)
-        self.gui_controls[CTL_LLM_STAUS_INFO] = ft.Text("Aguardando para exibir os resultados...", italic=True, size=14, expand=True)
+        self.gui_controls[CTL_LLM_STATUS_INFO] = ft.Text("Aguardando para exibir os resultados...", italic=True, size=14, expand=True)
         self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON] = ft.Container(
             content=ft.Row(
                 [
                     ft.Icon(ft.Icons.INFO_OUTLINE_ROUNDED, color=theme.COLOR_INFO, size=30),
-                    self.gui_controls[CTL_LLM_STAUS_INFO]
+                    self.gui_controls[CTL_LLM_STATUS_INFO]
                 ],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 spacing=10,
@@ -236,7 +249,7 @@ class AnalyzePDFViewContent(ft.Column):
         # Layout final: Coluna principal dos conteúdos e o "drawer" ao lado
         main_content_with_drawer_row = ft.Row(
             [
-                ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=20)), # Conteúdo principal expande
+                ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=8)), # Conteúdo principal expande
                 self.settings_drawer_container # Drawer
             ],
             expand=True,
@@ -567,15 +580,15 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_EXPORT_BTN].disabled = not llm_response_exists
         self.gui_controls[CTL_LLM_RESULT_INFO_TITLE].visible = llm_response_exists
         
-        if not self.gui_controls[CTL_LLM_STAUS_INFO].value or self.gui_controls[CTL_LLM_STAUS_INFO].color != theme.COLOR_ERROR:
+        if not self.gui_controls[CTL_LLM_STATUS_INFO].value or self.gui_controls[CTL_LLM_STATUS_INFO].color != theme.COLOR_ERROR:
             if not self._files_processed:
-                self.gui_controls[CTL_LLM_STAUS_INFO].value = "Aguardando para exibir os resultados..."
+                self.gui_controls[CTL_LLM_STATUS_INFO].value = "Aguardando para exibir os resultados..."
             elif not llm_response_exists:
-                self.gui_controls[CTL_LLM_STAUS_INFO].value = "Clique em 'Solicitar Análise' para prosseguir "
+                self.gui_controls[CTL_LLM_STATUS_INFO].value = "Clique em 'Solicitar Análise' para prosseguir "
 
         # Força atualização dos botões
         for btn_key in [CTL_UPLOAD_BTN, CTL_PROCESS_BTN, CTL_ANALYZE_BTN, CTL_LLM_RESULT_INFO_TITLE,
-                        CTL_PROMPT_STRUCT_BTN, CTL_RESTART_BTN, CTL_EXPORT_BTN, CTL_SETTINGS_BTN, CTL_LLM_STAUS_INFO]:
+                        CTL_PROMPT_STRUCT_BTN, CTL_RESTART_BTN, CTL_EXPORT_BTN, CTL_SETTINGS_BTN, CTL_LLM_STATUS_INFO]:
             if btn_key in self.gui_controls and self.gui_controls[btn_key].page:
                 self.gui_controls[btn_key].update()
         _logger.info("[DEBUG] Estados dos botões atualizados.")
@@ -925,7 +938,7 @@ class AnalyzePDFViewContent(ft.Column):
             # Este callback será executado pela thread principal via page.run_thread
             #_logger.info(f"[DEBUG] Callback UI: Atualizando {control_key} para '{text}' (Erro: {is_error})")
             
-            txt_to_update = self.gui_controls[CTL_LLM_STAUS_INFO] # control_key = ft.Text
+            txt_to_update = self.gui_controls[CTL_LLM_STATUS_INFO] # control_key = ft.Text
 
             hide_loading_overlay(self.page)
             if not only_txt:

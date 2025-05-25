@@ -23,23 +23,13 @@ from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPER
 from src.core import prompts # Módulo que criamos para os prompts
 import flet as ft # Para obter contexto do usuário da página
 
+from src.core.prompts import FormatAnaliseInicial
+
 # Configuração do Logger
 # (Assume que LoggerSetup já foi inicializado em run.py)
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
 
-from src.core.prompts import FormatAnaliseInicial
-# Converta o modelo em um esquema JSON:
-schema = FormatAnaliseInicial.model_json_schema()
-# Adicione a propriedade 'strict' ao esquema:
-response_format = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "FormatAnaliseInicial",
-        "schema": schema,
-        "strict": False
-    }
-}
 
 def get_api_key_in_firestore(user_token, user_id, provider):
     firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
