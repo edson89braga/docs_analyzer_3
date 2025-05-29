@@ -82,18 +82,31 @@ Quanto à FLET_SECRET_KEY, na compilação com pyinstaller:
 
 
 TODO:
-> CreateUser: Tratar erro "message": "EMAIL_EXISTS"
+> Fix: CreateUser: Tratar erro "message": "EMAIL_EXISTS"
 
-> Não apagar análise feita (nas alterações de views), até que seja recarregado ou upload ou solicitado nova análise
-> Viabilizar análise conjunta de multiplos arquivos PDFs (particionados)
+> Refinar prompt
 
-> panel de métricas: tempo de processamento de extração, de classificação, total; pages ininteligíveis; pages semelhantes; pages semelhantes com relevância; pages semelhantes com similaridade; pages semelhantes com relevância e similaridade.
-> Fields: Prompt, Provedor; Modelo; Modo de consulta; Processador de PDF;
+> Link de parâmetros:
+    - 6: Provider, Model, embeddings, limit_input, temperatura, prompt_estrutura
+    - 6: Fixos: pdf_ext, lang, token, tfidf, format_output, limit_output
+> Cômputo de custos: embeddings + llm
 
-> prompt refinado
-> novo layout formulário para respostas da LLM
+> Upload de métricas: 11 + files_names + parâmetros json do llm
+> Doc_generator
+> Upload de acertos
 
-FIX:
-> Check se remove uploads está sendo garantido
+> Acrescentar casos prometheus
+> Testes de Score sobre multiplas formas de prompt 
+
+> Exibir prompt_estruturado
+> formas de feedback
+> Linkar alertas e msgs informativas de responsabilidade no uso de IA
+
+> revisar sistemática do logging em nuvem
+> pyinstaller e testes na rede
+
+# Posteriormente:
+> Melhorias na apresentação dos metadados;
+> Melhorias na responsividade do layout;
 
 '''

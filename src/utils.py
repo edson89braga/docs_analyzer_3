@@ -1,5 +1,6 @@
-import os, keyring, logging
+import os, keyring, logging, re
 from rich import print
+from typing import Union, Optional
 
 #from src.logger.logger import LoggerSetup
 #logger = LoggerSetup.get_logger(__name__)
@@ -161,8 +162,9 @@ def with_proxy(skip_ssl_verify: bool = True):
     return decorator    # @with_proxy(skip_ssl_verify=False)
 
 ### ========================================================================================================
-import requests, tiktoken, unidecode
+import requests, tiktoken
 import collections.abc
+from unidecode import unidecode
 from time import time
 from rich.console import Console
 from rich.table import Table
@@ -357,14 +359,142 @@ def get_municipios_by_uf(uf):
     else:
         return []
 
-    '''
-    for uf in dict_municipios:
-        logtime(f'Capturando municipios de: {uf}...')
-        dict_municipios[uf] = get_municipios_by_uf(uf)
-        logger.info(f'Concluído com lista de {len(dict_municipios[uf])} municipios.\n')
-    with open('bd\\dict_municipios.pck', 'wb') as f: pickle.dump(dict_municipios, f)
-    '''
+def update_dict_municipios_local():
+    import json
+    file_path = os.path.join('assets', 'dict_municipios.json')
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    ufs = get_uf_list()
+    dict_municipios = {uf: [] for uf in ufs}
+    try:
+        for uf in dict_municipios:
+            print(f'Capturando municipios de: {uf}...')
+            dict_municipios[uf] = get_municipios_by_uf(uf)
+            print(f'Concluído com lista de {len(dict_municipios[uf])} municipios.\n')
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(dict_municipios, f, ensure_ascii=False, indent=4)
+        print(f"Dicionário de municípios salvo em: {file_path}")
+        return dict_municipios
+    except Exception as e:
+        print(f"Erro ao salvar dicionário de municípios: {e}")
+        return {}
+
+# Carregar o dicionário de municípios do arquivo JSON local
+def load_dict_municipios_local():
+    try:
+        import json
+        file_path = os.path.join('assets', 'dict_municipios.json')
+        if os.path.exists(file_path):
+            with open(file_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        else:
+            print(f"Arquivo de municípios não encontrado: {file_path}.")
+            return update_dict_municipios_local()
+    except Exception as e:
+        print(f"Erro ao carregar dicionário de municípios: {e}")
+        return {}
+
+# Carregar os dados na inicialização do módulo
+MUNICIPIOS_POR_UF = load_dict_municipios_local()
+LISTA_UFS = sorted(list(MUNICIPIOS_POR_UF.keys()))
+
+def clean_and_convert_to_float(value_str: Union[str, float, int, None], default_if_empty_or_error: float = 0.0) -> float:
+    """
+    Tenta limpar uma string que representa um valor monetário ou numérico
+    e convertê-la para float.
+
+    Args:
+        value_str: A string a ser convertida. Pode também receber float/int/None.
+        default_if_empty_or_error: Valor padrão a retornar se a string for vazia,
+                                     None, ou a conversão falhar.
+
+    Returns:
+        O valor como float, ou o valor padrão em caso de erro/vazio.
+    """
+    if isinstance(value_str, (float, int)):
+        return float(value_str)
     
+    if value_str is None or not isinstance(value_str, str) or not value_str.strip():
+        return default_if_empty_or_error
+
+    # Remove caracteres não numéricos, exceto ponto e vírgula (para moeda) e sinal negativo
+    # Mantém o sinal negativo no início, se houver
+    cleaned_str = re.sub(r'[^\d,.-]', '', value_str)
+    
+    # Se ainda contém letras após a primeira limpeza (ex: "não informado"), considera erro
+    if re.search(r'[a-zA-Z]', cleaned_str):
+        return default_if_empty_or_error
+
+    # Padroniza para usar ponto como separador decimal
+    if ',' in cleaned_str and '.' in cleaned_str:
+        # Se ambos existem, verifica qual é o último.
+        # Ex: "1.234,56" -> "1234.56"
+        # Ex: "1,234.56" -> "1234.56" (se o ponto for o decimal)
+        if cleaned_str.rfind(',') > cleaned_str.rfind('.'): # Vírgula é decimal
+            cleaned_str = cleaned_str.replace('.', '').replace(',', '.')
+        else: # Ponto é decimal
+            cleaned_str = cleaned_str.replace(',', '')
+    elif ',' in cleaned_str: # Apenas vírgula, assume que é decimal
+        cleaned_str = cleaned_str.replace(',', '.')
+    
+    # Remove múltiplos pontos, exceto o último (se for decimal)
+    if cleaned_str.count('.') > 1:
+        parts = cleaned_str.split('.')
+        cleaned_str = "".join(parts[:-1]) + "." + parts[-1]
+
+    try:
+        return float(cleaned_str)
+    except ValueError:
+        return default_if_empty_or_error
+
+ESTADO_PARA_SIGLA = {
+    unidecode("acre").lower(): "AC",
+    unidecode("alagoas").lower(): "AL",
+    unidecode("amapa").lower(): "AP",
+    unidecode("amazonas").lower(): "AM",
+    unidecode("bahia").lower(): "BA",
+    unidecode("ceara").lower(): "CE",
+    unidecode("distrito federal").lower(): "DF",
+    unidecode("espirito santo").lower(): "ES",
+    unidecode("goias").lower(): "GO",
+    unidecode("maranhao").lower(): "MA",
+    unidecode("mato grosso").lower(): "MT",
+    unidecode("mato grosso do sul").lower(): "MS",
+    unidecode("minas gerais").lower(): "MG",
+    unidecode("para").lower(): "PA",
+    unidecode("paraiba").lower(): "PB",
+    unidecode("parana").lower(): "PR",
+    unidecode("pernambuco").lower(): "PE",
+    unidecode("piaui").lower(): "PI",
+    unidecode("rio de janeiro").lower(): "RJ",
+    unidecode("rio grande do norte").lower(): "RN",
+    unidecode("rio grande do sul").lower(): "RS",
+    unidecode("rondonia").lower(): "RO",
+    unidecode("roraima").lower(): "RR",
+    unidecode("santa catarina").lower(): "SC",
+    unidecode("sao paulo").lower(): "SP",
+    unidecode("sergipe").lower(): "SE",
+    unidecode("tocantins").lower(): "TO",
+    # Adicionar siglas diretamente também, para o caso da LLM retornar a sigla
+    "ac": "AC", "al": "AL", "ap": "AP", "am": "AM", "ba": "BA", "ce": "CE", "df": "DF", "es": "ES",
+    "go": "GO", "ma": "MA", "mt": "MT", "ms": "MS", "mg": "MG", "pa": "PA", "pb": "PB", "pr": "PR",
+    "pe": "PE", "pi": "PI", "rj": "RJ", "rn": "RN", "rs": "RS", "ro": "RO", "rr": "RR", "sc": "SC",
+    "sp": "SP", "se": "SE", "to": "TO"
+}
+
+def get_sigla_uf(nome_estado_ou_sigla: Optional[str]) -> Optional[str]:
+    """
+    Converte um nome de estado (ou sigla) para sua sigla UF normalizada.
+    Retorna None se não conseguir encontrar uma correspondência.
+    """
+    if not nome_estado_ou_sigla or not isinstance(nome_estado_ou_sigla, str):
+        return None
+    
+    normalizado = unidecode(nome_estado_ou_sigla.strip()).lower()
+    return ESTADO_PARA_SIGLA.get(normalizado)
+
+
+### ========================================================================================================
+  
 def convert_moeda(valor):
     """
     Converte um valor numérico para formato monetário brasileiro.

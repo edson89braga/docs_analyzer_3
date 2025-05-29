@@ -4,6 +4,7 @@ Módulo responsável por orquestrar a interação com os modelos de linguagem (L
 usando LangChain.
 """
 import os
+from rich import print
 from time import perf_counter
 from typing import Optional, Dict, Any, List, Tuple
 from openai import OpenAI, AuthenticationError, APIError # Para tratamento específico de erros OpenAI
@@ -180,14 +181,15 @@ def analyze_text_with_llm(
                     model=model_name,
                     input=prompt_dicts,
                     temperature=temperature,
-                    text={
-                        "format": {
-                            "type": "json_schema",
-                            "name": "FormatAnaliseInicial",
-                            "strict": False,
-                            "schema": FormatAnaliseInicial.model_json_schema()
-                        }
-                    },
+                    text_format = FormatAnaliseInicial
+                    #text={
+                    #    "format": {
+                    #        "type": "json_schema",
+                    #        "name": "FormatAnaliseInicial",
+                    #        "strict": False,
+                    #        "schema": FormatAnaliseInicial.model_json_schema()
+                    #    }
+                    #},
                 )
             finally:
                 os.environ["OPENAI_API_KEY"] = ""
@@ -279,7 +281,9 @@ def analyze_text_with_llm(
 
     end_time = perf_counter()
 
+    print('\n\n', f'final_response: {type(final_response)}\n', final_response, '\n\n')
     return final_response, token_usage_info, end_time - start_time
+
 
 # --- (Opcional) Exemplo de uso (somente para teste direto do módulo) ---
 if __name__ == '__main__':
@@ -351,9 +355,7 @@ token_usage_info = response.usage
 
 response = client_openai.responses.parse(
     model="gpt-4.1-nano",
-    input=[
-        {"role": "user", "content": "Diga-me em que você pode me ajudar."},
-    ],
+    input=[{"role": "user", "content": "Diga-me em que você pode me ajudar."}],
     text={
         "format": {
             "type": "json_schema",
@@ -363,7 +365,11 @@ response = client_openai.responses.parse(
         }
     }
 )
-#text_format = FormatAnaliseInicial # pydantic
+from pydantic import BaseModel 
+class FormatTeste(BaseModel):
+    resposta: str
+
+#text_format = FormatTeste # pydantic
 
 final_response = response.output_text
 token_usage_info = response.usage

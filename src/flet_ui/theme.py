@@ -40,7 +40,7 @@ APP_THEME = ft.Theme(
     # Use use_material3=True para o design mais recente (recomendado)
     use_material3=True,
     appbar_theme=ft.AppBarTheme(
-        bgcolor=ft.Colors.BLUE_GREY_100, # Para tema claro
+        bgcolor=ft.Colors.BLACK26, # BLUE_GREY_100, # Para tema claro
         foreground_color=ft.Colors.BLACK,
     ),
     # Você pode sobrescrever elementos específicos do tema aqui, se desejar:
@@ -109,3 +109,6 @@ def configure_theme(page: ft.Page):
 
 WIDTH_CONTAINER_CONFIGS = 700
 
+# Cores para Cards e Panels
+PANEL_HEADER_BGCOLOR = ft.Colors.with_opacity(0.05, ft.Colors.SECONDARY) # Usando PRIMARY que já deve estar definido
+PANEL_CONTENT_BGCOLOR = ft.colors.BACKGROUND # SURFACE Ou ft.colors.BACKGROUND, ou uma cor customizada

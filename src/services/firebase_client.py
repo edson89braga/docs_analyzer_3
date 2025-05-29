@@ -120,7 +120,8 @@ class FirebaseClientStorage:
                 json=json_data, # Para corpo da requisição JSON (metadados)
                 timeout=timeout
             )
-            response.raise_for_status() # Levanta HTTPError para respostas 4xx/5xx
+            if not (method.upper() == "GET" and response.status_code == 404):
+                response.raise_for_status() # Levanta HTTPError para respostas 4xx/5xx
             return response
         except requests.exceptions.HTTPError as http_err:
             status_code = http_err.response.status_code
@@ -475,7 +476,6 @@ class FirebaseClientFirestore:
         if "client_doc_id" not in metric_data: # Guarda o ID que geramos
             metric_data["client_doc_id"] = document_id
 
-
         firestore_payload = {"fields": {k: _to_firestore_value(v) for k, v in metric_data.items()}}
 
         self.logger.info(f"Tentando salvar métrica (cliente) para Firestore em: {full_document_path}")
@@ -746,18 +746,15 @@ class FbManagerAuth:
             else:
                 self.logger.error(f"Refresh de token falhou: Resposta não contém 'id_token' ou 'user_id'. Resposta: {response_data}")
                 return None
+        except requests.exceptions.ConnectionError as e: # Captura ConnectionError
+            self.logger.error(f"Erro de CONEXÃO ao atualizar token: {e}", exc_info=True)
+            return {"error_type": "CONNECTION_ERROR", "message": str(e)} # Retorna dict de erro
         except requests.exceptions.HTTPError as http_err:
             self.logger.error(f"Erro HTTP ao atualizar token: {http_err.response.status_code} - {http_err.response.text}")
-            # Se o refresh token for inválido/expirado, a API geralmente retorna um erro específico
-            # como TOKEN_EXPIRED ou USER_NOT_FOUND, ou INVALID_REFRESH_TOKEN.
-            # Se isso acontecer, o usuário precisa logar novamente.
-            return None # Indica falha no refresh
-        except requests.exceptions.RequestException as e:
+            return {"error_type": "HTTP_ERROR", "status_code": http_err.response.status_code, "message": http_err.response.text}
+        except requests.exceptions.RequestException as e: # Outros erros de requests
             self.logger.error(f"Erro de requisição ao atualizar token: {e}", exc_info=True)
-            return None
-        except Exception as e:
-            self.logger.error(f"Erro inesperado ao atualizar token: {e}", exc_info=True)
-            return None
+            return {"error_type": "REQUEST_EXCEPTION", "message": str(e)}
 
     def _execute_sensitive_action(
         self,

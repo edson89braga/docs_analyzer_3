@@ -126,8 +126,8 @@ class LoggerSetup:
             # Se o CloudLogHandler ativo estiver usando o ClientUploader, ele refletirá a mudança.
             # Se um novo CloudLogHandler for criado (ex: se o logger for reinicializado),
             # ele pegará o uploader com o contexto mais recente.
-        else:
-            print("WARNING: ClientLogUploader não inicializado. Contexto do usuário não pode ser definido.")
+        # else: Não imprime warning aqui, add_cloud_logging cuidará da criação.
+        #    print("WARNING: ClientLogUploader não inicializado. Contexto do usuário não pode ser definido.")
 
     @classmethod
     def _setup_temporary_logger(cls, logger_name):
@@ -174,8 +174,8 @@ class LoggerSetup:
     @classmethod
     def initialize(cls,
                    routine_name: str,
-                   firebase_client_storage: Optional['FirebaseClientStorage'] = None,
-                   fb_manager_storage_admin: Optional['FbManagerStorage'] = None,
+                   #firebase_client_storage: Optional['FirebaseClientStorage'] = None,
+                   #fb_manager_storage_admin: Optional['FbManagerStorage'] = None,
                    modules_to_log: Optional[List[str]] = None,
                    custom_handler: Optional[logging.Handler] = None,
                    dev_mode: bool = False) -> None:
@@ -209,12 +209,13 @@ class LoggerSetup:
         
         global PATH_LOGS
         
-        if firebase_client_storage:
-            cls._client_uploader_instance = ClientLogUploader(firebase_client_storage)
-            print("LoggerSetup: Instância de ClientLogUploader criada.")
-        if fb_manager_storage_admin:
-            cls._admin_uploader_instance = AdminLogUploader(fb_manager_storage_admin)
-            print("LoggerSetup: Instância de AdminLogUploader criada.")
+        # A responsabilidade de criar e adicionar o CloudLogHandler ficará totalmente com add_cloud_logging
+        #if firebase_client_storage:
+        #    cls._client_uploader_instance = ClientLogUploader(firebase_client_storage)
+        #    print("LoggerSetup: Instância de ClientLogUploader criada.")
+        #if fb_manager_storage_admin:
+        #    cls._admin_uploader_instance = AdminLogUploader(fb_manager_storage_admin)
+        #    print("LoggerSetup: Instância de AdminLogUploader criada.")
 
         ### file_handler:
         # Cria o nome do arquivo de log com base no nome da rotina
@@ -266,14 +267,14 @@ class LoggerSetup:
         logger.addHandler(file_handler)
         logger.addHandler(console_handler)
 
-        if firebase_client_storage or fb_manager_storage_admin:
-            # Adiciona o handler para CloudStorage
-            cloud_log_handler = cls._create_cloud_logger_handler(cls.formatter_detailed, level=logging.INFO)
-            if cloud_log_handler:
-                cls._apply_module_filter(cloud_log_handler, modules_to_log)
-                logger.addHandler(cloud_log_handler)
-        else:
-            print("LoggerSetup: Nenhum Firebase storage manager fornecido para o logger da nuvem. Cloud logging desabilitado.")
+        #if firebase_client_storage or fb_manager_storage_admin:
+        #    # Adiciona o handler para CloudStorage
+        #    cloud_log_handler = cls._create_cloud_logger_handler(cls.formatter_detailed, level=logging.INFO)
+        #    if cloud_log_handler:
+        #        cls._apply_module_filter(cloud_log_handler, modules_to_log)
+        #        logger.addHandler(cloud_log_handler)
+        #else:
+        #    print("LoggerSetup: Nenhum Firebase storage manager fornecido para o logger da nuvem. Cloud logging desabilitado.")
 
         # Adiciona o handler personalizado, se fornecido: Usado para handler que imprime no componente do Flet
         if custom_handler:
@@ -308,21 +309,38 @@ class LoggerSetup:
         if cls._active_cloud_handler_instance and cls._active_cloud_handler_instance in cls._instance.handlers:
             print("LoggerSetup: CloudLogHandler já está ativo. Verificando contexto do uploader.")
             # Se já existe, apenas garante que o contexto do client_uploader está atualizado
-            if cls._client_uploader_instance and (user_token_for_client or user_id_for_client):
-                cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
+            #if cls._client_uploader_instance and (user_token_for_client or user_id_for_client):
+            #    cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
+            if isinstance(cls._active_cloud_handler_instance.uploader, ClientLogUploader):
+                cls._active_cloud_handler_instance.uploader.set_user_context(user_token_for_client, user_id_for_client)
             return True
 
-        # Define o contexto do usuário para o client_uploader, se fornecido e o uploader existir
-        if (user_token_for_client or user_id_for_client):
-            if not cls._client_uploader_instance:
-                firebase_client_storage = FirebaseClientStorage()
-                cls._client_uploader_instance = ClientLogUploader(firebase_client_storage)
-                print("LoggerSetup: Instância de ClientLogUploader criada (em add_cloud_logging).")
-            cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
-        elif not cls._admin_uploader_instance:
-            fb_manager_storage_admin = FbManagerStorage()
-            cls._admin_uploader_instance = AdminLogUploader(fb_manager_storage_admin)
-            print("LoggerSetup: Instância de AdminLogUploader criada (em add_cloud_logging).")
+        # Cria o ClientUploader se não existir e se tokens forem fornecidos
+        if not cls._client_uploader_instance and (user_token_for_client and user_id_for_client):
+            # Tenta obter o FirebaseClientStorage. Se não estiver disponível em run.py,
+            # precisará ser instanciado aqui ou de alguma forma acessível.
+            # Por ora, assumimos que se chegamos aqui, run.py já pode ter instanciado
+            # e não o passou para initialize, então add_cloud_logging é a primeira chance.
+            # Se este for o caso, e você não quer instanciar FirebaseClientStorage globalmente
+            # ou passá-lo de run.py, esta parte precisa de um design cuidadoso.
+            # Temporariamente, vamos instanciar aqui se não existir.
+            try:
+                _fcs_temp = FirebaseClientStorage() # Instancia se necessário
+                cls._client_uploader_instance = ClientLogUploader(_fcs_temp)
+                print("LoggerSetup: Instância de ClientLogUploader criada dinamicamente em add_cloud_logging.")
+                cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
+            except Exception as e_fcs:
+                print(f"LoggerSetup: Erro ao criar FirebaseClientStorage para ClientUploader: {e_fcs}")
+                # Não prosseguir com client uploader se falhar
+        
+        # Cria o AdminUploader se não existir (se não houver contexto de cliente ou como fallback)
+        if not cls._admin_uploader_instance and not (user_token_for_client and user_id_for_client) :
+            try:
+                _fms_temp = FbManagerStorage() # Instancia se necessário
+                cls._admin_uploader_instance = AdminLogUploader(_fms_temp)
+                print("LoggerSetup: Instância de AdminLogUploader criada dinamicamente em add_cloud_logging.")
+            except Exception as e_fms:
+                print(f"LoggerSetup: Erro ao criar FbManagerStorage para AdminLogUploader: {e_fms}")
 
         cloud_log_handler = cls._create_cloud_logger_handler(
             cls.formatter_detailed,

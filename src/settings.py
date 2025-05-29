@@ -56,7 +56,7 @@ DEFAULT_LLM_SERVICE = "openai" # Exemplo
 
 # (Pode adicionar mais configurações conforme necessário)
 
-APP_TITLE = "IA Assistente - Análise de Documentos - COR/SR/PF/SP"
+APP_TITLE = "IA Assistente - COR/SR/PF/SP" # Análise de Documentos
 
 CLOUD_LOGGER_FOLDER = "logs/"        # Pasta no CloudStorage
 CLOUD_LOGGER_UPLOAD_INTERVAL = 120   # Tempo de intervalo entre uploads (segundos)
@@ -91,6 +91,16 @@ def show_data_k():
     #keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED, 'false')
 
 
+# --- Firebase LLM Providers Config Paths ---
+LLM_PROVIDERS_CONFIG_COLLECTION = "llm_providers_config" # Já existe como PROVIDERS_COLLECTION em llm_settings_view
+LLM_PROVIDERS_DEFAULT_DOC_ID = "default_list"          # Já existe como DEFAULT_PROVIDERS_DOC_ID em llm_settings_view
+USER_LLM_PREFERENCES_COLLECTION = "user_llm_preferences"
+
+# --- Session Keys for LLM Providers and Preferences ---
+KEY_SESSION_LOADED_LLM_PROVIDERS = "app_loaded_llm_providers" # Lista de dicts dos provedores
+KEY_SESSION_USER_LLM_PREFERENCES = "app_user_llm_preferences" # Dict com default_provider e default_model
+
+
 # --- Constantes referentes aos modelos de LLM:
 DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_MODEL = "gpt-4.1-nano" # Modelo inicial padrão
@@ -107,4 +117,38 @@ FLET_SECRET_KEY = "minha_chave_secreta_de_teste_temporaria_123"
 
 # Caminho para a imagem (ajuste conforme necessário, pode estar em 'assets')
 PATH_IMAGE_LOGO_DEPARTAMENTO = "logo_pf_orgao.png" 
+
+# --- Firebase Default Settings Paths ---
+APP_DEFAULT_SETTINGS_COLLECTION = "app_default_settings"
+ANALYZE_PDF_DEFAULTS_DOC_ID = "analyze_pdf_defaults"
+
+# --- Session Keys for Analysis Settings ---
+KEY_SESSION_ANALYSIS_SETTINGS = "app_analysis_settings" # Configurações atuais da sessão
+KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS = "app_cloud_analysis_defaults" # Padrões carregados da nuvem
+
+# --- Fallback Default Analysis Settings (se Firestore falhar) ---
+FALLBACK_ANALYSIS_SETTINGS = {
+    "pdf_extractor": "PyMuPdf-fitz",
+    "embeddings_model": "all-MiniLM-L6-v2",
+    "language_detector": "langdetect",
+    "token_counter": "tiktoken",
+    "tfidf_analyzer": "sklearn",
+    "llm_provider": "openai",
+    "llm_model": "gpt-4.1-nano",
+    "llm_input_token_limit": 180000,
+    "llm_output_format": "Padrão",
+    "llm_max_output_length": "Padrão",
+    "llm_temperature": 0.2,
+    "prompt_structure": "prompt_unico",
+}
+
+# --- Firebase LLM Embeddings Config Paths ---
+LLM_EMBEDDINGS_CONFIG_COLLECTION = "llm_providers_config" # Pode ser a mesma coleção dos provedores
+LLM_EMBEDDINGS_DEFAULT_DOC_ID = "model_embeddings_list" # Documento com a lista de custos
+
+# --- Session Keys for Embeddings ---
+KEY_SESSION_TOKENS_EMBEDDINGS = "app_tokens_embeddings"
+KEY_SESSION_MODEL_EMBEDDINGS_LIST = "app_model_embeddings_list"
+
+
 

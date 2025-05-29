@@ -1832,10 +1832,18 @@ def wrapper_cotainer_1(int_content):
             )
 
 def wrapper_panel_1(int_content):
+    """
+    Envolve um ft.ExpansionPanel em um ft.ExpansionPanelList
+    e aplica estilos padronizados para cabeçalho e conteúdo.
+    """
+    if not isinstance(int_content, ft.ExpansionPanel):
+        # Opcional: logar um aviso ou erro se o conteúdo não for o esperado
+        _logger.warning("wrapper_panel_1 recebeu um conteúdo que não é ft.ExpansionPanel.")
+
     return ft.ExpansionPanelList(
         controls=[int_content],
         expand_icon_color=theme.PRIMARY,
-        elevation=2,
+        elevation=1,
         divider_color=ft.colors.TRANSPARENT, # Sem divisores visíveis entre os painéis
         expanded_header_padding=ft.padding.all(1),
         # animation_duration=300 # Opcional

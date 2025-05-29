@@ -1,33 +1,42 @@
 # src/flet_ui/views/analyze_pdf_view.py
 import flet as ft
-import threading
-from typing import Optional, Dict, Any, List, Tuple
+import threading, json, os
+from typing import Optional, Dict, Any, List, Union, Tuple
 from time import time, sleep
+from datetime import datetime
 #from rich import print
 
 from src.flet_ui.components import (
     show_snackbar, show_loading_overlay, hide_loading_overlay,
-    ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable 
+    ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable,
+    CardWithHeader, show_confirmation_dialog 
 )
 from src.flet_ui import theme
-from src.core.pdf_processor import PDFDocumentAnalyzer
+from src.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
 from src.core.ai_orchestrator import get_api_key_in_firestore, analyze_text_with_llm
-from src.settings import UPLOAD_TEMP_DIR, cotacao_dolar_to_real
 
-from src.utils import format_seconds_to_min_sec, LISTA_UFS, MUNICIPIOS_POR_UF
+from src.services.firebase_client import FirebaseClientFirestore
+
+from src.settings import (APP_VERSION , UPLOAD_TEMP_DIR, cotacao_dolar_to_real,
+                          KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, 
+                          FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_LOADED_LLM_PROVIDERS,
+                          KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST)
+
+from src.utils import (format_seconds_to_min_sec, obter_string_normalizada, clean_and_convert_to_float, get_sigla_uf, 
+                        LISTA_UFS, MUNICIPIOS_POR_UF)
 
 from src.core.prompts import (
     FormatAnaliseInicial,
-    tipos_doc,
-    origens_doc,
-    tipos_locais,
-    areas_de_atribuição,
-    tipo_a_autuar,
-    assuntos_re,
+    tipos_doc, origens_doc, tipos_locais,
+    areas_de_atribuição, tipo_a_autuar, assuntos_re,
     lista_delegacias_especializadas,
-    lista_delegacias_interior,
-    lista_corregedorias,
+    lista_delegacias_interior, lista_corregedorias,
+    tipos_envolvidos
 )
+
+destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
+
+from src.core.doc_generator import DocxExporter, TEMPLATE_PREFIX
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
@@ -50,6 +59,7 @@ CTL_PROMPT_STRUCT_BTN = "prompt_structured_button"
 CTL_RESTART_BTN = "restart_button"
 CTL_EXPORT_BTN = "export_button"
 CTL_SETTINGS_BTN = "settings_button"
+CTL_RESET_SETTINGS_BTN = "reset_settings_button"
 CTL_FILE_LIST_PANEL = "file_list_panel"
 CTL_FILE_LIST_PANEL_TITLE = "file_list_panel_title"
 CTL_FILE_LIST_VIEW = "file_list_view"
@@ -57,6 +67,7 @@ CTL_PROC_METADATA_PANEL = "proc_metadata_panel"
 CTL_PROC_METADATA_PANEL_TITLE = "proc_metadata_panel_title"
 CTL_PROC_METADATA_CONTENT = "proc_metadata_content"
 CTL_LLM_RESULT_TEXT = "llm_result_text"
+CTL_LLM_STRUCTURED_RESULT_DISPLAY = "llm_structured_result_display" # Novo
 CTL_LLM_RESULT_INFO_TITLE = "llm_result_info_title"
 CTL_LLM_STATUS_INFO = "llm_status_info"
 CTL_LLM_RESULT_INFO_BALLOON = "llm_result_info_balloon"
@@ -71,12 +82,15 @@ class AnalyzePDFViewContent(ft.Column):
         super().__init__(expand=True, spacing=10) # A Column principal expande
         self.page = page
         self.gui_controls: Dict[str, ft.Control] = {}
+        self.gui_controls_drawer: Dict[str, ft.Control] = {}
         self.file_list_manager = None # Será instanciado FileListManager (adaptado)
         self.analysis_controller = None # Será instanciado AnalysisController (adaptado)
         self.managed_file_picker: Optional[ManagedFilePicker] = None
 
         # Instâncias do PDF Analyzer e outros serviços, se necessário manter estado
         self.pdf_analyzer = PDFDocumentAnalyzer()
+
+        self.docx_exporter = DocxExporter()
 
         # Estado interno da View
         self._is_drawer_open = False
@@ -86,6 +100,7 @@ class AnalyzePDFViewContent(ft.Column):
         self._build_gui_structure()
         self._initialize_file_picker() # Deve ser chamado após _build_ui_structure
         self._setup_event_handlers()
+        self._setup_drawer_event_handlers()
         self._restore_state_from_session()
         self._update_button_states() # Estado inicial dos botões
 
@@ -115,8 +130,8 @@ class AnalyzePDFViewContent(ft.Column):
             icon=ft.Icons.DOWNLOAD_FOR_OFFLINE_ROUNDED,
             tooltip="Exportar Análise", icon_size=default_icon_size_bar,
             items=[
-                ft.PopupMenuItem(text="Exportar para DOCX (Simples)", data="docx_simple"),
-                ft.PopupMenuItem(text="Exportar com Template (Breve)", data="docx_template", disabled=True), # habilitado após análise LLM
+                ft.PopupMenuItem(text="Exportar em DOCX Simples", data="docx_simple"),
+                ft.PopupMenuItem(text="Exportar em Template", data="docx_template", disabled=True), # habilitado após análise LLM
             ]
         )
         self.gui_controls[CTL_SETTINGS_BTN] = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, tooltip="Configurações específicas", icon_size=default_icon_size_bar)
@@ -142,15 +157,19 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_FILE_LIST_VIEW] = ft.ListView(expand=False, spacing=3) # height=0 Altura controlada dinamicamente
         file_list_panel_content = ft.Container(
             content=self.gui_controls[CTL_FILE_LIST_VIEW],
-            #border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT), # Para debug
-            #padding=5,
-            expand=True # Permite que a ListView use o espaço disponível no ExpansionPanel
+            #border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT), # Para debug padding=5,
+            expand=True, # Permite que a ListView use o espaço disponível no ExpansionPanel
+            #bgcolor = theme.PANEL_CONTENT_BGCOLOR
         )
+        file_list_header_container = ft.Container(content=ft.Row([ft.Container(width=12), self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]]),
+                                               expand=True, alignment=ft.alignment.center, # ft.MainAxisAlignment.CENTER, 
+                                               bgcolor=None) # theme.PANEL_HEADER_BGCOLOR)
         self.gui_controls[CTL_FILE_LIST_PANEL] = ft.ExpansionPanel(
-            header=ft.Column([ft.Row([ft.Container(width=12), self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]])], expand=True, alignment=ft.MainAxisAlignment.CENTER),
+            header=file_list_header_container,
             content=file_list_panel_content,
             can_tap_header=True, # Permite expandir/recolher clicando no header
-            expanded=True # Começa expandido
+            expanded=True, # Começa expandido
+            #bgcolor = theme.PANEL_HEADER_BGCOLOR
         )
         self.gui_controls[CTL_FILE_LIST_PANEL] = wrapper_panel_1(self.gui_controls[CTL_FILE_LIST_PANEL]) # wrapper_panel_1 = ExpansionPanelList 
         self.gui_controls[CTL_FILE_LIST_PANEL].visible=False, # visível após carregament de PDF(s)   
@@ -187,16 +206,24 @@ class AnalyzePDFViewContent(ft.Column):
             bgcolor=ft.Colors.with_opacity(0.05, theme.COLOR_INFO),
             visible=True
         )
+        
+        # Fallback para string não estruturada:
         self.gui_controls[CTL_LLM_RESULT_TEXT] = ft.TextField(
             multiline=True, read_only=True, min_lines=15, max_lines=30,
             expand=True, border_color=theme.PRIMARY, text_size=14,
-            visible=False # Começa invisível até ter resultado
+            visible=False 
         )
-        llm_result_container = ft.Container(
-            content=ft.Stack( # Usar Stack para sobrepor o balão e o resultado
+        
+        # Novo display estruturado:
+        self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY] = LLMStructuredResultDisplay(self.page)
+        self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY].visible = False
+
+        self.llm_result_container = ft.Container(
+            content=ft.Column( # Usar Stack para sobrepor o balão e o resultado
                 [
-                    self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON],
-                    self.gui_controls[CTL_LLM_RESULT_TEXT],
+                    #self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON],
+                    #self.gui_controls[CTL_LLM_RESULT_TEXT], # Fallback
+                    #self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY] # Novo
                 ]
             ),
             padding=10,
@@ -225,7 +252,7 @@ class AnalyzePDFViewContent(ft.Column):
                 self.gui_controls[CTL_PROC_METADATA_PANEL],
                 ft.Column([
                     self.gui_controls[CTL_LLM_RESULT_INFO_TITLE],
-                    llm_result_container], expand=True, spacing=6,
+                    self.llm_result_container], expand=True, spacing=6,
                     ),
                 self.gui_controls[CTL_LLM_METADATA_PANEL]
             ],
@@ -272,59 +299,100 @@ class AnalyzePDFViewContent(ft.Column):
 
     def _build_settings_drawer_content(self) -> ft.Column:
         default_width = 260
-        # TODO: itens a popular de estado, config ou firestore
+        current_analysis_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
+        loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
+
         # Seção Processamento
-        proc_extractor_dd = ft.Dropdown(label="Extrator de Texto PDF", options=[
-            ft.dropdown.Option("PyMuPdf_fitz", "PyMuPdf-fitz"),
+        self.gui_controls_drawer["proc_extractor_dd"] = ft.Dropdown(label="Extrator de Texto PDF", options=[
+            ft.dropdown.Option("PyMuPdf-fitz", "PyMuPdf-fitz"),
             ft.dropdown.Option("PdfPlumber", "PdfPlumber"),
-            ft.dropdown.Option("PyPdf2", "PyPdf2"),
-        ], value="PyMuPdf_fitz", width=default_width) 
-        proc_embeddings_dd = ft.Dropdown(label="Modelo de Embeddings", options=[
+            #ft.dropdown.Option("PyPdf2", "PyPdf2"),
+        ], value=current_analysis_settings.get("pdf_extractor"), width=default_width) 
+        self.gui_controls_drawer["proc_embeddings_dd"]  = ft.Dropdown(label="Modelo de Embeddings", options=[
             ft.dropdown.Option("all-MiniLM-L6-v2", "all-MiniLM-L6-v2"),
-            ft.dropdown.Option("text-embedding-ada-002", "OpenAI text-embedding-ada-002"), # Exemplo
-        ], value="all-MiniLM-L6-v2", width=default_width)
-        lang_detector_dd = ft.Dropdown(label="Detector de Idioma", options=[
-            ft.dropdown.Option("langdetect", "langdetect"),
-        ], value="langdetect", width=default_width)
-        token_counter_dd = ft.Dropdown(label="Contador de Tokens", options=[
-            ft.dropdown.Option("tiktoken", "tiktoken"),
-        ], value="tiktoken", width=default_width)
-        tfidf_analyzer_dd = ft.Dropdown(label="Analisador TF-IDF", options=[
-            ft.dropdown.Option("sklearn", "sklearn"),
-        ], value="sklearn", width=default_width)
+            #ft.dropdown.Option("text-embedding-ada-002", "OpenAI text-embedding-ada-002"
+            ft.dropdown.Option("text-embedding-3-small", "OpenAI text-embedding-3-small"), 
+        ], value=current_analysis_settings.get("embeddings_model"), width=default_width)
+        self.gui_controls_drawer["lang_detector_dd"] = ft.Dropdown(
+            label="Detector de Idioma", options=[ft.dropdown.Option("langdetect", "langdetect")],
+            value=current_analysis_settings.get("language_detector"), width=default_width
+        )
+        self.gui_controls_drawer["token_counter_dd"] = ft.Dropdown(
+            label="Contador de Tokens", options=[ft.dropdown.Option("tiktoken", "tiktoken")],
+            value=current_analysis_settings.get("token_counter"), width=default_width
+        )
+        self.gui_controls_drawer["tfidf_analyzer_dd"] = ft.Dropdown(
+            label="Analisador TF-IDF", options=[ft.dropdown.Option("sklearn", "sklearn")],
+            value=current_analysis_settings.get("tfidf_analyzer"), width=default_width
+        )
 
         # Seção LLM
-        llm_provider_dd = ft.Dropdown(label="Provedor LLM", options=[
-            ft.dropdown.Option("openai", "OpenAI"),
-            #ft.dropdown.Option("azure_openai", "Azure OpenAI"), # Exemplo
-        ], value="openai", width=default_width) 
-        llm_model_dd = ft.Dropdown(label="Modelo LLM", options=[
-            ft.dropdown.Option("gpt-4.1-nano", "GPT-4.1 Nano"), # Exemplo
-            ft.dropdown.Option("gpt-4.1-mini", "GPT-4.1 Mini"),
-            ft.dropdown.Option("o4-mini", "OpenAI o4-mini"),
-            ft.dropdown.Option("gpt-4.1", "GPT-4.1"),
-        ], value="gpt-4.1-nano", width=default_width)
-        llm_token_limit_field = ft.TextField(label="Limite Tokens Inputo)", value="180000", 
-                                             input_filter=ft.InputFilter(r"[0-9]"), width=default_width)
-        llm_format_output_dd = ft.Dropdown(label="Formato de Saída", options=[
-            ft.dropdown.Option("texto", "Texto"), ft.dropdown.Option("json", "Json") ], value="texto", width=default_width)
+         # Dropdown de Provedor LLM (Dinâmico)
+        provider_options_drawer = [
+            ft.dropdown.Option(key=p['system_name'], text=p.get('name_display', p['system_name']))
+            for p in loaded_llm_providers if p.get('system_name')
+        ]
+        self.gui_controls_drawer["llm_provider_dd"] = ft.Dropdown(label="Provedor LLM", options=provider_options_drawer , 
+                                                                  value=current_analysis_settings.get("llm_provider"), width=default_width) 
+
+        # Dropdown de Modelo LLM (Dinâmico, depende do provedor)
+        self.gui_controls_drawer["llm_model_dd"] = ft.Dropdown(label="Modelo LLM", options=[], # Será populado por _handle_drawer_provider_change, 
+                                                               value=current_analysis_settings.get("llm_model"), width=default_width)
+
+        self._populate_drawer_models_for_selected_provider(current_analysis_settings.get("llm_provider"), current_analysis_settings.get("llm_model"))
+
+        self.gui_controls_drawer["llm_token_limit_tf"] = ft.TextField(
+            label="Limite Tokens Input", value=str(current_analysis_settings.get("llm_input_token_limit")),
+            input_filter=ft.InputFilter(r"[0-9]"), width=default_width
+        )
+        self.gui_controls_drawer["llm_output_format_dd"] = ft.Dropdown( 
+            label="Formato de Saída", options=[ft.dropdown.Option("Padrão", "Padrão"), 
+                                               #ft.dropdown.Option("json_object", "JSON")
+                                               ], 
+            value=current_analysis_settings.get("llm_output_format"), width=default_width
+        )
+
+        self.gui_controls_drawer["llm_max_output_length_tf"] = ft.TextField( 
+            label="Comprimento Max. Saída", value=str(current_analysis_settings.get("llm_max_output_length")),
+            input_filter=ft.InputFilter(r"[0-9]*"), # Permite vazio ou números
+            hint_text="Deixe 'Padrão' ou vazio para usar o default do modelo",
+            width=default_width, read_only=True
+        )
         
-        def slider_changed(e):
-            temperature_value.value = f"{(int(e.control.value)/10):.1f}"
-            temperature_value.update()
-        temperature_slider = ft.Slider(label="{value}", min=0.0, max=20.0, value=2.0, divisions=20, on_change=slider_changed, expand=True) # label="{value}"
-        temperature_value = ft.Text("0.2", weight=ft.FontWeight.BOLD)
+        #def slider_changed(e):
+        #    temperature_value.value = f"{(int(e.control.value)/10):.1f}"
+        #    temperature_value.update()
+        #temperature_slider = ft.Slider(label="{value}", min=0.0, max=20.0, value=2.0, divisions=20, on_change=slider_changed, expand=True) # label="{value}"
+        #temperature_value = ft.Text("0.2", weight=ft.FontWeight.BOLD)
+        
+        # Slider de Temperatura
+        initial_temp = current_analysis_settings.get("llm_temperature", 0.2)
+        self.gui_controls_drawer["temperature_value_label"] = ft.Text(f"{initial_temp:.1f}", weight=ft.FontWeight.BOLD)
+        self.gui_controls_drawer["temperature_slider"] = ft.Slider(
+            min=0.0, max=20.0, value=initial_temp * 10, # Slider value de 0 a 20 para representar 0.0 a 2.0
+            divisions=20, expand=True,
+            label="{value}", # O label do slider em si não é usado para o valor numérico aqui
+            on_change=self._handle_drawer_setting_change # Atualiza o Text e a sessão
+        )
 
-        output_length_field = ft.TextField(label="Comprimento max. Saída", value="100000", 
-                                           input_filter=ft.InputFilter(r"[0-9]"), width=default_width)
+        # Seção Prompt (apenas para manter consistência, lógica não implementada nesta etapa)
+        self.gui_controls_drawer["prompt_structure_rg"] = ft.RadioGroup(
+            content=ft.Column([
+                ft.Radio(value="prompt_unico", label="Prompt Único"), # TODO: incluir tootip explicativos nesses dois radios
+                ft.Radio(value="sequential_chunks", label="Prompt Agrupado", disabled=True),
+                #ft.Radio(value="rag_multiple", label="Múltiplos Prompts com RAG", disabled=True),
+            ], spacing=1), value=current_analysis_settings.get("prompt_structure")
+        )
 
-        # Seção Prompt
-        prompt_structure_rg = ft.RadioGroup(content=ft.Column([
-            ft.Radio(value="single_context", label="Prompt Único (Todo Contexto)"),
-            ft.Radio(value="sequential_chunks", label="Prompts Agrupados (Sequencial)", disabled=True),
-            ft.Radio(value="rag_multiple", label="Múltiplos Prompts com RAG", disabled=True),
-        ]), value="single_context")
-
+        # NOVO: Botão de Resetar
+        self.gui_controls_drawer[CTL_RESET_SETTINGS_BTN] = ft.ElevatedButton(
+            "Resetar para Padrões",
+            icon=ft.icons.SETTINGS_BACKUP_RESTORE_ROUNDED,
+            on_click=self._handle_reset_drawer_settings,
+            visible=False, # Começa invisível
+            #width=default_width
+        )
+        
         return ft.Column(
             [
                 ft.Row([ft.Text("Configurações específicas", style=ft.TextThemeStyle.TITLE_LARGE), 
@@ -333,34 +401,265 @@ class AnalyzePDFViewContent(ft.Column):
                 ft.Divider(),
 
                 ft.Text("Processamento de Documento", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                proc_extractor_dd, proc_embeddings_dd, lang_detector_dd, token_counter_dd, tfidf_analyzer_dd,
+                self.gui_controls_drawer["proc_extractor_dd"],
+                self.gui_controls_drawer["proc_embeddings_dd"],
+                self.gui_controls_drawer["lang_detector_dd"],   
+                self.gui_controls_drawer["token_counter_dd"],  
+                self.gui_controls_drawer["tfidf_analyzer_dd"], 
                 ft.Divider(),
 
                 ft.Text("Modelo de Linguagem (LLM)", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                llm_provider_dd, llm_model_dd, llm_token_limit_field,
+                self.gui_controls_drawer["llm_provider_dd"],
+                self.gui_controls_drawer["llm_model_dd"],
+                self.gui_controls_drawer["llm_token_limit_tf"],
 
                 ft.Column([
                     ft.Text("Temperatura de resposta", style=ft.TextThemeStyle.LABEL_MEDIUM),
-                    ft.Row([temperature_slider, temperature_value], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], 
+                    ft.Row([self.gui_controls_drawer["temperature_slider"],self.gui_controls_drawer["temperature_value_label"]], 
+                           alignment=ft.MainAxisAlignment.SPACE_BETWEEN)], 
                     width=default_width, spacing=1), 
-                llm_format_output_dd,
-                output_length_field,
+                self.gui_controls_drawer["llm_output_format_dd"], 
+                self.gui_controls_drawer["llm_max_output_length_tf"],
 
                 ft.Dropdown(label="Configurações Avançadas", options=[ft.dropdown.Option("indisponivel", "Indisponível")], 
                             value="indisponivel", disabled=True, width=default_width),
                 ft.Divider(),
 
                 ft.Text("Estrutura do Prompt", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                prompt_structure_rg,
+                self.gui_controls_drawer["prompt_structure_rg"],
 
                 ft.Container(expand=True), # Para empurrar para baixo
-                ft.Row([ft.ElevatedButton("Salvar Configurações", icon=ft.Icons.SAVE_ROUNDED, disabled=True)], 
-                       expand=True, alignment=ft.MainAxisAlignment.CENTER) # TODO: Lógica de salvar
+            
+                ft.Row([self.gui_controls_drawer[CTL_RESET_SETTINGS_BTN]], 
+                       expand=True, alignment=ft.MainAxisAlignment.CENTER),
+                ft.Container(height=1)
+                #ft.Row([ft.ElevatedButton("Salvar Configurações", icon=ft.Icons.SAVE_ROUNDED, disabled=True)], 
+                #       expand=True, alignment=ft.MainAxisAlignment.CENTER) 
             ],
             #spacing=12,
             scroll=ft.ScrollMode.ADAPTIVE, # Permite scroll dentro do drawer
             expand=True # Ocupa a altura do container do drawer
         )
+
+    def _handle_drawer_provider_change(self, e: ft.ControlEvent):
+        """Atualiza a lista de modelos no drawer quando o provedor do drawer muda."""
+        selected_provider_system_name = e.control.value
+        self._populate_drawer_models_for_selected_provider(selected_provider_system_name, new_provider_selected=True)
+        self._handle_drawer_setting_change(e) # Chama o handler geral para salvar na sessão e atualizar UI
+
+    def _populate_drawer_models_for_selected_provider(self, provider_system_name: Optional[str], current_model_value: Optional[str] = None, new_provider_selected:bool=False):
+        """Popula o dropdown de modelos no drawer com base no provedor selecionado."""
+        model_dropdown_drawer = self.gui_controls_drawer.get("llm_model_dd")
+        if not model_dropdown_drawer or not isinstance(model_dropdown_drawer, ft.Dropdown):
+            return
+
+        model_dropdown_drawer.options = []
+        # model_dropdown_drawer.value = None # Não reseta aqui se current_model_value será usado
+        model_dropdown_drawer.disabled = True
+        
+        loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
+
+        if provider_system_name and loaded_llm_providers:
+            provider_config = next((p for p in loaded_llm_providers if p.get("system_name") == provider_system_name), None)
+            if provider_config and provider_config.get("models"):
+                model_options = [
+                    ft.dropdown.Option(key=m['id'], text=m.get('name', m['id']))
+                    for m in provider_config["models"] if m.get("id")
+                ]
+                model_dropdown_drawer.options = model_options
+                model_dropdown_drawer.disabled = False
+                
+                if new_provider_selected and model_options: # Se um novo provedor foi selecionado, sugere o primeiro modelo
+                    model_dropdown_drawer.value = model_options[0].key
+                elif current_model_value and any(opt.key == current_model_value for opt in model_options):
+                    model_dropdown_drawer.value = current_model_value # Mantém valor se válido
+                elif model_options: # Se valor atual não é válido mas há opções
+                    model_dropdown_drawer.value = model_options[0].key # Fallback para o primeiro
+                else: # Sem opções
+                    model_dropdown_drawer.value = None
+
+
+        if model_dropdown_drawer.page: model_dropdown_drawer.update()
+
+    def _setup_drawer_event_handlers(self):
+        _logger.info("Configurando handlers de eventos do Drawer de Configurações.")
+        # Para cada controle no drawer que pode ser alterado pelo usuário
+        controls_to_watch = [
+            "proc_extractor_dd" ,"proc_embeddings_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider", 
+            # "llm_output_format_dd", "llm_max_output_length_tf", "prompt_structure_rg"
+        ]
+        for key in controls_to_watch:
+            if key in self.gui_controls_drawer:
+                control = self.gui_controls_drawer[key]
+                control.on_change = self._handle_drawer_setting_change
+    
+    def _handle_drawer_setting_change(self, e: Optional[ft.ControlEvent] = None):
+        """Chamado quando qualquer configuração no drawer é alterada pelo usuário."""
+        _logger.debug(f"Configuração do drawer alterada: {e.control.label if hasattr(e.control, 'label') else 'Slider' if isinstance(e.control, ft.Slider) else 'N/A'}")
+        
+        # Atualiza o valor do label de temperatura se o slider mudou
+        if e and isinstance(e.control, ft.Slider) and e.control == self.gui_controls_drawer.get("temperature_slider"):
+            slider_val = int(e.control.value) / 10.0 # Converte de 0-20 para 0.0-2.0
+            temp_label = self.gui_controls_drawer.get("temperature_value_label")
+            if isinstance(temp_label, ft.Text):
+                temp_label.value = f"{slider_val:.1f}"
+                if temp_label.page: temp_label.update()
+
+        # Coleta todos os valores atuais do drawer
+        new_settings = self._get_settings_from_drawer()
+        
+        # Salva na sessão
+        self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, new_settings)
+        _logger.info(f"Configurações de análise da sessão atualizadas: {new_settings}")
+        
+        # Atualiza a visibilidade do botão de reset
+        self._update_reset_button_visibility()
+
+        # Informa ao usuário que as configurações foram aplicadas à sessão atual
+        # Não usar show_snackbar aqui para cada pequena mudança, pode ser irritante.
+        # Opcional: habilitar um botão "Aplicar à Sessão" se as mudanças forem muitas.
+        # Por ora, a mudança é imediata na sessão.
+
+    def _get_settings_from_drawer(self) -> Dict[str, Any]:
+        """Coleta os valores atuais de todos os controles do drawer."""
+        settings = {}
+        # Mapeia a chave do controle no self.gui_controls_drawer para a chave no dict de settings
+        key_map = {
+            "proc_extractor_dd": "pdf_extractor",
+            "proc_embeddings_dd": "embeddings_model",
+            "lang_detector_dd": "language_detector",
+            "token_counter_dd": "token_counter",
+            "tfidf_analyzer_dd": "tfidf_analyzer",
+            "llm_provider_dd": "llm_provider",
+            "llm_model_dd": "llm_model",
+            "llm_token_limit_tf": "llm_input_token_limit",
+            "llm_output_format_dd": "llm_output_format",
+            "llm_max_output_length_tf": "llm_max_output_length",
+            "temperature_slider": "llm_temperature", # O valor do slider será convertido
+            "prompt_structure_rg": "prompt_structure",
+        }
+        for ctrl_key, setting_key in key_map.items():
+            if ctrl_key in self.gui_controls_drawer:
+                control = self.gui_controls_drawer[ctrl_key]
+                if isinstance(control, (ft.Dropdown, ft.TextField, ft.RadioGroup)):
+                    value = control.value
+                    if setting_key == "llm_input_token_limit":
+                        try: value = int(value) if value else FALLBACK_ANALYSIS_SETTINGS[setting_key]
+                        except ValueError: value = FALLBACK_ANALYSIS_SETTINGS[setting_key]
+                    elif setting_key == "llm_max_output_length":
+                         # Se vazio ou "Padrão", usa o fallback que também é "Padrão"
+                        value = value if value and value.lower() != "padrão" else FALLBACK_ANALYSIS_SETTINGS[setting_key]
+                        if value != "Padrão": # Tenta converter para int se não for "Padrão"
+                            try: value = int(value)
+                            except ValueError: value = FALLBACK_ANALYSIS_SETTINGS[setting_key] # Mantém "Padrão"
+                    settings[setting_key] = value
+                elif isinstance(control, ft.Slider) and setting_key == "llm_temperature":
+                    settings[setting_key] = float(control.value) / 10.0
+        return settings
+
+    def _load_settings_into_drawer(self, settings_to_load: Dict[str, Any]):
+        """Popula os controles do drawer com os valores fornecidos."""
+        _logger.info("Carregando configurações da sessão para o drawer.")
+        # Mapeamento inverso ou lógica similar a _get_settings_from_drawer
+
+        # Popula dropdown de provedores do drawer
+        loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
+        provider_options_drawer = [
+            ft.dropdown.Option(key=p['system_name'], text=p.get('name_display', p['system_name']))
+            for p in loaded_llm_providers if p.get('system_name')
+        ]
+        drawer_provider_dd = self.gui_controls_drawer.get("llm_provider_dd")
+        if isinstance(drawer_provider_dd, ft.Dropdown):
+            drawer_provider_dd.options = provider_options_drawer
+            drawer_provider_dd.value = settings_to_load.get("llm_provider")
+            if drawer_provider_dd.page: drawer_provider_dd.update()
+
+        # Popula dropdown de modelos do drawer com base no provedor carregado
+        self._populate_drawer_models_for_selected_provider(
+            settings_to_load.get("llm_provider"),
+            settings_to_load.get("llm_model")
+        )
+
+        control_map = {
+            "pdf_extractor": self.gui_controls_drawer.get("proc_extractor_dd"),
+            "embeddings_model": self.gui_controls_drawer.get("proc_embeddings_dd"),
+            "language_detector": self.gui_controls_drawer.get("lang_detector_dd"),
+            "token_counter": self.gui_controls_drawer.get("token_counter_dd"),
+            "tfidf_analyzer": self.gui_controls_drawer.get("tfidf_analyzer_dd"),
+            #"llm_provider": self.gui_controls_drawer.get("llm_provider_dd"),
+            #"llm_model": self.gui_controls_drawer.get("llm_model_dd"),
+            "llm_input_token_limit": self.gui_controls_drawer.get("llm_token_limit_tf"),
+            "llm_output_format": self.gui_controls_drawer.get("llm_output_format_dd"),
+            "llm_max_output_length": self.gui_controls_drawer.get("llm_max_output_length_tf"),
+            "llm_temperature": self.gui_controls_drawer.get("temperature_slider"),
+            "prompt_structure": self.gui_controls_drawer.get("prompt_structure_rg"),
+        }
+
+        for setting_key, control in control_map.items():
+            if control and setting_key in settings_to_load:
+                value = settings_to_load[setting_key]
+                if isinstance(control, (ft.Dropdown, ft.RadioGroup)):
+                    control.value = value
+                elif isinstance(control, ft.TextField):
+                    control.value = str(value) # Garante que é string para TextField
+                elif isinstance(control, ft.Slider) and setting_key == "llm_temperature":
+                    control.value = float(value) * 10.0
+                    temp_label = self.gui_controls_drawer.get("temperature_value_label")
+                    if isinstance(temp_label, ft.Text):
+                        temp_label.value = f"{float(value):.1f}"
+                        if temp_label.page : temp_label.update()
+
+                if control.page : control.update() # Atualiza cada controle individualmente
+        
+        self._update_reset_button_visibility()
+
+    def _handle_reset_drawer_settings(self, e: ft.ControlEvent):
+        _logger.info("Botão 'Resetar Configurações' do drawer clicado.")
+        cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
+        if cloud_defaults:
+            self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, cloud_defaults.copy())
+            self._load_settings_into_drawer(cloud_defaults)
+            show_snackbar(self.page, "Configurações resetadas para os padrões da nuvem.", theme.COLOR_INFO)
+        else:
+            show_snackbar(self.page, "Não foi possível carregar os padrões da nuvem.", theme.COLOR_ERROR)
+        self._update_reset_button_visibility() # Botão deve ficar invisível após reset
+
+    def _update_reset_button_visibility(self):
+        current_session_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
+        cloud_default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
+        reset_button = self.gui_controls_drawer.get(CTL_RESET_SETTINGS_BTN)
+
+        if not current_session_settings or not cloud_default_settings or not reset_button:
+            if reset_button : 
+                reset_button.visible = False # Segurança
+            if reset_button and reset_button.page: 
+                reset_button.update()
+            return
+
+        # Compara os dicionários. Precisamos ser cuidadosos com tipos (int vs str).
+        # _get_settings_from_drawer já normaliza os tipos para o que esperamos na sessão.
+        are_different = False
+        for key in cloud_default_settings.keys():
+            # É importante que a comparação seja feita com os mesmos tipos.
+            # A current_session_settings deve ter sido populada por _get_settings_from_drawer
+            # ou carregada e normalizada de forma similar.
+            val_session = current_session_settings.get(key)
+            val_cloud = cloud_default_settings.get(key)
+
+            if isinstance(val_cloud, (int, float)) and isinstance(val_session, str):
+                try: # Tenta converter string da sessão para número para comparar
+                    if isinstance(val_cloud, int): val_session = int(val_session)
+                    elif isinstance(val_cloud, float): val_session = float(val_session)
+                except ValueError:
+                    pass # Se não puder converter, serão diferentes
+
+            if val_session != val_cloud:
+                _logger.debug(f"Diferença encontrada para reset: Chave='{key}', Sessão='{val_session}' (tipo {type(val_session)}), Nuvem='{val_cloud}' (tipo {type(val_cloud)})")
+                are_different = True
+                break
+        
+        reset_button.visible = are_different
+        if reset_button.page: reset_button.update()
 
     def _initialize_file_picker(self):
         _logger.info("Inicializando ManagedFilePicker para Análise de PDF.")
@@ -530,19 +829,168 @@ class AnalyzePDFViewContent(ft.Column):
         self._clear_all_data_and_gui()
         show_snackbar(self.page, "Análise reiniciada. Carregue novos arquivos.", theme.COLOR_INFO)
 
-    def _handle_export_selected(self, e: ft.ControlEvent):
-        selected_action = e.control.data
-        _logger.info(f"Opção de exportação selecionada: {selected_action}")
-        if selected_action == "docx_simple":
-            # TODO: Implementar lógica de exportação simples
-            llm_response = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
-            if not llm_response:
-                show_snackbar(self.page, "Nenhum resultado de análise LLM para exportar.", theme.COLOR_WARNING)
-                return
-            show_snackbar(self.page, "Exportação DOCX Simples (Breve)...", theme.COLOR_INFO)
-            # Chamar doc_generator.export_simple_docx(llm_response, page)
-        elif selected_action == "docx_template":
-            show_snackbar(self.page, "Exportação com Template (Breve)...", theme.COLOR_INFO)
+    def _get_current_data_from_structured_display(self) -> Optional[FormatAnaliseInicial]:
+        """Coleta os dados atuais dos campos editáveis da UI e retorna um objeto FormatAnaliseInicial."""
+        structured_display_ctrl = self.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+        if not isinstance(structured_display_ctrl, LLMStructuredResultDisplay) or not structured_display_ctrl.data:
+            _logger.warning("Display estruturado não encontrado ou sem dados para coletar.")
+            return None
+       
+        updated_data = FormatAnaliseInicial( # Valores padrão para campos não editáveis ou não presentes na UI
+            descricao_geral=structured_display_ctrl.data.descricao_geral, # Mantém original
+            resumo_fato=structured_display_ctrl.data.resumo_fato, # Mantém original
+            pessoas_envolvidas=structured_display_ctrl.data.pessoas_envolvidas, # Mantém original
+            linha_do_tempo=structured_display_ctrl.data.linha_do_tempo, # Mantém original
+            observacoes=structured_display_ctrl.data.observacoes # Mantém original
+        )
+
+        # Se LLMStructuredResultDisplay atualiza seu self.data:
+        if structured_display_ctrl.data:
+
+            editable_fields = [
+                "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
+                "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
+                "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", "destinacao"
+            ]
+            for field_name in editable_fields:
+                 if hasattr(structured_display_ctrl.data, field_name):
+                    ui_value = getattr(structured_display_ctrl.data, field_name)
+                    # Tratamento especial para valor_apuracao que pode vir como string formatada da UI
+                    if field_name == "valor_apuracao" and isinstance(ui_value, str):
+                        setattr(updated_data, field_name, clean_and_convert_to_float(ui_value))
+                    else:
+                        setattr(updated_data, field_name, ui_value)
+            
+            _logger.info("Dados coletados da UI para exportação (assumindo que LLMStructuredResultDisplay.data está atualizado).")
+            return updated_data
+
+        _logger.error("Não foi possível coletar dados atuais do display estruturado.")
+        return None
+
+    def _update_export_button_menu(self):
+        """Atualiza os itens do PopupMenuButton de exportação."""
+        export_button = self.gui_controls.get(CTL_EXPORT_BTN)
+        if not isinstance(export_button, ft.PopupMenuButton):
+            return
+
+        export_button.items.clear()
+        export_button.items.append(
+            ft.PopupMenuItem(text="Exportar em Simples DOCX", data="export_simple_docx")
+        )
+
+        available_templates = self.docx_exporter.get_available_templates()
+        template_sub_menu_items = []
+        if available_templates:
+            for friendly_name, template_path in available_templates:
+                template_sub_menu_items.append(
+                    ft.PopupMenuItem(text=friendly_name, data=f"export_template_{template_path}")
+                )
+        
+        # Adiciona opção de "Cadastrar Novo Template" (apenas visual por enquanto)
+        # template_sub_menu_items.append(ft.PopupMenuItem()) # Divisor
+        # template_sub_menu_items.append(
+        #     ft.PopupMenuItem(text="Gerenciar Templates...", icon=ft.icons.SETTINGS_APPLICATIONS_OUTLINED, data="manage_templates", disabled=True)
+        # )
+        
+        if template_sub_menu_items:
+             export_button.items.append(
+                ft.PopupMenuItem(
+                    text="Exportar em Template DOCX",
+                    #icon=ft.icons.FILE_COPY_OUTLINED,
+                    items=template_sub_menu_items
+                )
+            )
+        else: # Se não há templates, apenas a opção de cadastro
+             export_button.items.append(
+                ft.PopupMenuItem(text="Nenhum template DOCX encontrado", disabled=True)
+             )
+             # export_button.items.append(
+             #    ft.PopupMenuItem(text="Gerenciar Templates...", icon=ft.icons.SETTINGS_APPLICATIONS_OUTLINED, data="manage_templates", disabled=True)
+             #)
+        
+        if export_button.page and export_button.uid:
+            export_button.update()
+
+    def _handle_export_selected(self, e: ft.ControlEvent): 
+        selected_action_data = e.control.data
+        _logger.info(f"Opção de exportação selecionada: {selected_action_data}")
+
+        current_data_for_export = self._get_current_data_from_structured_display()
+        if not current_data_for_export:
+            show_snackbar(self.page, "Não há dados de análise para exportar. Verifique os resultados.", theme.COLOR_ERROR)
+            return
+
+        file_picker_instance = self.page.data.get("global_file_picker")
+        if not file_picker_instance or not isinstance(file_picker_instance, ft.FilePicker):
+            show_snackbar(self.page, "FilePicker não está disponível para salvar o arquivo.", theme.COLOR_ERROR)
+            return
+
+        default_filename_base = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME, "analise_documento")
+        default_filename_base = default_filename_base.replace("Arquivos selecionados: ", "").replace("Arquivo selecionado: ", "").split(" e Outros")[0].replace(".pdf", "")
+
+        if selected_action_data == "export_simple_docx":
+            def on_save_dialog_result_simple(event: ft.FilePickerResultEvent):
+                if event.path:
+                    output_path = event.path if event.path.lower().endswith(".docx") else event.path + ".docx"
+                    show_loading_overlay(self.page, f"Exportando para {os.path.basename(output_path)}...")
+                    success = self.docx_exporter.export_simple_docx(current_data_for_export, output_path)
+                    hide_loading_overlay(self.page)
+                    if success:
+                        show_snackbar(self.page, f"Arquivo salvo em: {output_path}", theme.COLOR_SUCCESS)
+                    else:
+                        show_snackbar(self.page, "Falha ao exportar DOCX simples.", theme.COLOR_ERROR)
+                else:
+                    show_snackbar(self.page, "Operação de salvamento cancelada.", theme.COLOR_INFO)
+            
+            file_picker_instance.on_result = on_save_dialog_result_simple
+            file_picker_instance.save_file(
+                dialog_title="Salvar DOCX Simples Como...",
+                file_name=f"{default_filename_base}_simples.docx",
+                allowed_extensions=["docx"]
+            )
+
+        elif selected_action_data and selected_action_data.startswith("export_template_"):
+            template_path_to_use = selected_action_data[len("export_template_"):]
+            template_name_friendly = os.path.basename(template_path_to_use).replace(TEMPLATE_PREFIX, "").replace(".docx","").replace("_", " ").title()
+
+            def on_save_dialog_result_template(event: ft.FilePickerResultEvent):
+                if event.path:
+                    output_path = event.path if event.path.lower().endswith(".docx") else event.path + ".docx"
+                    show_loading_overlay(self.page, f"Exportando '{template_name_friendly}' para {os.path.basename(output_path)}...")
+                    success, missing_keys = self.docx_exporter.export_from_template_docx(current_data_for_export, template_path_to_use, output_path)
+                    hide_loading_overlay(self.page)
+                    if success:
+                        show_snackbar(self.page, f"Arquivo salvo em: {output_path}", theme.COLOR_SUCCESS)
+                        if missing_keys:
+                            missing_keys_str = ", ".join(missing_keys)
+                            show_confirmation_dialog(
+                                self.page,
+                                title="Aviso de Exportação",
+                                content=ft.Column([
+                                    ft.Text(f"Os seguintes campos tinham valores, mas não foram encontrados como placeholders no template '{template_name_friendly}':"),
+                                    ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)
+                                ]),
+                                confirm_text="OK",
+                                cancel_text=None # Sem botão de cancelar neste aviso
+                            )
+                    else:
+                        show_snackbar(self.page, f"Falha ao exportar usando o template '{template_name_friendly}'.", theme.COLOR_ERROR)
+                else:
+                    show_snackbar(self.page, "Operação de salvamento cancelada.", theme.COLOR_INFO)
+
+            file_picker_instance.on_result = on_save_dialog_result_template
+            file_picker_instance.save_file(
+                dialog_title=f"Salvar Cópia de '{template_name_friendly}' Como...",
+                file_name=f"{default_filename_base}_{template_name_friendly.replace(' ', '_').lower()}.docx",
+                allowed_extensions=["docx"]
+            )
+        
+        elif selected_action_data == "manage_templates":
+            show_snackbar(self.page, "Gerenciamento de templates ainda não implementado.", theme.COLOR_INFO)
+            # Aqui você poderia abrir um novo diálogo ou navegar para uma view de gerenciamento.
+
+        # Importante: Atualizar o picker global da página para esta nova lógica de callback
+        self.page.update()
 
     def _handle_toggle_settings_drawer(self, e: Optional[ft.ControlEvent] = None):
         self._is_drawer_open = not self._is_drawer_open
@@ -587,9 +1035,9 @@ class AnalyzePDFViewContent(ft.Column):
                 self.gui_controls[CTL_LLM_STATUS_INFO].value = "Clique em 'Solicitar Análise' para prosseguir "
 
         # Força atualização dos botões
-        for btn_key in [CTL_UPLOAD_BTN, CTL_PROCESS_BTN, CTL_ANALYZE_BTN, CTL_LLM_RESULT_INFO_TITLE,
+        for btn_key in [CTL_UPLOAD_BTN, CTL_PROCESS_BTN, CTL_ANALYZE_BTN, CTL_LLM_RESULT_INFO_TITLE, CTL_LLM_STRUCTURED_RESULT_DISPLAY,
                         CTL_PROMPT_STRUCT_BTN, CTL_RESTART_BTN, CTL_EXPORT_BTN, CTL_SETTINGS_BTN, CTL_LLM_STATUS_INFO]:
-            if btn_key in self.gui_controls and self.gui_controls[btn_key].page:
+            if btn_key in self.gui_controls and self.gui_controls[btn_key].page and self.gui_controls[btn_key].uid:
                 self.gui_controls[btn_key].update()
         _logger.info("[DEBUG] Estados dos botões atualizados.")
 
@@ -616,7 +1064,7 @@ class AnalyzePDFViewContent(ft.Column):
                 #"count_selected_final":                         "Qtd. Páginas Selecionadas com limite de tokens",
                 ("final_aggregated_tokens",                      "Tokens totais das Páginas Selecionadas"),
                 ("supressed_tokens_percentage",                  "Percentual de Tokens Suprimidos"),
-                ("processing_time",                              "Tempo de processamento (s)")
+                ("processing_time",                              "Tempo de processamento")
             ]
             
             ordered_keys = [key for key, _ in labels]
@@ -628,7 +1076,7 @@ class AnalyzePDFViewContent(ft.Column):
                     continue
 
                 if key in metadata_to_display and key in labels:
-                    label_text = labels[key]
+                    label_text = f"{labels[key]}:"
                     value = metadata_to_display.get(key)
                     
                     if key == "final_pages_global_keys_formatted" and value == metadata_to_display.get("relevant_pages_global_keys_formatted"):
@@ -661,11 +1109,11 @@ class AnalyzePDFViewContent(ft.Column):
                     default_text_size=14
                     # Você pode passar key_style e value_style personalizados se desejar
                 )
-                content_area.controls.append(ft.Container(metadata_table, padding=ft.padding.only(left=30)))
+                content_area.controls.append(ft.Container(metadata_table, padding=ft.padding.only(left=30, bottom=10)))
 
             # Alerta OCR (mantido como estava, abaixo da tabela se houver)
             if metadata_to_display.get("count_discarded_unintelligible", 0) > 0:
-                content_area.controls.append(ft.Container(height=6)) # Espaçador
+                content_area.controls.append(ft.Container(height=1)) # Espaçador
                 content_area.controls.append(
                     ft.Container(
                         ft.Row([
@@ -690,6 +1138,17 @@ class AnalyzePDFViewContent(ft.Column):
             #content_area.controls.append(ft.Text("Nenhum metadado da LLM disponível.", italic=True))
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = False
         else:
+            if not metadata_to_display.get("total_cost_usd"):
+                loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
+                calculated_cost_usd = self.analysis_controller._calc_costs_llm_analysis(metadata_to_display, loaded_llm_providers)
+                metadata_to_display["total_cost_usd"] = calculated_cost_usd
+
+            # --- NOVO: Cálculo e adição de custos de Embeddings ---
+            tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
+            model_embeddings_list_session = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
+            
+            calculated_embedding_cost_usd = self.analysis_controller._calc_costs_embedding_process(tokens_embeddings_session, model_embeddings_list_session)
+            
             self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = False
             self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = False
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
@@ -702,7 +1161,7 @@ class AnalyzePDFViewContent(ft.Column):
                 ("total_cost_brl",       "Custo Estimado (BRL)"), 
                 ("llm_provider_used",    "Provedor LLM"),
                 ("llm_model_used",       "Modelo Utilizado"),
-                ("processing_time",      "Tempo de processamento (s)")
+                ("processing_time",      "Tempo de processamento")
             ]
             
             ordered_keys = [key for key, _ in labels]
@@ -710,7 +1169,7 @@ class AnalyzePDFViewContent(ft.Column):
             data_rows = []
 
             for key in ordered_keys:
-                label_text = labels[key]
+                label_text = f"{labels[key]}:"
                 if key in ["total_tokens", "successful_requests"]:
                     continue
                 elif key =="total_cost_brl":
@@ -726,6 +1185,11 @@ class AnalyzePDFViewContent(ft.Column):
                     
                     data_rows.append((label_text, display_value))
 
+            if calculated_embedding_cost_usd:
+                cost_embeddings_usd_str = f"U$ {calculated_embedding_cost_usd:.4f}"
+                cost_embeddings_brl_str = f"R$ {(calculated_embedding_cost_usd * cotacao_dolar_to_real):.4f}"
+                data_rows.insert(5, ("Custos de Embeddings:", f"{cost_embeddings_usd_str} : {cost_embeddings_brl_str}"))
+                
             if data_rows:
                 metadata_table = CompactKeyValueTable(
                     data=data_rows,
@@ -736,29 +1200,48 @@ class AnalyzePDFViewContent(ft.Column):
                     default_text_size=14
                     # Você pode passar key_style e value_style personalizados se desejar
                 )
-                content_area.controls.append(ft.Container(metadata_table, padding=ft.padding.only(left=30)))
+                content_area.controls.append(ft.Container(metadata_table, padding=ft.padding.only(left=30, bottom=10)))
         
         # Comentado devido AssertionError: Text Control must be added to the page first
         # if content_area.page: content_area.update()
 
-    def _show_info_balloon_or_result(self, show_balloon: bool, result_text: Optional[str] = None):
-        if not result_text:
-            result_text = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
-            if result_text is not None:
-                self.gui_controls[CTL_LLM_RESULT_TEXT].value = result_text
-                self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON].visible = False
-                self.gui_controls[CTL_LLM_RESULT_TEXT].visible = True
-                return
+    def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, FormatAnaliseInicial]] = None):
+        # Limpa visibilidade de todos os containers de resultado primeiro
+        def only_one_visible(control):
+            self.gui_controls[control].visible = True  
+            self.llm_result_container.content.controls = [self.gui_controls[control]]
+            for ctl in [CTL_LLM_RESULT_INFO_BALLOON, CTL_LLM_RESULT_TEXT, CTL_LLM_STRUCTURED_RESULT_DISPLAY]:
+                if ctl != control:
+                    self.gui_controls[ctl].visible = False            
+
+        if show_balloon:
+            only_one_visible(CTL_LLM_RESULT_INFO_BALLOON)
+        elif isinstance(result_data, FormatAnaliseInicial):
+            structured_display = self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY]
+            if isinstance(structured_display, LLMStructuredResultDisplay): # Verifica o tipo
+                structured_display.update_data(result_data)
+                only_one_visible(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+            else: # Fallback se o controle não for o esperado
+                _logger.error("Controle CTL_LLM_STRUCTURED_RESULT_DISPLAY não é uma instância de LLMStructuredResultDisplay.")
+                self.gui_controls[CTL_LLM_RESULT_TEXT].value = "Erro interno ao exibir resultado estruturado."
+                only_one_visible(CTL_LLM_RESULT_TEXT)
+        elif isinstance(result_data, str): # Fallback para string
+            self.gui_controls[CTL_LLM_RESULT_TEXT].value = result_data
+            only_one_visible(CTL_LLM_RESULT_TEXT)
+        else: # Caso padrão, mostra balão
+            only_one_visible(CTL_LLM_RESULT_INFO_BALLOON)
+            _logger.warning(f"Tipo de result_data inesperado para _show_info_balloon_or_result: {type(result_data)}")
         
-        self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON].visible = show_balloon
-        self.gui_controls[CTL_LLM_RESULT_TEXT].visible = not show_balloon
-        if not show_balloon and result_text is not None:
-            self.gui_controls[CTL_LLM_RESULT_TEXT].value = result_text
+        if self.llm_result_container.page and self.llm_result_container.uid:
+            self.page.update(self.llm_result_container)
+
+        for ctl in [CTL_LLM_STRUCTURED_RESULT_DISPLAY, CTL_LLM_RESULT_TEXT, CTL_LLM_RESULT_INFO_BALLOON]:
+            if ctl in self.gui_controls and self.gui_controls[ctl].page and self.gui_controls[ctl].uid:
+                #self.gui_controls[ctl].update()
+                self.page.update(self.gui_controls[ctl])        
         
-        # Comentado devido AssertionError: Text Control must be added to the page first
-        # if self.page:
-        #    self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON].update()
-        #    self.gui_controls[CTL_LLM_RESULT_TEXT].update()
+        # Não chamar .update() nos controles individuais aqui.
+        # A atualização será feita pelo page.update() no método chamador ou em _restore_state_from_session.
 
     def _clear_processing_metadata_display(self):
         self._remove_data_session(KEY_SESSION_PROCESSING_METADATA)
@@ -779,16 +1262,50 @@ class AnalyzePDFViewContent(ft.Column):
         self._update_processing_metadata_display()
         self._update_llm_metadata_display()
 
-        llm_response = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
-        if llm_response:
-            self._show_info_balloon_or_result(show_balloon=False, result_text=llm_response)
+        # Carrega as configurações da sessão para o drawer
+        analysis_settings_from_session = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
+        if analysis_settings_from_session:
+            self._load_settings_into_drawer(analysis_settings_from_session)
+        else: # Caso não haja nada na sessão ainda (ex: primeiro carregamento antes de app.py popular)
+            self._load_settings_into_drawer(FALLBACK_ANALYSIS_SETTINGS)
+
+        llm_response_from_session = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
+        
+        # Determina o tipo de dado para exibir
+        data_to_display = None
+        if isinstance(llm_response_from_session, str):
+            try:
+                json_data = json.loads(llm_response_from_session)
+                
+                if 'valor_apuracao' in json_data:
+                    raw_valor = json_data['valor_apuracao']
+                    json_data['valor_apuracao'] = clean_and_convert_to_float(raw_valor)
+                    _logger.info(f"Restaurando da sessão: Valor apuracao original: '{raw_valor}', convertido para: {json_data['valor_apuracao']}")
+
+                data_to_display = FormatAnaliseInicial(**json_data)
+                _logger.info("Resposta LLM (string da sessão) parseada para FormatAnaliseInicial para restauração.")
+            except (json.JSONDecodeError, TypeError, Exception):
+                data_to_display = llm_response_from_session # Mantém como string se falhar
+                _logger.warning("String da sessão não pôde ser parseada/validada como FormatAnaliseInicial na restauração.")
+        elif isinstance(llm_response_from_session, FormatAnaliseInicial):
+            data_to_display = llm_response_from_session
+        
+        if data_to_display:
+            self._show_info_balloon_or_result(show_balloon=False, result_data=data_to_display)
         else:
             self._show_info_balloon_or_result(show_balloon=True)
         
         # Configurações do Drawer (TODO: Ler da sessão/configurações do usuário)
 
         self._update_button_states() # Fundamental após restaurar estado
-        #self.update() # comentado devido AssertionError
+        
+        if self.page: # Garante que a página está disponível
+            # self.update() # Atualiza a view principal (AnalyzePDFViewContent)
+            # E também os painéis que podem ter mudado de visibilidade
+            if self.gui_controls[CTL_PROC_METADATA_PANEL].page:
+                self.gui_controls[CTL_PROC_METADATA_PANEL].update()
+            if self.gui_controls[CTL_LLM_METADATA_PANEL].page:
+                self.gui_controls[CTL_LLM_METADATA_PANEL].update()
 
     def _clear_all_data_and_gui(self):
         _logger.info("Limpando todos os dados e resetando UI da Análise PDF.")
@@ -819,7 +1336,6 @@ class AnalyzePDFViewContent(ft.Column):
         self._update_button_states()
         if self.page: 
             self.page.update()
-
 
     # --- Classes Internas para Gerenciamento (Adaptadas) ---
     class _InternalFileListManager:
@@ -926,13 +1442,276 @@ class AnalyzePDFViewContent(ft.Column):
             list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
             self.page.update(title_text, list_view)
 
-
     class _InternalAnalysisController:
         def __init__(self, page: ft.Page, gui_controls: Dict[str, ft.Control], parent_view: 'AnalyzePDFViewContent'):
             self.page = page
             self.gui_controls = gui_controls
             self.parent_view = parent_view # Referência à view principal
             self.pdf_analyzer = parent_view.pdf_analyzer # Usa o da view
+            self.firestore_client_for_metrics = FirebaseClientFirestore() # Instância para métricas
+
+        def _calc_costs_embedding_process(
+            self,
+            tokens_and_model_id_session: Optional[Tuple[int, str]],
+            model_embeddings_list_session: Optional[List[Dict[str, Any]]]
+        ) -> Optional[float]:
+            """
+            Calcula o custo do processo de embedding com base nos tokens e no modelo utilizado.
+
+            Args:
+                tokens_and_model_id_session: Uma tupla contendo a contagem de tokens (int)
+                                             e o ID do modelo de embedding (str) usado na sessão.
+                                             Ou None se não houver dados de token/modelo.
+                model_embeddings_list_session: Lista de dicionários, onde cada dicionário
+                                               contém informações de configuração do modelo
+                                               de embedding, incluindo 'name' (str) e
+                                               'cost_per_million' (float/int).
+                                               Ou None se a lista de custos não estiver disponível.
+
+            Returns:
+                O custo calculado em USD como float, ou None se o cálculo não puder ser realizado
+                devido a dados ausentes, inválidos ou configuração não encontrada.
+            """
+            # Assume-se que _logger está definido e acessível no escopo da classe ou módulo.
+            
+            if not tokens_and_model_id_session:
+                _logger.info("Dados de tokens e ID do modelo não fornecidos para cálculo de custo de embedding.")
+                return None
+            
+            if not model_embeddings_list_session:
+                _logger.info("Lista de custos de modelos de embedding não fornecida.")
+                return None
+
+            tokens_count, embedding_model_id = tokens_and_model_id_session
+
+            # Validação dos dados desempacotados
+            if not isinstance(tokens_count, int) or tokens_count < 0:
+                _logger.warning(
+                    f"Contagem de tokens inválida fornecida: {tokens_count}. "
+                    "Deve ser um inteiro não negativo."
+                )
+                return None
+
+            if not embedding_model_id or not isinstance(embedding_model_id, str):
+                _logger.warning(
+                    f"ID do modelo de embedding inválido ou ausente: '{embedding_model_id}'. "
+                    "Deve ser uma string não vazia."
+                )
+                return None
+
+            # Busca a configuração do modelo de embedding (case-insensitive para o nome do modelo)
+            embedding_config = next(
+                (
+                    emb for emb in model_embeddings_list_session
+                    if emb.get("name", "").lower() == embedding_model_id.lower()
+                ),
+                None
+            )
+
+            if not embedding_config:
+                _logger.warning(
+                    f"Configuração de custo não encontrada para o modelo de embedding: '{embedding_model_id}'."
+                )
+                return None
+
+            # Obtenção e validação do custo por milhão de tokens
+            # Corrigido erro de digitação: "cost_per_million" em vez de "coust_per_million"
+            cost_per_million = embedding_config.get("coust_per_million")
+
+            if cost_per_million is None:
+                _logger.warning(
+                    f"Atributo 'cost_per_million' não definido ou é None para o modelo "
+                    f"'{embedding_model_id}' na lista de configurações de custo."
+                )
+                return None
+            
+            if not isinstance(cost_per_million, (int, float)) or cost_per_million < 0:
+                _logger.warning(
+                    f"Valor de 'cost_per_million' inválido ({cost_per_million}) para o modelo "
+                    f"'{embedding_model_id}'. Deve ser um valor numérico não negativo."
+                )
+                return None
+
+            # Se não houver tokens, o custo é zero.
+            if tokens_count == 0:
+                _logger.info(
+                    f"Nenhum token processado para o modelo '{embedding_model_id}'. "
+                    "Custo de embedding: U$ 0.00"
+                )
+                return 0.0
+
+            # Cálculo do custo
+            calculated_embedding_cost_usd = (tokens_count / 1_000_000) * cost_per_million
+
+            _logger.info(
+                f"Custo de embeddings calculado: {tokens_count} tokens para o modelo "
+                f"'{embedding_model_id}' -> U$ {calculated_embedding_cost_usd:.6f}"
+            )
+            return calculated_embedding_cost_usd
+
+        def _calc_costs_llm_analysis(self, metadata_llm_analysis, loaded_llm_providers):
+            calculated_cost_usd = 0.0
+            provider_used_raw = metadata_llm_analysis.get("llm_provider_used", "").lower() 
+            model_used_raw = metadata_llm_analysis.get("llm_model_used", "").lower()
+            
+            input_tokens = metadata_llm_analysis.get("input_tokens", 0)
+            cached_tokens = metadata_llm_analysis.get("cached_tokens", 0) 
+            output_tokens = metadata_llm_analysis.get("output_tokens", 0)
+
+            #loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
+            if loaded_llm_providers and provider_used_raw and model_used_raw:
+                provider_config = next((
+                    p for p in loaded_llm_providers
+                    if p.get("system_name", "").lower() == provider_used_raw # Compara com system_name
+                ), None)
+                
+                if provider_config:
+                    model_config = next((
+                        m for m in provider_config.get("models", [])
+                        if m.get('id', "").lower() == model_used_raw
+                    ), None)
+                    
+                    if model_config:
+                        cost_input = (input_tokens / 1_000_000) * model_config.get("input_coust_million", 0.0)
+                        cost_cache = (cached_tokens / 1_000_000) * model_config.get("cache_coust_million", 0.0)
+                        cost_output = (output_tokens / 1_000_000) * model_config.get("output_coust_million", 0.0)
+                        calculated_cost_usd = cost_input + cost_cache + cost_output
+                        _logger.info(f"Custo calculado: Input=${cost_input:.6f}, Cache=${cost_cache:.6f}, Output=${cost_output:.6f} -> Total=${calculated_cost_usd:.6f}")
+                    else:
+                        _logger.warning(f"Configuração do modelo '{model_used_raw}' não encontrada para o provedor '{provider_used_raw}' para cálculo de custo.")
+                else:
+                    _logger.warning(f"Configuração do provedor '{provider_used_raw}' não encontrada para cálculo de custo.")
+            else:
+                _logger.warning("Dados insuficientes (provedores carregados, provedor/modelo usado) para calcular o custo.")
+            
+            #metadata_to_display["total_cost_usd"] = calculated_cost_usd 
+            return calculated_cost_usd
+
+        def _log_analysis_metrics(self):
+            _logger.info("Coletando e enviando métricas da análise.")
+            try:
+                user_id = self.page.session.get("auth_user_id")
+                user_token = self.page.session.get("auth_id_token")
+
+                if not user_id or not user_token:
+                    _logger.error("Não foi possível registrar métricas: usuário não autenticado na sessão.")
+                    return
+
+                # 1. Filenames
+                files_ordered_session = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
+                filenames_uploaded = [f.get('name', 'unknown_file') for f in files_ordered_session if isinstance(f, dict)]
+
+                # 2. Processing Metadata
+                proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {}
+                processing_metadata_to_log = {
+                    "total_pages_processed": proc_meta_session.get("total_pages_processed"),
+                    "relevant_pages_global_keys_formatted": proc_meta_session.get("relevant_pages_global_keys_formatted"),
+                    "unintelligible_pages_global_keys_formatted": proc_meta_session.get("unintelligible_pages_global_keys_formatted"),
+                    "final_aggregated_tokens": proc_meta_session.get("final_aggregated_tokens"),
+                    "processing_time": proc_meta_session.get("processing_time")
+                }
+
+                # 3. LLM Analysis Metadata           
+                llm_meta_session = self.page.session.get(KEY_SESSION_LLM_METADATA) or {}
+                llm_analysis_metadata_to_log = {
+                    "input_tokens": llm_meta_session.get("input_tokens"),
+                    "cached_tokens": llm_meta_session.get("cached_tokens"),
+                    "output_tokens": llm_meta_session.get("output_tokens"),
+                    "total_cost_usd": llm_meta_session.get("total_cost_usd"),
+                    "llm_provider_used": llm_meta_session.get("llm_provider_used"),
+                    "llm_model_used": llm_meta_session.get("llm_model_used"),
+                    "processing_time": llm_meta_session.get("processing_time"), # Tempo da LLM
+                } 
+                
+                tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
+                model_embeddings_list_session = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
+                calculated_embedding_cost_usd = self._calc_costs_embedding_process(tokens_embeddings_session, model_embeddings_list_session)
+
+                if calculated_embedding_cost_usd:
+                    llm_analysis_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0] # Não está sendo salvo o modelo_embedding, por ser único.
+                    llm_analysis_metadata_to_log["calculated_embedding_cost_usd"] = calculated_embedding_cost_usd
+
+                # Remover chaves com valor None para não poluir o Firestore
+                llm_analysis_metadata_to_log = {k: v for k, v in llm_analysis_metadata_to_log.items() if v is not None}
+
+                # 4. LLM Parsed Response Fields
+                llm_response_obj = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
+                llm_parsed_response_fields = {}
+                if isinstance(llm_response_obj, FormatAnaliseInicial):
+                    fields_to_log = [
+                        "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
+                        "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
+                        "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", "destinacao"
+                    ]
+                    for field_name in fields_to_log:
+                        if hasattr(llm_response_obj, field_name):
+                            llm_parsed_response_fields[field_name] = getattr(llm_response_obj, field_name)
+
+                # 5. Analysis Settings Overrides
+                current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
+                default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
+                analysis_settings_overrides = {}
+                for key, current_val in current_settings.items():
+                    default_val = default_settings.get(key)
+                    # Garantir comparação de tipos consistentes, especialmente para números que podem ser strings
+                    current_val_typed = current_val
+                    default_val_typed = default_val
+                    if isinstance(default_val, (int, float)) and isinstance(current_val, str):
+                        try:
+                            if isinstance(default_val, int): current_val_typed = int(current_val)
+                            elif isinstance(default_val, float): current_val_typed = float(current_val)
+                        except ValueError:
+                            pass # Mantém current_val_typed como string se não puder converter
+                    
+                    if current_val_typed != default_val_typed:
+                        analysis_settings_overrides[key] = current_val # Salva o valor da sessão (pode ser string ou número)
+
+                metric_data = {
+                    "event_type": "pdf_analysis_completed",
+                    "timestamp_event": datetime.now().isoformat(),
+                    "app_version": APP_VERSION,
+                    "filenames_uploaded": filenames_uploaded,
+                    "processing_metadata": processing_metadata_to_log,
+                    "llm_analysis_metadata": llm_analysis_metadata_to_log,
+                    "llm_parsed_response_fields": llm_parsed_response_fields,
+                    "analysis_settings_overrides": analysis_settings_overrides
+                }
+
+                # Envia a métrica
+                if not self.firestore_client_for_metrics.save_metrics_client(user_token, user_id, metric_data):
+                    _logger.error("Falha ao registrar métricas da análise no Firestore.")
+                else:
+                    _logger.info("Métricas da análise registradas com sucesso no Firestore.")
+                    #TODO: Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
+                    if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
+                        self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
+
+            except Exception as e:
+                _logger.error(f"Erro ao coletar ou enviar métricas da análise: {e}", exc_info=True)
+                
+        def _get_current_analysis_settings(self) -> Dict[str, Any]:
+            """Busca as configurações de análise atuais da sessão."""
+            settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
+            if not settings or not isinstance(settings, dict):
+                _logger.warning("Configurações de análise não encontradas na sessão ou formato inválido. Usando fallbacks.")
+                return FALLBACK_ANALYSIS_SETTINGS.copy() # Retorna uma cópia
+            
+            # Garante que os tipos numéricos estejam corretos, pois podem vir de TextFields como string
+            # Faz uma cópia para não modificar o original na sessão aqui.
+            # A normalização de tipos deve ocorrer quando os valores são lidos do drawer.
+            # Aqui, apenas garantimos que se o tipo for string e deveria ser número, tentamos converter.
+            current_settings = settings.copy()
+            try:
+                current_settings['llm_input_token_limit'] = int(current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']))
+            except (ValueError, TypeError):
+                 current_settings['llm_input_token_limit'] = FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']
+            
+            try:
+                current_settings['llm_temperature'] = float(current_settings.get('llm_temperature', FALLBACK_ANALYSIS_SETTINGS['llm_temperature']))
+            except (ValueError, TypeError):
+                current_settings['llm_temperature'] = FALLBACK_ANALYSIS_SETTINGS['llm_temperature']
+            
+            return current_settings
 
         def _update_status_callback(self, text: str, is_error: bool = False, only_txt: bool = False):
             # Este callback será executado pela thread principal via page.run_thread
@@ -944,18 +1723,24 @@ class AnalyzePDFViewContent(ft.Column):
             if not only_txt:
                 show_loading_overlay(self.page, text)
             
-            txt_to_update.value = text
-            txt_to_update.color = theme.COLOR_ERROR if is_error else None
-            txt_to_update.weight = ft.FontWeight.BOLD if is_error else ft.FontWeight.NORMAL
-            txt_to_update.update()
+            if txt_to_update.page and txt_to_update.uid:
+                txt_to_update.value = text
+                txt_to_update.color = theme.COLOR_ERROR if is_error else None
+                txt_to_update.weight = ft.FontWeight.BOLD if is_error else ft.FontWeight.NORMAL
+                txt_to_update.update()
             
-
         def _pdf_processing_thread_func(self, pdf_paths: List[str], batch_name: str, analyze_llm_after: bool):            
-            # TODO: Obter provedor e modelo das configurações do Drawer
-            provider = "openai"
-            model_name = "gpt-4.1-nano" 
-            model_embedding = "text-embedding-3-small" # "all-MiniLM-L6-v2"
+            current_analysis_settings = self._get_current_analysis_settings()
+            _logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
+            pdf_extractor = current_analysis_settings.get("pdf_extractor", FALLBACK_ANALYSIS_SETTINGS["pdf_extractor"])
+            provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
+            model_embedding = current_analysis_settings.get("embeddings_model", FALLBACK_ANALYSIS_SETTINGS["embeddings_model"])
+            token_limit_pref = current_analysis_settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
             
+            if pdf_extractor == 'PdfPlumber':
+                self.pdf_analyzer.extractor = PdfPlumberExtractor()
+                _logger.info("Alterando pdf_extractor para PdfPlumber!")
+
             decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}") 
             if decrypted_api_key:
                 _logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
@@ -980,9 +1765,18 @@ class AnalyzePDFViewContent(ft.Column):
                                     self.pdf_analyzer._build_combined_page_data(processed_files_metadata, all_indices, all_storage)
 
                 self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
-                processed_page_data_combined, processing_time_3 = self.pdf_analyzer.analyze_similarity_and_relevance_files(
+                processed_page_data_combined, processing_time_3, tokens_embeddings = self.pdf_analyzer.analyze_similarity_and_relevance_files(
                                     processed_page_data_combined, all_global_page_keys_ordered, all_analysis_texts, 
                                     model_embedding=model_embedding, api_key=decrypted_api_key)
+
+                # TODO: melhorar sistemática de captura dessa informação
+                if tokens_embeddings:
+                    self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, model_embedding))
+                    _logger.info(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
+                else:
+                    if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
+                        self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
+                        _logger.info("Tokens de embedding removidos da sessão (não retornados pela análise).")
 
                 if not processed_page_data_combined:
                     raise ValueError("Nenhum dado processável encontrado nos PDFs.")
@@ -1007,7 +1801,6 @@ class AnalyzePDFViewContent(ft.Column):
                 point_time = time()
                 self.page.run_thread(self._update_status_callback, "Etapa 4/5: Filtrando páginas...")
 
-                token_limit_pref = 180000 # TODO: Ler do drawer/configurações
                 aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(
                     processed_page_data_combined, relevant_indices, token_limit_pref
                 )
@@ -1034,7 +1827,7 @@ class AnalyzePDFViewContent(ft.Column):
                     "count_selected_final": count_sel_final,
                     "final_aggregated_tokens": tokens_final_agg,
                     "supressed_tokens_percentage": perc_supressed,
-                    "processing_time": format_seconds_to_min_sec(total_processing_time)
+                    "processing_time": format_seconds_to_min_sec(total_processing_time),
                 }
                 self.page.session.set(KEY_SESSION_PROCESSING_METADATA, proc_meta_for_ui)
                 self.page.run_thread(self.parent_view._update_processing_metadata_display, proc_meta_for_ui)
@@ -1065,14 +1858,15 @@ class AnalyzePDFViewContent(ft.Column):
                 self.page.run_thread(self.parent_view._update_button_states)
 
         def _llm_analysis_thread_func(self, aggregated_text: str, batch_name: str):
+            current_analysis_settings = self._get_current_analysis_settings()
+            _logger.info(f"Usando configurações de análise para LLM: {current_analysis_settings}")
+            provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
+            model_name = current_analysis_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
+            temperature = current_analysis_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
             try:
                 _logger.info(f"Thread: Iniciando análise LLM para '{batch_name}'...")
                 self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
 
-                # TODO: Obter provedor e modelo das configurações do Drawer
-                provider = "openai"
-                model_name = "gpt-4.1-nano" 
-                
                 # Simulação de obtenção de chave API da sessão (deve ser carregada/salva via UI de config LLM)
                 decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}_{provider}") # Exemplo
                 if not decrypted_api_key and provider == "openai": # Tenta um fallback se estiver no dev_mode
@@ -1085,18 +1879,43 @@ class AnalyzePDFViewContent(ft.Column):
                     # Mas o orchestrator precisa do provider correto.
                     pass # ai_orchestrator tentará carregar
 
-                llm_response, token_usage_info, processing_time_llm = analyze_text_with_llm(self.page, "UNIQUE_ANALYSIS_V1", aggregated_text, provider, model_name)
+                llm_response_data, token_usage_info, processing_time_llm = analyze_text_with_llm(self.page, 
+                                                                                                 "UNIQUE_ANALYSIS_V1", 
+                                                                                                 aggregated_text, provider, model_name, temperature)
 
-                if llm_response:
-                    self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, llm_response)
-                    self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, llm_response)
+                if llm_response_data:
+                    # llm_response_data PODE ser um objeto FormatAnaliseInicial ou uma string
+                    self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, llm_response_data)
+
+                    # Se for string e parece JSON, tenta parsear para FormatAnaliseInicial
+                    parsed_object_for_display = None
+                    if isinstance(llm_response_data, str):
+                        try:
+                            json_data_from_llm  = json.loads(llm_response_data)
+                            
+                            if 'valor_apuracao' in json_data_from_llm:
+                                raw_valor = json_data_from_llm['valor_apuracao']
+                                json_data_from_llm['valor_apuracao'] = clean_and_convert_to_float(raw_valor)
+                                _logger.info(f"Valor apuracao original da LLM: '{raw_valor}', convertido para: {json_data_from_llm['valor_apuracao']}")
+
+                            parsed_object_for_display = FormatAnaliseInicial(**json_data_from_llm )
+                            _logger.info("Resposta LLM (string) parseada com sucesso para FormatAnaliseInicial.")
+                        except (json.JSONDecodeError, TypeError, Exception) as parse_error: # Exception para Pydantic ValidationError
+                            _logger.warning(f"Resposta LLM é string, mas falhou ao parsear/validar como FormatAnaliseInicial: {parse_error}. Usando como texto puro.")
+                            # Mantém llm_response_data como string para o fallback
+                    elif isinstance(llm_response_data, FormatAnaliseInicial):
+                        parsed_object_for_display = llm_response_data
+                        _logger.info("Resposta LLM já é um objeto FormatAnaliseInicial.")
                     
-                    # TODO: Calcular metadados da LLM (tokens, custo) - Isso exigiria que `analyze_text_with_llm` retornasse mais infos.
-                    # Por ora, mockamos alguns. # Obter dados do result da consulta da API
-                    llm_meta_for_gui = token_usage_info
+                    if parsed_object_for_display:
+                         self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, parsed_object_for_display)
+                    else: # Fallback para string
+                         self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, llm_response_data)
+                    
+                    llm_meta_for_gui = token_usage_info if token_usage_info else {} 
                     llm_meta_for_gui.update({
-                        "llm_provider_used": provider.capitalize(),
-                        "llm_model_used": model_name,
+                        "llm_provider_used": provider.upper(),
+                        "llm_model_used": model_name.upper(),
                         "processing_time": format_seconds_to_min_sec(processing_time_llm)
                     }) 
                         
@@ -1105,6 +1924,7 @@ class AnalyzePDFViewContent(ft.Column):
                     self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
                     self.parent_view._analysis_requested = True
                     self.page.run_thread(self._update_status_callback,  "", False, True)
+                    self._log_analysis_metrics()
                 else:
                     self.page.run_thread(self.parent_view._show_info_balloon_or_result, True) # Mostra balão de novo
                     self.page.run_thread(self._update_status_callback,  "Análise LLM: Falha ao obter resposta da IA.", True, True)
@@ -1147,6 +1967,192 @@ class AnalyzePDFViewContent(ft.Column):
 
             thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, True), daemon=True)
             thread.start()
+
+class LLMStructuredResultDisplay(ft.Column):
+    def __init__(self, page: ft.Page):
+        super().__init__(
+            scroll=ft.ScrollMode.ADAPTIVE, 
+            expand=True, 
+            spacing=12,
+            #horizontal_alignment=ft.CrossAxisAlignment.CENTER # Centraliza os cards
+        )
+        self.page = page
+        self.data: Optional[FormatAnaliseInicial] = None
+        self.ui_fields: Dict[str, ft.Control] = {}
+
+        # Referências para controles que precisam ser atualizados dinamicamente (ex: municípios)
+        self.dropdown_uf_origem: Optional[ft.Dropdown] = None
+        self.dropdown_municipio_origem: Optional[ft.Dropdown] = None
+        self.dropdown_uf_fato: Optional[ft.Dropdown] = None
+        self.dropdown_municipio_fato: Optional[ft.Dropdown] = None
+
+        # Listas de referência (carregadas uma vez)
+        self.ufs_list = LISTA_UFS  # TODO: incluir atualização a partir do firestore
+
+    def _create_justificativa_icon(self, justificativa: Optional[str]) -> ft.IconButton:
+        return ft.IconButton(
+            icon=ft.icons.INFO_OUTLINE_ROUNDED,
+            tooltip=justificativa if justificativa else "Justificativa não fornecida.",
+            icon_size=18,
+            opacity=0.7 if justificativa else 0.3,
+            disabled=not bool(justificativa),
+            padding=ft.padding.only(left=1, right=1),
+        )
+
+    def _atualizar_municipios_origem(self, e=None):
+        if self.dropdown_uf_origem and self.dropdown_municipio_origem:
+            selected_uf = self.dropdown_uf_origem.value
+            if selected_uf:
+                municipios = MUNICIPIOS_POR_UF[selected_uf]
+                self.dropdown_municipio_origem.options = [ft.dropdown.Option(m) for m in municipios]
+                # Tenta manter o valor se ainda for válido, ou reseta
+                current_municipio_val = self.dropdown_municipio_origem.value
+                if current_municipio_val not in [opt.key for opt in self.dropdown_municipio_origem.options]:
+                    self.dropdown_municipio_origem.value = None
+            else:
+                self.dropdown_municipio_origem.options = []
+                self.dropdown_municipio_origem.value = None
+
+            if e is not None and self.page and self.dropdown_municipio_origem.uid: # 'e' indica chamada por evento de usuário
+                self.dropdown_municipio_origem.update()
+
+    def _atualizar_municipios_fato(self, e=None):
+        if self.dropdown_uf_fato and self.dropdown_municipio_fato:
+            selected_uf = self.dropdown_uf_fato.value
+            if selected_uf:
+                municipios = MUNICIPIOS_POR_UF[selected_uf]
+                self.dropdown_municipio_fato.options = [ft.dropdown.Option(m) for m in municipios]
+                current_municipio_val = self.dropdown_municipio_fato.value
+                if current_municipio_val not in [opt.key for opt in self.dropdown_municipio_fato.options]:
+                    self.dropdown_municipio_fato.value = None
+            else:
+                self.dropdown_municipio_fato.options = []
+                self.dropdown_municipio_fato.value = None
+            
+            if e is not None and self.page and self.dropdown_municipio_fato.uid: # 'e' indica chamada por evento de usuário
+                self.dropdown_municipio_fato.update()
+
+    def update_data(self, data: FormatAnaliseInicial):
+        self.data = data
+        self.controls.clear()
+        self.ui_fields.clear()
+        
+        if not self.data:
+            self.controls.append(ft.Text("Nenhum dado de análise estruturada para exibir."))
+            if self.page and self.uid: 
+                self.update()
+            return
+
+        self.data.uf_origem = get_sigla_uf(self.data.uf_origem)
+        self.data.uf_fato = get_sigla_uf(self.data.uf_fato)
+
+        # --- Seção 1: Identificação do Documento ---
+        self.dropdown_uf_origem = ft.Dropdown(
+            label="UF de Origem", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
+            value=self.data.uf_origem if self.data.uf_origem in self.ufs_list else None,
+            on_change=self._atualizar_municipios_origem, width=170, dense=True
+        )
+        municipios_origem_init = MUNICIPIOS_POR_UF[self.data.uf_origem] if self.data.uf_origem else []
+        self.dropdown_municipio_origem = ft.Dropdown(
+            label="Município de Origem",
+            options=[ft.dropdown.Option(m) for m in municipios_origem_init],
+            value=obter_string_normalizada(self.data.municipio_origem, municipios_origem_init),
+            dense=True, width=320, #expand=True
+        )
+
+        self._atualizar_municipios_origem() # Chama programaticamente, sem 'e'
+        
+        id_doc_card = CardWithHeader(
+            title="Identificação do Documento",
+            content=ft.Column([
+                ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, width=1600),
+                ft.Row([
+                    ft.Dropdown(label="Tipo Documento Origem", options=[ft.dropdown.Option(td) for td in tipos_doc], value=self.data.tipo_documento_origem, width=400, dense=True),
+                    self._create_justificativa_icon(self.data.justificativa_tipo_documento_origem),
+                    ft.Dropdown(label="Órgão de Origem", options=[ft.dropdown.Option(oo) for oo in origens_doc], value=self.data.orgao_origem, width=530),
+                    self._create_justificativa_icon(self.data.justificativa_orgao_origem),
+                    self.dropdown_uf_origem,
+                    self.dropdown_municipio_origem,
+                    self._create_justificativa_icon(self.data.justificativa_municipio_uf_origem)
+                ], expand=True),
+            ], spacing=12),
+            header_bgcolor=ft.Colors.GREY_300 # ft.colors.with_opacity(0.05, theme.PRIMARY)
+        )
+        self.controls.append(id_doc_card)
+
+        # --- Seção 2: Detalhes do Fato ---
+        self.dropdown_uf_fato = ft.Dropdown(
+            label="UF do Fato", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
+            value=self.data.uf_fato if self.data.uf_fato in self.ufs_list else None,
+            on_change=self._atualizar_municipios_fato, width=170, dense=True
+        )
+        municipios_fato_init = MUNICIPIOS_POR_UF[self.data.uf_fato] if self.data.uf_fato else []
+        self.dropdown_municipio_fato = ft.Dropdown(
+            label="Município do Fato",
+            options=[ft.dropdown.Option(m) for m in municipios_fato_init],
+            value=obter_string_normalizada(self.data.municipio_fato, municipios_fato_init),
+            dense=True, width=320 # expand=True
+        )
+
+        self._atualizar_municipios_fato()
+
+        det_fato_card = CardWithHeader(
+            title="Detalhes do Fato",
+            content=ft.Column([
+                ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, width=1600),
+                 ft.Row([
+                    self.dropdown_uf_fato,
+                    self.dropdown_municipio_fato,
+                    self._create_justificativa_icon(self.data.justificativa_municipio_uf_fato),
+                    ft.Dropdown(label="Tipo de Local", options=[ft.dropdown.Option(tl) for tl in tipos_locais], value=self.data.tipo_local, expand=True, dense=True),
+                    self._create_justificativa_icon(self.data.justificativa_tipo_local),
+                    ft.TextField(label="Valor da Apuração (R$)", value=f"{self.data.valor_apuracao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(self.data.valor_apuracao, float) else str(self.data.valor_apuracao), 
+                                 keyboard_type=ft.KeyboardType.NUMBER, width=480, prefix_text="R$ "),
+                    self._create_justificativa_icon(self.data.justificativa_valor_apuracao)
+                ], expand=True),
+                ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, 
+                             hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, width=1600),
+                ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, width=1600),
+            ], spacing=12),
+            header_bgcolor=ft.Colors.GREY_300 # ft.colors.with_opacity(0.05, theme.PRIMARY)
+        )
+        self.controls.append(det_fato_card)
+
+        # --- Seção 3: Classificação e Encaminhamento ---
+        class_enc_card = CardWithHeader(
+            title="Classificação e Encaminhamento",
+            content=ft.Column([
+                ft.Row([
+                    ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição], value=self.data.area_atribuicao, width=660, dense=True),
+                    self._create_justificativa_icon(self.data.justificativa_area_atribuicao),
+                    ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=840),
+                    self._create_justificativa_icon(self.data.justificativa_tipificacao_penal)
+                ], expand=True),
+                ft.Row([
+                    ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas], value=self.data.destinacao, width=250, dense=True),
+                    self._create_justificativa_icon(self.data.justificativa_destinacao),
+                    ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipo_a_autuar], value=self.data.tipo_a_autuar, width=350, dense=True),
+                    self._create_justificativa_icon(self.data.justificativa_tipo_a_autuar),
+                    ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re], value=self.data.assunto_re, width=840), 
+                    self._create_justificativa_icon(self.data.justificativa_assunto_re)
+                ], expand=True),
+            ], spacing=12),
+            header_bgcolor=ft.Colors.GREY_300 
+        )
+        self.controls.append(class_enc_card)
+        
+        # --- Seção 4: Observações ---
+        obs_card = CardWithHeader(
+            title="Observações Adicionais",
+            content=ft.Column([
+                ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, width=1600),
+            ], spacing=10),
+            header_bgcolor=ft.Colors.GREY_300
+        )
+        self.controls.append(obs_card)
+
+        if self.page and self.uid: 
+            self.update() # update chamado no método _show_ballon_or_result
 
 
 # Função principal da view (chamada pelo router)

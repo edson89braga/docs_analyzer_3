@@ -293,11 +293,12 @@ def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
     return _sentence_model
 
 @timing_decorator()
-def analyze_text_similarity(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2', api_key:str=None) -> np.ndarray:
+def analyze_text_similarity(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2', api_key:str=None) -> Tuple[np.ndarray, Optional[int]]:
     """
     Analisa similaridades entre textos (páginas) usando embeddings de sentenças.
     Retorna uma matriz de similaridade.
     """
+    tokens_embeddings = 0
     if model_embedding == 'all-MiniLM-L6-v2':
         print('\n', '[DEBUG]: Modelo embeddings: all-MiniLM-L6-v2', '\n')
         model = get_sentence_transformer_model(model_embedding)
@@ -326,19 +327,22 @@ def analyze_text_similarity(pages_texts: List[str], model_embedding: str = 'all-
                 total_tokens += (response.usage.total_tokens)
             
             cost_usd = (total_tokens / 1_000_000) * 0.02 # TODO: incluir e buscar de settings
+            
+            tokens_embeddings = total_tokens
+
             print('\n') # TODO: incluir logger
             print(f"Consumo de tokens no processamento de embeddings: {total_tokens} ({cost_usd:.4f} USD)  ({cost_usd*6:.4f} BRL)")
             print('\n')
         except Exception as e:
             print('\n', f"Erro ao processar embeddings-openai: {e}", '\n!!!!\n')
-            return analyze_text_similarity(pages_texts, model_embedding='all-MiniLM-L6-v2')
+            return analyze_text_similarity(pages_texts, model_embedding='all-MiniLM-L6-v2'), 0
         finally:
             os.environ["OPENAI_API_KEY"] = ""
     else:
         raise ValueError(f"Modelo embeddings '{model_embedding}' desconhecido.")
     
     similarity_matrix = cosine_similarity(embeddings)
-    return similarity_matrix
+    return similarity_matrix, tokens_embeddings
 
 @timing_decorator()
 def calculate_text_relevance_tfidf(pages_texts: List[str], language: str = 'portuguese') -> np.ndarray:
@@ -597,7 +601,7 @@ class PDFDocumentAnalyzer:
         # --- 2. Análise de Similaridade e TF-IDF (COMBINADA para todos os arquivos) ---
         logger.info(f"Realizando análise de similaridade e TF-IDF para {len(all_texts_for_analysis_combined)} páginas combinadas.")
         try:
-            similarity_matrix_combined = analyze_text_similarity(all_texts_for_analysis_combined, model_embedding=model_embedding, api_key=api_key)
+            similarity_matrix_combined, tokens_embeddings = analyze_text_similarity(all_texts_for_analysis_combined, model_embedding=model_embedding, api_key=api_key)
             tf_idf_scores_array_combined = calculate_text_relevance_tfidf(all_texts_for_analysis_combined)
 
             # Mapear scores TF-IDF e similaridade de volta aos dados das páginas globais
@@ -617,7 +621,8 @@ class PDFDocumentAnalyzer:
 
         logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(combined_processed_page_data)}")
         end_time = time.perf_counter()
-        return combined_processed_page_data, end_time - start_time
+        execution_time = end_time - start_time
+        return combined_processed_page_data, execution_time, tokens_embeddings
 
     @timing_decorator()
     def analyze_pdf_documents(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:

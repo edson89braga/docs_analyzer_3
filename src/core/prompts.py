@@ -4,7 +4,7 @@ Módulo para gerenciar e fornecer os prompts utilizados nas interações com LLM
 """
 from typing import Optional, Dict, List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field 
 class FormatAnaliseInicial(BaseModel):
     descricao_geral: str 
     tipo_documento_origem: str 
@@ -17,25 +17,25 @@ class FormatAnaliseInicial(BaseModel):
     municipio_fato: str 
     valor_apuracao: float  
     area_atribuicao: str 
-    tipificacao_penal: str 
+    tipificacao_penal: Optional[str] 
     tipo_a_autuar: str 
     assunto_re: Optional[str] 
     destinacao: str 
-    pessoas_envolvidas: List[str] 
+    pessoas_envolvidas: Optional[List[str]]
     linha_do_tempo: Optional[List[str]] 
     observacoes: Optional[str] 
 
-    justificativa_tipo_documento_origem: str 
-    justificativa_orgao_origem: str 
-    justificativa_municipio_uf_origem: str 
-    justificativa_tipo_local: str 
-    justificativa_municipio_uf_fato: str 
-    justificativa_valor_apuracao: Optional[str] 
-    justificativa_area_atribuicao: str 
-    justificativa_tipificacao_penal: str 
-    justificativa_tipo_a_autuar: str 
-    justificativa_assunto_re: Optional[str] 
-    justificativa_destinacao: str 
+    justificativa_tipo_documento_origem:str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_orgao_origem:         str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_municipio_uf_origem:  str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_tipo_local:           str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_municipio_uf_fato:    str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_valor_apuracao:       str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
+    justificativa_area_atribuicao:      str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_tipificacao_penal:    str = Field(default="Justificativa não fornecida pela IA.") 
+    justificativa_tipo_a_autuar:        str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_assunto_re:           str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
+    justificativa_destinacao:           str = Field(default="Justificativa não fornecida pela IA.")
 
 # Conversão para modelo em esquema JSON, se necessário:
 schema = FormatAnaliseInicial.model_json_schema()
