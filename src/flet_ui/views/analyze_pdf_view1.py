@@ -836,36 +836,7 @@ class AnalyzePDFViewContent(ft.Column):
             _logger.warning("Display estruturado não encontrado ou sem dados para coletar.")
             return None
        
-        updated_data = FormatAnaliseInicial( # Valores padrão para campos não editáveis ou não presentes na UI
-            descricao_geral=structured_display_ctrl.data.descricao_geral, # Mantém original
-            resumo_fato=structured_display_ctrl.data.resumo_fato, # Mantém original
-            pessoas_envolvidas=structured_display_ctrl.data.pessoas_envolvidas, # Mantém original
-            linha_do_tempo=structured_display_ctrl.data.linha_do_tempo, # Mantém original
-            observacoes=structured_display_ctrl.data.observacoes # Mantém original
-        )
-
-        # Se LLMStructuredResultDisplay atualiza seu self.data:
-        if structured_display_ctrl.data:
-
-            editable_fields = [
-                "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
-                "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
-                "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", "destinacao"
-            ]
-            for field_name in editable_fields:
-                 if hasattr(structured_display_ctrl.data, field_name):
-                    ui_value = getattr(structured_display_ctrl.data, field_name)
-                    # Tratamento especial para valor_apuracao que pode vir como string formatada da UI
-                    if field_name == "valor_apuracao" and isinstance(ui_value, str):
-                        setattr(updated_data, field_name, clean_and_convert_to_float(ui_value))
-                    else:
-                        setattr(updated_data, field_name, ui_value)
-            
-            _logger.info("Dados coletados da UI para exportação (assumindo que LLMStructuredResultDisplay.data está atualizado).")
-            return updated_data
-
-        _logger.error("Não foi possível coletar dados atuais do display estruturado.")
-        return None
+        return structured_display_ctrl.get_current_form_data()
 
     def _update_export_button_menu(self):
         """Atualiza os itens do PopupMenuButton de exportação."""
@@ -2033,127 +2004,184 @@ class LLMStructuredResultDisplay(ft.Column):
                 self.dropdown_municipio_fato.update()
 
     def update_data(self, data: FormatAnaliseInicial):
-        self.data = data
+        self.data = data # Armazena os dados originais/base
         self.controls.clear()
-        self.ui_fields.clear()
-        
+        self.ui_fields.clear() # Limpa referências de campos antigos
+
         if not self.data:
             self.controls.append(ft.Text("Nenhum dado de análise estruturada para exibir."))
-            if self.page and self.uid: 
+            if self.page and self.uid:
                 self.update()
             return
 
+        # Normaliza UFs nos dados recebidos antes de popular a UI
+        # Isso garante que os valores iniciais dos dropdowns de UF sejam válidos.
         self.data.uf_origem = get_sigla_uf(self.data.uf_origem)
         self.data.uf_fato = get_sigla_uf(self.data.uf_fato)
 
         # --- Seção 1: Identificação do Documento ---
+        self.ui_fields["descricao_geral"] = ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, width=1600)
+        self.ui_fields["tipo_documento_origem"] = ft.Dropdown(label="Tipo Documento Origem", options=[ft.dropdown.Option(td) for td in tipos_doc], value=self.data.tipo_documento_origem, width=400, dense=True)
+        self.ui_fields["orgao_origem"] = ft.Dropdown(label="Órgão de Origem", options=[ft.dropdown.Option(oo) for oo in origens_doc], value=self.data.orgao_origem, width=530, dense=True) # Removido expand=True
+
         self.dropdown_uf_origem = ft.Dropdown(
             label="UF de Origem", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
             value=self.data.uf_origem if self.data.uf_origem in self.ufs_list else None,
             on_change=self._atualizar_municipios_origem, width=170, dense=True
         )
-        municipios_origem_init = MUNICIPIOS_POR_UF[self.data.uf_origem] if self.data.uf_origem else []
+        self.ui_fields["uf_origem"] = self.dropdown_uf_origem # Adiciona ao ui_fields
+
+        municipios_origem_init = MUNICIPIOS_POR_UF.get(self.data.uf_origem, []) if self.data.uf_origem else []
         self.dropdown_municipio_origem = ft.Dropdown(
             label="Município de Origem",
             options=[ft.dropdown.Option(m) for m in municipios_origem_init],
             value=obter_string_normalizada(self.data.municipio_origem, municipios_origem_init),
-            dense=True, width=320, #expand=True
+            dense=True, width=320, # Removido expand=True
         )
-
-        self._atualizar_municipios_origem() # Chama programaticamente, sem 'e'
+        self.ui_fields["municipio_origem"] = self.dropdown_municipio_origem
         
-        id_doc_card = CardWithHeader(
-            title="Identificação do Documento",
-            content=ft.Column([
-                ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, width=1600),
-                ft.Row([
-                    ft.Dropdown(label="Tipo Documento Origem", options=[ft.dropdown.Option(td) for td in tipos_doc], value=self.data.tipo_documento_origem, width=400, dense=True),
-                    self._create_justificativa_icon(self.data.justificativa_tipo_documento_origem),
-                    ft.Dropdown(label="Órgão de Origem", options=[ft.dropdown.Option(oo) for oo in origens_doc], value=self.data.orgao_origem, width=530),
-                    self._create_justificativa_icon(self.data.justificativa_orgao_origem),
-                    self.dropdown_uf_origem,
-                    self.dropdown_municipio_origem,
-                    self._create_justificativa_icon(self.data.justificativa_municipio_uf_origem)
-                ], expand=True),
-            ], spacing=12),
-            header_bgcolor=ft.Colors.GREY_300 # ft.colors.with_opacity(0.05, theme.PRIMARY)
-        )
+        self._atualizar_municipios_origem() # Popula municípios com base na UF inicial
+
+        id_doc_card_content = ft.Column([
+            self.ui_fields["descricao_geral"],
+            ft.Row([
+                self.ui_fields["tipo_documento_origem"],
+                self._create_justificativa_icon(self.data.justificativa_tipo_documento_origem),
+                self.ui_fields["orgao_origem"],
+                self._create_justificativa_icon(self.data.justificativa_orgao_origem),
+                self.dropdown_uf_origem, # Já está em ui_fields
+                self.dropdown_municipio_origem, # Já está em ui_fields
+                self._create_justificativa_icon(self.data.justificativa_municipio_uf_origem)
+            ], spacing=10), # Ajuste o spacing conforme necessário
+        ], spacing=12)
+        
+        id_doc_card = CardWithHeader(title="Identificação do Documento", content=id_doc_card_content, header_bgcolor=ft.Colors.GREY_300)
         self.controls.append(id_doc_card)
 
+
         # --- Seção 2: Detalhes do Fato ---
+        self.ui_fields["resumo_fato"] = ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, width=1600)
+        
         self.dropdown_uf_fato = ft.Dropdown(
             label="UF do Fato", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
             value=self.data.uf_fato if self.data.uf_fato in self.ufs_list else None,
             on_change=self._atualizar_municipios_fato, width=170, dense=True
         )
-        municipios_fato_init = MUNICIPIOS_POR_UF[self.data.uf_fato] if self.data.uf_fato else []
+        self.ui_fields["uf_fato"] = self.dropdown_uf_fato
+
+        municipios_fato_init = MUNICIPIOS_POR_UF.get(self.data.uf_fato, []) if self.data.uf_fato else []
         self.dropdown_municipio_fato = ft.Dropdown(
             label="Município do Fato",
             options=[ft.dropdown.Option(m) for m in municipios_fato_init],
             value=obter_string_normalizada(self.data.municipio_fato, municipios_fato_init),
-            dense=True, width=320 # expand=True
+            dense=True, width=320, # Removido expand=True
         )
-
+        self.ui_fields["municipio_fato"] = self.dropdown_municipio_fato
         self._atualizar_municipios_fato()
 
-        det_fato_card = CardWithHeader(
-            title="Detalhes do Fato",
-            content=ft.Column([
-                ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, width=1600),
-                 ft.Row([
-                    self.dropdown_uf_fato,
-                    self.dropdown_municipio_fato,
-                    self._create_justificativa_icon(self.data.justificativa_municipio_uf_fato),
-                    ft.Dropdown(label="Tipo de Local", options=[ft.dropdown.Option(tl) for tl in tipos_locais], value=self.data.tipo_local, expand=True, dense=True),
-                    self._create_justificativa_icon(self.data.justificativa_tipo_local),
-                    ft.TextField(label="Valor da Apuração (R$)", value=f"{self.data.valor_apuracao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(self.data.valor_apuracao, float) else str(self.data.valor_apuracao), 
-                                 keyboard_type=ft.KeyboardType.NUMBER, width=480, prefix_text="R$ "),
-                    self._create_justificativa_icon(self.data.justificativa_valor_apuracao)
-                ], expand=True),
-                ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, 
-                             hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, width=1600),
-                ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, width=1600),
-            ], spacing=12),
-            header_bgcolor=ft.Colors.GREY_300 # ft.colors.with_opacity(0.05, theme.PRIMARY)
-        )
+        self.ui_fields["tipo_local"] = ft.Dropdown(label="Tipo de Local", options=[ft.dropdown.Option(tl) for tl in tipos_locais], value=self.data.tipo_local, width=480, dense=True) # expand=True
+        
+        valor_apuracao_str = f"{self.data.valor_apuracao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(self.data.valor_apuracao, float) else str(self.data.valor_apuracao)
+        self.ui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER, width=480, prefix_text="R$ ", dense=True)
+        
+        self.ui_fields["pessoas_envolvidas"] = ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, width=1600)
+        self.ui_fields["linha_do_tempo"] = ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, width=1600)
+
+        det_fato_card_content = ft.Column([
+            self.ui_fields["resumo_fato"],
+            ft.Row([
+                self.dropdown_uf_fato,
+                self.dropdown_municipio_fato,
+                self._create_justificativa_icon(self.data.justificativa_municipio_uf_fato),
+                self.ui_fields["tipo_local"],
+                self._create_justificativa_icon(self.data.justificativa_tipo_local),
+                self.ui_fields["valor_apuracao"],
+                self._create_justificativa_icon(self.data.justificativa_valor_apuracao)
+            ], spacing=10), # Ajuste o spacing
+            self.ui_fields["pessoas_envolvidas"],
+            self.ui_fields["linha_do_tempo"],
+        ], spacing=12)
+        det_fato_card = CardWithHeader(title="Detalhes do Fato", content=det_fato_card_content, header_bgcolor=ft.Colors.GREY_300)
         self.controls.append(det_fato_card)
 
         # --- Seção 3: Classificação e Encaminhamento ---
-        class_enc_card = CardWithHeader(
-            title="Classificação e Encaminhamento",
-            content=ft.Column([
-                ft.Row([
-                    ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição], value=self.data.area_atribuicao, width=660, dense=True),
-                    self._create_justificativa_icon(self.data.justificativa_area_atribuicao),
-                    ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=840),
-                    self._create_justificativa_icon(self.data.justificativa_tipificacao_penal)
-                ], expand=True),
-                ft.Row([
-                    ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas], value=self.data.destinacao, width=250, dense=True),
-                    self._create_justificativa_icon(self.data.justificativa_destinacao),
-                    ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipo_a_autuar], value=self.data.tipo_a_autuar, width=350, dense=True),
-                    self._create_justificativa_icon(self.data.justificativa_tipo_a_autuar),
-                    ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re], value=self.data.assunto_re, width=840), 
-                    self._create_justificativa_icon(self.data.justificativa_assunto_re)
-                ], expand=True),
-            ], spacing=12),
-            header_bgcolor=ft.Colors.GREY_300 
-        )
+        self.ui_fields["area_atribuicao"] = ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição], value=self.data.area_atribuicao, width=660, dense=True)
+        self.ui_fields["tipificacao_penal"] = ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=840, dense=True)
+        self.ui_fields["destinacao"] = ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas], value=self.data.destinacao, width=250, dense=True)
+        self.ui_fields["tipo_a_autuar"] = ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipo_a_autuar], value=self.data.tipo_a_autuar, width=350, dense=True)
+        self.ui_fields["assunto_re"] = ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re], value=self.data.assunto_re, width=840, dense=True)
+
+        class_enc_card_content = ft.Column([
+            ft.Row([
+                self.ui_fields["area_atribuicao"],
+                self._create_justificativa_icon(self.data.justificativa_area_atribuicao),
+                self.ui_fields["tipificacao_penal"],
+                self._create_justificativa_icon(self.data.justificativa_tipificacao_penal)
+            ], spacing=10), # Ajuste
+            ft.Row([
+                self.ui_fields["destinacao"],
+                self._create_justificativa_icon(self.data.justificativa_destinacao),
+                self.ui_fields["tipo_a_autuar"],
+                self._create_justificativa_icon(self.data.justificativa_tipo_a_autuar),
+                self.ui_fields["assunto_re"],
+                self._create_justificativa_icon(self.data.justificativa_assunto_re)
+            ], spacing=10), # Ajuste
+        ], spacing=12)
+        class_enc_card = CardWithHeader(title="Classificação e Encaminhamento", content=class_enc_card_content, header_bgcolor=ft.Colors.GREY_300)
         self.controls.append(class_enc_card)
-        
+
         # --- Seção 4: Observações ---
-        obs_card = CardWithHeader(
-            title="Observações Adicionais",
-            content=ft.Column([
-                ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, width=1600),
-            ], spacing=10),
-            header_bgcolor=ft.Colors.GREY_300
-        )
+        self.ui_fields["observacoes"] = ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, width=1600)
+        obs_card_content = ft.Column([self.ui_fields["observacoes"]], spacing=10)
+        obs_card = CardWithHeader(title="Observações Adicionais", content=obs_card_content, header_bgcolor=ft.Colors.GREY_300)
         self.controls.append(obs_card)
 
-        if self.page and self.uid: 
-            self.update() # update chamado no método _show_ballon_or_result
+        if self.page and self.uid:
+            self.update()
 
+    def get_current_form_data(self) -> Optional[FormatAnaliseInicial]:
+        """
+        Coleta os dados atuais dos campos da UI, atualiza self.data e retorna o objeto.
+        """
+        if not self.data: # Se não há dados base (ex: LLM não retornou nada)
+            _logger.warning("get_current_form_data: self.data não está definido. Não é possível coletar dados da UI.")
+            return None
+
+        current_ui_data = FormatAnaliseInicial(
+            # Preserva justificativas e outros campos não diretamente editáveis na lista principal
+            justificativa_tipo_documento_origem=self.data.justificativa_tipo_documento_origem,
+            justificativa_orgao_origem=self.data.justificativa_orgao_origem,
+            justificativa_municipio_uf_origem=self.data.justificativa_municipio_uf_origem,
+            justificativa_tipo_local=self.data.justificativa_tipo_local,
+            justificativa_municipio_uf_fato=self.data.justificativa_municipio_uf_fato,
+            justificativa_valor_apuracao=self.data.justificativa_valor_apuracao,
+            justificativa_area_atribuicao=self.data.justificativa_area_atribuicao,
+            justificativa_tipificacao_penal=self.data.justificativa_tipificacao_penal,
+            justificativa_tipo_a_autuar=self.data.justificativa_tipo_a_autuar,
+            justificativa_assunto_re=self.data.justificativa_assunto_re,
+            justificativa_destinacao=self.data.justificativa_destinacao
+        )
+
+        for field_name, control in self.ui_fields.items():
+            if hasattr(current_ui_data, field_name):
+                value = None
+                if isinstance(control, (ft.TextField, ft.Dropdown)):
+                    value = control.value
+                
+                # Tratamentos específicos de tipo
+                if field_name == "valor_apuracao":
+                    value = clean_and_convert_to_float(value)
+                elif field_name in ["pessoas_envolvidas", "linha_do_tempo"] and isinstance(value, str):
+                    # Converte strings multiline de volta para listas de strings
+                    value = [line.strip() for line in value.split('\n') if line.strip()] if value else []
+                
+                setattr(current_ui_data, field_name, value)
+        
+        # Atualiza o self.data interno com os dados recém-coletados da UI
+        self.data = current_ui_data
+        _logger.info("Dados do formulário estruturado coletados e self.data atualizado.")
+        return self.data
+    
 
 # Função principal da view (chamada pelo router)
 def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
