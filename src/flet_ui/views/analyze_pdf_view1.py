@@ -4,6 +4,8 @@ import threading, json, os
 from typing import Optional, Dict, Any, List, Union, Tuple
 from time import time, sleep
 from datetime import datetime
+from enum import Enum 
+from pathlib import Path
 #from rich import print
 
 from src.flet_ui.components import (
@@ -36,7 +38,7 @@ from src.core.prompts import (
 
 destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
 
-from src.core.doc_generator import DocxExporter, TEMPLATE_PREFIX
+from src.core.doc_generator import DocxExporter
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
@@ -76,6 +78,12 @@ CTL_LLM_METADATA_PANEL_TITLE = "llm_metadata_panel_title"
 CTL_LLM_METADATA_CONTENT = "llm_metadata_content"
 CTL_SETTINGS_DRAWER = "settings_drawer"
 
+# NOVO ENUM para operações do FilePicker
+class ExportOperation(Enum):
+    NONE = "none"
+    SIMPLE_DOCX = "simple_docx"
+    TEMPLATE_DOCX = "template_docx"
+
 
 class AnalyzePDFViewContent(ft.Column):
     def __init__(self, page: ft.Page):
@@ -97,12 +105,19 @@ class AnalyzePDFViewContent(ft.Column):
         self._files_processed = False # Indica se o conteúdo dos PDFs foi processado
         self._analysis_requested = False # Indica se a análise LLM foi solicitada/concluída
 
+        # Estado para o FilePicker de exportação
+        self.current_export_operation: ExportOperation = ExportOperation.NONE
+        self.current_export_template_path: Optional[str] = None # Para armazenar o path do template
+        self.global_file_picker_instance: Optional[ft.FilePicker] = None # Referência ao picker global
+
         self._build_gui_structure()
-        self._initialize_file_picker() # Deve ser chamado após _build_ui_structure
+        self._initialize_pickers()
+
+        self.export_manager = self._ExportManager(self)
+
         self._setup_event_handlers()
         self._setup_drawer_event_handlers()
-        self._restore_state_from_session()
-        self._update_button_states() # Estado inicial dos botões
+        self._restore_state_from_session() # que chama self._update_button_states(), que chama self._update_export_button_menu()
 
     def _remove_data_session(self, key):
         if self.page.session.contains_key(key):
@@ -129,10 +144,9 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_EXPORT_BTN] = ft.PopupMenuButton(
             icon=ft.Icons.DOWNLOAD_FOR_OFFLINE_ROUNDED,
             tooltip="Exportar Análise", icon_size=default_icon_size_bar,
-            items=[
-                ft.PopupMenuItem(text="Exportar em DOCX Simples", data="docx_simple"),
-                ft.PopupMenuItem(text="Exportar em Template", data="docx_template", disabled=True), # habilitado após análise LLM
-            ]
+            items=[]
+                #ft.PopupMenuItem(text="Exportar em Simples DOCX", data="docx_simple"),
+                #ft.PopupMenuItem(text="Exportar em Template DOCX", data="docx_template", disabled=True), # habilitado após análise LLM
         )
         self.gui_controls[CTL_SETTINGS_BTN] = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, tooltip="Configurações específicas", icon_size=default_icon_size_bar)
 
@@ -661,87 +675,211 @@ class AnalyzePDFViewContent(ft.Column):
         reset_button.visible = are_different
         if reset_button.page: reset_button.update()
 
-    def _initialize_file_picker(self):
-        _logger.info("Inicializando ManagedFilePicker para Análise de PDF.")
+    # --- setup file_picker ---
+    def _initialize_pickers(self):
+        _logger.info("Inicializando FilePickers (Managed para upload, Global para exportação).")
         
-        def individual_file_upload_complete_cb(success: bool, path_or_msg: str, file_name: Optional[str]):
-            if success and file_name and path_or_msg:
-                _logger.info(f"Upload individual de '{file_name}' OK. Path: {path_or_msg}")
-                current_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
-                if not isinstance(current_files, list): current_files = []
-                
-                if not any(f['name'] == file_name and f['path'] == path_or_msg for f in current_files):
-                    new_file_entry = {"name": file_name, 
-                                      "path": path_or_msg, 
-                                      "original_index": len(current_files)}
-                    current_files.append(new_file_entry)
-                    self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
-            elif path_or_msg == "Seleção cancelada":
-                _logger.info("Seleção de arquivos cancelada.")
-            else:
-                _logger.error(f"Falha no upload de '{file_name}': {path_or_msg}")
-
-        def batch_upload_complete_cb(batch_results: List[Dict[str, Any]]):
-            _logger.info(f"Upload_Batch Completo: {len(batch_results)} resultados.")
-            hide_loading_overlay(self.page)
-            
-            successful_uploads = [r for r in batch_results if r['success']]
-            failed_count = len(batch_results) - len(successful_uploads)
-            final_message, final_color = "", theme.COLOR_INFO
-
-            if successful_uploads and not failed_count:
-                final_message = f"{len(successful_uploads)} arquivo(s) carregado(s)!"
-                final_color = theme.COLOR_SUCCESS
-            elif successful_uploads and failed_count:
-                final_message = f"{len(successful_uploads)} carregado(s), {failed_count} falha(s)."
-                final_color = theme.COLOR_WARNING
-            elif not successful_uploads and failed_count:
-                final_message = f"Todos os {failed_count} uploads falharam."
-                final_color = theme.COLOR_ERROR
-            elif not batch_results:
-                final_message = "Nenhum arquivo selecionado."
-                final_color = theme.COLOR_WARNING
-            
-            if final_message: 
-                show_snackbar(self.page, final_message, color=final_color)
-            
-            self.file_list_manager.update_selected_files_display() # Atualiza a lista na UI
-            
-            # file_list_manager.clear_cached_analysis_results()
-            # page.update(file_list_manager.current_batch_name_text, 
-            #             file_list_manager.selected_files_list_view, 
-            #             file_list_manager.analyze_button) 
-
-            if final_message and final_message != "Nenhum arquivo selecionado.":
-                self._files_processed = False # Novos arquivos, processamento necessário
-                self._analysis_requested = False # Análise LLM também precisará ser refeita
-                self._remove_data_session(KEY_SESSION_PDF_ANALYZER_DATA)
-                self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Limpa dados antigos
-                self._clear_processing_metadata_display()
-                self._clear_llm_metadata_display()
-                self._show_info_balloon_or_result(show_balloon=True)
-            
-            self._update_button_states()
-            
-            self.page.update()
-
-
-        file_picker_instance = self.page.data.get("global_file_picker")
-        if not file_picker_instance:
-            _logger.critical("FilePicker global não encontrado na página! Upload não funcionará.")
+        # Primeiro, obtenha a referência ao picker global
+        self.global_file_picker_instance = self.page.data.get("global_file_picker")
+        if not self.global_file_picker_instance:
+            _logger.critical("FilePicker global NÃO encontrado em page.data! Upload e Exportação podem falhar.")
             show_snackbar(self.page, "Erro crítico: FilePicker não inicializado.", theme.COLOR_ERROR)
             return
+        else:
+             _logger.info("Referência ao FilePicker GLOBAL para exportação e upload armazenada.")
 
-        self.managed_file_picker = ManagedFilePicker(
-            page=self.page,
-            file_picker_instance=file_picker_instance,
-            on_individual_file_complete=individual_file_upload_complete_cb,
-            upload_dir=UPLOAD_TEMP_DIR,
-            on_batch_complete=batch_upload_complete_cb,
-            allowed_extensions=["pdf"]
-        )
-        _logger.info("ManagedFilePicker instanciado e pronto.")
+        # Configura o ManagedFilePicker para UPLOADS, passando a instância global
+        if self.global_file_picker_instance: # Só instancia se o picker global existir
+            # Callbacks para o ManagedFilePicker (upload)
+            def individual_file_upload_complete_cb(success: bool, path_or_msg: str, file_name: Optional[str]):
+                if success and file_name and path_or_msg:
+                    _logger.info(f"Upload individual de '{file_name}' OK. Path: {path_or_msg}")
+                    current_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
+                    if not isinstance(current_files, list): 
+                        current_files = []                    
+                    if not any(f['name'] == file_name and f['path'] == path_or_msg for f in current_files):
+                        new_file_entry = {"name": file_name, 
+                                          "path": path_or_msg, 
+                                          "original_index": len(current_files)}
+                        current_files.append(new_file_entry)
+                        self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
+                elif path_or_msg == "Seleção cancelada":
+                    _logger.info("Seleção de arquivos cancelada.")
+                else:
+                    _logger.error(f"Falha no upload de '{file_name}': {path_or_msg}")
 
+            def batch_upload_complete_cb(batch_results: List[Dict[str, Any]]):
+                _logger.info(f"Upload_Batch Completo (ManagedFilePicker): {len(batch_results)} resultados.") 
+                hide_loading_overlay(self.page) 
+                
+                successful_uploads = [r for r in batch_results if r['success']]
+                failed_count = len(batch_results) - len(successful_uploads)
+                final_message, final_color = "", theme.COLOR_INFO
+
+                if successful_uploads and not failed_count:
+                    final_message = f"{len(successful_uploads)} arquivo(s) carregado(s)!"
+                    final_color = theme.COLOR_SUCCESS
+                elif successful_uploads and failed_count:
+                    final_message = f"{len(successful_uploads)} carregado(s), {failed_count} falha(s)."
+                    final_color = theme.COLOR_WARNING
+                elif not successful_uploads and failed_count:
+                    final_message = f"Todos os {failed_count} uploads falharam."
+                    final_color = theme.COLOR_ERROR
+                elif not batch_results:
+                    _logger.info("Nenhum arquivo selecionado.")
+                    final_message = "Nenhum arquivo selecionado."
+                    final_color = theme.COLOR_WARNING
+                
+                if final_message: 
+                    show_snackbar(self.page, final_message, color=final_color)
+                
+                self.file_list_manager.update_selected_files_display()
+                if final_message and final_message != "Nenhum arquivo selecionado.": 
+                    self._files_processed = False # Novos arquivos, processamento necessário
+                    self._analysis_requested = False # Análise LLM também precisará ser refeita
+                    self._remove_data_session(KEY_SESSION_PDF_ANALYZER_DATA)
+                    self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Limpa dados antigos
+                    self._clear_processing_metadata_display()
+                    self._clear_llm_metadata_display()
+                    self._show_info_balloon_or_result(show_balloon=True)
+                
+                self._update_button_states()
+                self.page.update()
+
+            self.managed_file_picker = ManagedFilePicker(
+                page=self.page,
+                file_picker_instance=self.global_file_picker_instance, # Passa a instância global
+                on_individual_file_complete=individual_file_upload_complete_cb,
+                upload_dir=UPLOAD_TEMP_DIR,
+                on_batch_complete=batch_upload_complete_cb,
+                allowed_extensions=["pdf"]
+            )
+            _logger.info("ManagedFilePicker para UPLOAD instanciado usando o picker global.")
+        else:
+            _logger.warning("ManagedFilePicker para UPLOAD não pôde ser instanciado pois o picker global não foi encontrado.")
+
+    def _handle_export_selected(self, e: ft.ControlEvent):
+        selected_action_data = e.control.data
+        _logger.info(f"Opção de exportação selecionada pelo PopupMenuItem.data: {selected_action_data}")
+
+        structured_display_ctrl = self.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+        if not isinstance(structured_display_ctrl, LLMStructuredResultDisplay):
+            show_snackbar(self.page, "Erro interno: Display de resultados não operacional.", theme.COLOR_ERROR)
+            return
+
+        validation_result = structured_display_ctrl.get_current_form_data(validate_for_export=True)
+        # ... (lógica de tratamento de validation_result e invalid_field_details como antes) ...
+        current_data_for_export: Optional[FormatAnaliseInicial] = None
+        invalid_field_details: List[Tuple[str, Optional[ft.Control]]] = []
+        if isinstance(validation_result, FormatAnaliseInicial):
+            current_data_for_export = validation_result
+        elif isinstance(validation_result, list):
+            invalid_field_details = validation_result
+        
+        if invalid_field_details or not current_data_for_export:
+            # ... (lógica de exibir diálogo de erro/snackbar como antes) ...
+            if invalid_field_details: # Copiando a lógica de tratamento de erro de validação
+                _logger.info("Exibindo diálogo de campos inválidos/problemáticos para exportação...")
+                first_error_tuple = invalid_field_details[0]
+                if first_error_tuple[0].startswith("pydantic_validation_error") or first_error_tuple[0].startswith("internal_form_data_error"):
+                    error_msg_detail = "Verifique os campos e tente novamente." if "pydantic" in first_error_tuple[0] else "Tente recarregar os dados."
+                    show_snackbar(self.page, f"Erro de validação nos dados do formulário. {error_msg_detail}", theme.COLOR_ERROR, duration=5000)
+                    return
+                error_messages_list = []
+                first_invalid_control_to_focus: Optional[ft.Control] = None
+                for field_name, control_instance in invalid_field_details:
+                    friendly_field_name = field_name.replace("_", " ").title()
+                    error_messages_list.append(f"- {friendly_field_name}")
+                    if control_instance and not first_invalid_control_to_focus: first_invalid_control_to_focus = control_instance
+                if error_messages_list:
+                    dialog_content_controls_list = [ft.Text("Os seguintes campos obrigatórios precisam ser preenchidos antes da exportação:")]
+                    for msg_item in error_messages_list: dialog_content_controls_list.append(ft.Text(msg_item))
+                    show_confirmation_dialog(
+                        page=self.page, title="Campos Obrigatórios Pendentes",
+                        content=ft.Column(dialog_content_controls_list, tight=True, spacing=5),
+                        confirm_text="OK", cancel_text=None,
+                        on_confirm= lambda: first_invalid_control_to_focus.focus() if first_invalid_control_to_focus and hasattr(first_invalid_control_to_focus, 'focus') else None)
+                return
+            if not current_data_for_export:
+                show_snackbar(self.page, "Não há dados de análise válidos para exportar (após checagem final).", theme.COLOR_ERROR)
+                _logger.error("current_data_for_export ainda é None após todas as verificações antes de chamar o ExportManager.")
+                return
+            return # Sai se houve erro de validação ou dados nulos
+
+        # Se chegou aqui, current_data_for_export é válido
+        if not self.export_manager:
+            _logger.error("ExportManager não inicializado. Não é possível exportar.")
+            show_snackbar(self.page, "Erro interno: Serviço de exportação não disponível.", theme.COLOR_ERROR)
+            return
+
+        operation_to_perform: Optional[ExportOperation] = None
+        template_path_for_operation: Optional[str] = None
+
+        if selected_action_data == "export_simple_docx":
+            operation_to_perform = ExportOperation.SIMPLE_DOCX
+        elif selected_action_data and selected_action_data.startswith("export_template_"):
+            operation_to_perform = ExportOperation.TEMPLATE_DOCX
+            template_path_for_operation = selected_action_data[len("export_template_"):]
+        elif selected_action_data == "manage_templates":
+            show_snackbar(self.page, "Gerenciamento de templates ainda não implementado.", theme.COLOR_WARNING)
+            self._update_button_states() # Atualiza UI caso algo tenha mudado
+            return
+        else:
+            _logger.warning(f"Ação de exportação desconhecida recebida: {selected_action_data}")
+            self._update_button_states()
+            return
+
+        if not operation_to_perform: # Segurança
+            self._update_button_states()
+            return
+
+        # Agora, chame o export_manager.start_export.
+        # A decisão de usar Timer ou não para o fluxo desktop foi movida para dentro do ExportManager
+        # na última refatoração. No entanto, o log que você mostrou indicava que o Timer ainda estava lá.
+        # Vamos REVERTER a decisão do ExportManager e fazer com que _handle_export_selected
+        # decida sobre o Timer para o fluxo desktop, e ExportManager.start_export apenas execute.
+
+        _logger.info(f"_handle_export_selected: Preparando para chamar export_manager.start_export. Operação: {operation_to_perform}, Web: {self.page.web}")
+
+        if self.page.web:
+            # Para WEB, chamamos start_export diretamente. Ele lidará com launch_url.
+            _logger.debug("_handle_export_selected: MODO WEB. Chamando start_export diretamente.")
+            self.export_manager.start_export(operation_to_perform, current_data_for_export, template_path_for_operation)
+        else:
+            # Para DESKTOP, usamos o Timer para tentar resolver o problema do diálogo não aparecer.
+            # A função do timer chamará start_export.
+            _logger.debug("_handle_export_selected: MODO DESKTOP. Agendando start_export com Timer.")
+            
+            # Precisamos passar os argumentos corretos para start_export através do Timer.
+            # A função do timer não pode ser um método de instância com `self` facilmente
+            # se quisermos passar args diferentes toda vez, a menos que usemos functools.partial
+            # ou uma closure.
+            
+            # Armazena os dados que a thread do timer precisará.
+            # É importante que current_data_for_export seja estável (não modificado pela UI principal
+            # no pequeno intervalo do timer).
+            self.export_manager.current_data_for_export_obj = current_data_for_export # Define no manager para o timer pegar
+
+            def desktop_export_action_via_timer():
+                _logger.info(f"THREAD TIMER (Desktop): Iniciando exportação via export_manager.start_export. Operação: {operation_to_perform}")
+                # O ExportManager usará seu self.current_data_for_export_obj que foi definido antes do timer.
+                self.export_manager.start_export(operation_to_perform, self.export_manager.current_data_for_export_obj, template_path_for_operation)
+
+            # ANTES de agendar o Timer, o `page.update()` pode ser importante
+            # para que o Flet processe o estado da UI (ex: fechar o PopupMenu).
+            self.page.update()
+            _logger.info("_handle_export_selected (Desktop): page.update() chamado ANTES de agendar o Timer.")
+
+            threading.Timer(0.2, desktop_export_action_via_timer).start()
+            _logger.info("_handle_export_selected (Desktop): Timer agendado para executar desktop_export_action_via_timer.")
+        
+        self._update_button_states()
+        # O page.update() aqui pode ser redundante se o fluxo web chamou launch_url
+        # ou se o fluxo desktop agendou um timer e já fez um update antes.
+        # Removê-lo por enquanto para ver se o update antes do timer (desktop) ou o launch_url (web) são suficientes.
+        # self.page.update()
+
+    # --- Handlers de Eventos (Implementações Iniciais) ---
     def _setup_event_handlers(self):
         _logger.info("Configurando handlers de eventos da UI.")
         self.gui_controls[CTL_UPLOAD_BTN].on_click = self._handle_upload_click
@@ -749,10 +887,9 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_ANALYZE_BTN].on_click = self._handle_analyze_click
         self.gui_controls[CTL_PROMPT_STRUCT_BTN].on_click = self._handle_prompt_structured_click
         self.gui_controls[CTL_RESTART_BTN].on_click = self._handle_restart_click
-        self.gui_controls[CTL_EXPORT_BTN].on_item_selected = self._handle_export_selected # Para PopupMenuButton
+        #self.gui_controls[CTL_EXPORT_BTN].on_item_selected = self._handle_export_selected # Para PopupMenuButton
         self.gui_controls[CTL_SETTINGS_BTN].on_click = self._handle_toggle_settings_drawer
 
-    # --- Handlers de Eventos (Implementações Iniciais) ---
     def _handle_upload_click(self, e: ft.ControlEvent):
         _logger.info("Botão 'Carregar Arquivo(s)' clicado.")
         if self.managed_file_picker:
@@ -829,139 +966,52 @@ class AnalyzePDFViewContent(ft.Column):
         self._clear_all_data_and_gui()
         show_snackbar(self.page, "Análise reiniciada. Carregue novos arquivos.", theme.COLOR_INFO)
 
-    def _get_current_data_from_structured_display(self) -> Optional[FormatAnaliseInicial]:
-        """Coleta os dados atuais dos campos editáveis da UI e retorna um objeto FormatAnaliseInicial."""
-        structured_display_ctrl = self.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
-        if not isinstance(structured_display_ctrl, LLMStructuredResultDisplay) or not structured_display_ctrl.data:
-            _logger.warning("Display estruturado não encontrado ou sem dados para coletar.")
-            return None
-       
-        return structured_display_ctrl.get_current_form_data()
-
     def _update_export_button_menu(self):
-        """Atualiza os itens do PopupMenuButton de exportação."""
         export_button = self.gui_controls.get(CTL_EXPORT_BTN)
         if not isinstance(export_button, ft.PopupMenuButton):
             return
 
         export_button.items.clear()
-        export_button.items.append(
-            ft.PopupMenuItem(text="Exportar em Simples DOCX", data="export_simple_docx")
+
+        # Item Simples
+        simple_export_item = ft.PopupMenuItem(
+            text="Exportar em Simples DOCX",
+            data="export_simple_docx"
         )
+        simple_export_item.on_click = self._handle_export_selected # Atribui o mesmo handler
+        export_button.items.append(simple_export_item)
 
         available_templates = self.docx_exporter.get_available_templates()
-        template_sub_menu_items = []
         if available_templates:
-            for friendly_name, template_path in available_templates:
-                template_sub_menu_items.append(
-                    ft.PopupMenuItem(text=friendly_name, data=f"export_template_{template_path}")
-                )
-        
-        # Adiciona opção de "Cadastrar Novo Template" (apenas visual por enquanto)
-        # template_sub_menu_items.append(ft.PopupMenuItem()) # Divisor
-        # template_sub_menu_items.append(
-        #     ft.PopupMenuItem(text="Gerenciar Templates...", icon=ft.icons.SETTINGS_APPLICATIONS_OUTLINED, data="manage_templates", disabled=True)
-        # )
-        
-        if template_sub_menu_items:
-             export_button.items.append(
-                ft.PopupMenuItem(
-                    text="Exportar em Template DOCX",
-                    #icon=ft.icons.FILE_COPY_OUTLINED,
-                    items=template_sub_menu_items
-                )
+            export_button.items.append(ft.PopupMenuItem()) # Funciona como divisor
+            export_button.items.append(
+                ft.PopupMenuItem(text="Exportar Usando Template:", disabled=True) # Um cabeçalho para a seção de templates
             )
-        else: # Se não há templates, apenas a opção de cadastro
-             export_button.items.append(
-                ft.PopupMenuItem(text="Nenhum template DOCX encontrado", disabled=True)
-             )
-             # export_button.items.append(
-             #    ft.PopupMenuItem(text="Gerenciar Templates...", icon=ft.icons.SETTINGS_APPLICATIONS_OUTLINED, data="manage_templates", disabled=True)
-             #)
-        
+            for friendly_name, template_path in available_templates:
+                template_item = ft.PopupMenuItem(
+                    text=f"      {friendly_name}", # Indenta para parecer um subitem
+                    data=f"export_template_{template_path}"
+                )
+                template_item.on_click = self._handle_export_selected # Atribui o mesmo handler
+                export_button.items.append(template_item)
+        else:
+            export_button.items.append(ft.PopupMenuItem()) # Divisor
+            export_button.items.append(
+                 ft.PopupMenuItem(text="Nenhum template DOCX encontrado", disabled=True)
+            )    
+
+        # Opção de Gerenciar Templates (ainda desabilitada)
+        export_button.items.append(ft.PopupMenuItem()) # Divisor
+        manage_templates_item = ft.PopupMenuItem(
+            text="Adicionar Novo Template", 
+            data="manage_templates",
+            #icon=ft.Icons.SETTINGS_APPLICATIONS_OUTLINED,
+        )
+        manage_templates_item.on_click = self._handle_export_selected # Mesmo handler, que tratará 'manage_templates'
+        export_button.items.append(manage_templates_item)
+            
         if export_button.page and export_button.uid:
             export_button.update()
-
-    def _handle_export_selected(self, e: ft.ControlEvent): 
-        selected_action_data = e.control.data
-        _logger.info(f"Opção de exportação selecionada: {selected_action_data}")
-
-        current_data_for_export = self._get_current_data_from_structured_display()
-        if not current_data_for_export:
-            show_snackbar(self.page, "Não há dados de análise para exportar. Verifique os resultados.", theme.COLOR_ERROR)
-            return
-
-        file_picker_instance = self.page.data.get("global_file_picker")
-        if not file_picker_instance or not isinstance(file_picker_instance, ft.FilePicker):
-            show_snackbar(self.page, "FilePicker não está disponível para salvar o arquivo.", theme.COLOR_ERROR)
-            return
-
-        default_filename_base = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME, "analise_documento")
-        default_filename_base = default_filename_base.replace("Arquivos selecionados: ", "").replace("Arquivo selecionado: ", "").split(" e Outros")[0].replace(".pdf", "")
-
-        if selected_action_data == "export_simple_docx":
-            def on_save_dialog_result_simple(event: ft.FilePickerResultEvent):
-                if event.path:
-                    output_path = event.path if event.path.lower().endswith(".docx") else event.path + ".docx"
-                    show_loading_overlay(self.page, f"Exportando para {os.path.basename(output_path)}...")
-                    success = self.docx_exporter.export_simple_docx(current_data_for_export, output_path)
-                    hide_loading_overlay(self.page)
-                    if success:
-                        show_snackbar(self.page, f"Arquivo salvo em: {output_path}", theme.COLOR_SUCCESS)
-                    else:
-                        show_snackbar(self.page, "Falha ao exportar DOCX simples.", theme.COLOR_ERROR)
-                else:
-                    show_snackbar(self.page, "Operação de salvamento cancelada.", theme.COLOR_INFO)
-            
-            file_picker_instance.on_result = on_save_dialog_result_simple
-            file_picker_instance.save_file(
-                dialog_title="Salvar DOCX Simples Como...",
-                file_name=f"{default_filename_base}_simples.docx",
-                allowed_extensions=["docx"]
-            )
-
-        elif selected_action_data and selected_action_data.startswith("export_template_"):
-            template_path_to_use = selected_action_data[len("export_template_"):]
-            template_name_friendly = os.path.basename(template_path_to_use).replace(TEMPLATE_PREFIX, "").replace(".docx","").replace("_", " ").title()
-
-            def on_save_dialog_result_template(event: ft.FilePickerResultEvent):
-                if event.path:
-                    output_path = event.path if event.path.lower().endswith(".docx") else event.path + ".docx"
-                    show_loading_overlay(self.page, f"Exportando '{template_name_friendly}' para {os.path.basename(output_path)}...")
-                    success, missing_keys = self.docx_exporter.export_from_template_docx(current_data_for_export, template_path_to_use, output_path)
-                    hide_loading_overlay(self.page)
-                    if success:
-                        show_snackbar(self.page, f"Arquivo salvo em: {output_path}", theme.COLOR_SUCCESS)
-                        if missing_keys:
-                            missing_keys_str = ", ".join(missing_keys)
-                            show_confirmation_dialog(
-                                self.page,
-                                title="Aviso de Exportação",
-                                content=ft.Column([
-                                    ft.Text(f"Os seguintes campos tinham valores, mas não foram encontrados como placeholders no template '{template_name_friendly}':"),
-                                    ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)
-                                ]),
-                                confirm_text="OK",
-                                cancel_text=None # Sem botão de cancelar neste aviso
-                            )
-                    else:
-                        show_snackbar(self.page, f"Falha ao exportar usando o template '{template_name_friendly}'.", theme.COLOR_ERROR)
-                else:
-                    show_snackbar(self.page, "Operação de salvamento cancelada.", theme.COLOR_INFO)
-
-            file_picker_instance.on_result = on_save_dialog_result_template
-            file_picker_instance.save_file(
-                dialog_title=f"Salvar Cópia de '{template_name_friendly}' Como...",
-                file_name=f"{default_filename_base}_{template_name_friendly.replace(' ', '_').lower()}.docx",
-                allowed_extensions=["docx"]
-            )
-        
-        elif selected_action_data == "manage_templates":
-            show_snackbar(self.page, "Gerenciamento de templates ainda não implementado.", theme.COLOR_INFO)
-            # Aqui você poderia abrir um novo diálogo ou navegar para uma view de gerenciamento.
-
-        # Importante: Atualizar o picker global da página para esta nova lógica de callback
-        self.page.update()
 
     def _handle_toggle_settings_drawer(self, e: Optional[ft.ControlEvent] = None):
         self._is_drawer_open = not self._is_drawer_open
@@ -996,6 +1046,7 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_ANALYZE_BTN].disabled = not (files_exist)
 
         # Botão de Exportar
+        self._update_export_button_menu()
         self.gui_controls[CTL_EXPORT_BTN].disabled = not llm_response_exists
         self.gui_controls[CTL_LLM_RESULT_INFO_TITLE].visible = llm_response_exists
         
@@ -1856,10 +1907,7 @@ class AnalyzePDFViewContent(ft.Column):
 
                 if llm_response_data:
                     # llm_response_data PODE ser um objeto FormatAnaliseInicial ou uma string
-                    self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, llm_response_data)
-
                     # Se for string e parece JSON, tenta parsear para FormatAnaliseInicial
-                    parsed_object_for_display = None
                     if isinstance(llm_response_data, str):
                         try:
                             json_data_from_llm  = json.loads(llm_response_data)
@@ -1869,19 +1917,16 @@ class AnalyzePDFViewContent(ft.Column):
                                 json_data_from_llm['valor_apuracao'] = clean_and_convert_to_float(raw_valor)
                                 _logger.info(f"Valor apuracao original da LLM: '{raw_valor}', convertido para: {json_data_from_llm['valor_apuracao']}")
 
-                            parsed_object_for_display = FormatAnaliseInicial(**json_data_from_llm )
+                            llm_response_data = FormatAnaliseInicial(**json_data_from_llm )
                             _logger.info("Resposta LLM (string) parseada com sucesso para FormatAnaliseInicial.")
                         except (json.JSONDecodeError, TypeError, Exception) as parse_error: # Exception para Pydantic ValidationError
                             _logger.warning(f"Resposta LLM é string, mas falhou ao parsear/validar como FormatAnaliseInicial: {parse_error}. Usando como texto puro.")
                             # Mantém llm_response_data como string para o fallback
                     elif isinstance(llm_response_data, FormatAnaliseInicial):
-                        parsed_object_for_display = llm_response_data
                         _logger.info("Resposta LLM já é um objeto FormatAnaliseInicial.")
-                    
-                    if parsed_object_for_display:
-                         self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, parsed_object_for_display)
-                    else: # Fallback para string
-                         self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, llm_response_data)
+
+                    self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, llm_response_data)
+                    self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, llm_response_data)
                     
                     llm_meta_for_gui = token_usage_info if token_usage_info else {} 
                     llm_meta_for_gui.update({
@@ -1939,6 +1984,185 @@ class AnalyzePDFViewContent(ft.Column):
             thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, True), daemon=True)
             thread.start()
 
+    class _ExportManager:
+        def __init__(self, parent_view: 'AnalyzePDFViewContent'):
+            self.parent_view = parent_view
+            self.page = parent_view.page
+            self.docx_exporter = parent_view.docx_exporter
+            self.global_file_picker = parent_view.global_file_picker_instance 
+
+            self.desktop_picker_operation: ExportOperation = ExportOperation.NONE 
+            self.desktop_picker_template_path: Optional[str] = None 
+            self.current_data_for_export_obj: Optional[FormatAnaliseInicial] = None
+
+        def _get_default_filename_base(self) -> str:
+            base = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "analise_documento"
+            return base.replace("Arquivos selecionados: ", "").replace("Arquivo selecionado: ", "").split(" e Outros")[0].replace(".pdf", "")
+
+        def _handle_desktop_save_result(self, event: ft.FilePickerResultEvent):
+            _logger.info(f"EXPORT_MANAGER (Desktop): _handle_desktop_save_result. Operação: {self.current_operation}, Path: {event.path}")
+            
+            if not self.current_data_for_export_obj:
+                _logger.error("EXPORT_MANAGER (Desktop): current_data_for_export_obj é None. Abortando.")
+                show_snackbar(self.page, "Erro interno: Dados para exportação não disponíveis no callback.", theme.COLOR_ERROR)
+                return
+
+            output_path = event.path # Vem do diálogo "Salvar Como"
+            
+            # Resetar estado antes de processar, independentemente do resultado
+            operation_that_finished = self.desktop_picker_operation
+            template_path_that_finished = self.desktop_picker_template_path
+            data_that_was_exported = self.current_data_for_export_obj 
+            
+            # Resetar estado do picker desktop
+            self.desktop_picker_operation = ExportOperation.NONE
+            self.desktop_picker_template_path = None
+            self.current_data_for_export_obj = None # Limpa após uso
+
+            if not output_path: # Usuário cancelou o diálogo "Salvar Como"
+                _logger.info("EXPORT_MANAGER (Desktop): Operação de salvamento cancelada pelo usuário.")
+                show_snackbar(self.page, "Operação de salvamento cancelada.", theme.COLOR_INFO)
+                return
+
+            output_path_final = output_path if output_path.lower().endswith(".docx") else output_path + ".docx"
+            show_loading_overlay(self.page, f"Exportando para {os.path.basename(output_path_final)}...")
+
+            success = False
+            missing_keys_report: List[str] = []
+
+            if operation_that_finished == ExportOperation.SIMPLE_DOCX:
+                success = self.docx_exporter.export_simple_docx(data_that_was_exported, output_path_final)
+            elif operation_that_finished == ExportOperation.TEMPLATE_DOCX and template_path_that_finished:
+                success, missing_keys_report = self.docx_exporter.export_from_template_docx(
+                    data_that_was_exported, template_path_that_finished, output_path_final
+                )
+            
+            hide_loading_overlay(self.page)
+            if success:
+                show_snackbar(self.page, f"Arquivo salvo em: {output_path_final}", theme.COLOR_SUCCESS)
+                if missing_keys_report: # Lógica de aviso de chaves ausentes
+                    template_name_friendly = os.path.basename(template_path_that_finished or "").replace(".docx","").replace("_", " ").title()
+                    missing_keys_str = ", ".join(missing_keys_report)
+                    show_confirmation_dialog(
+                        self.page, title="Aviso de Exportação",
+                        content=ft.Column([
+                            ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados como placeholders no template '{template_name_friendly}':"),
+                            ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)
+                        ], tight=True),
+                        confirm_text="OK", cancel_text=None)
+            else:
+                show_snackbar(self.page, f"Falha ao exportar arquivo DOCX.", theme.COLOR_ERROR)
+
+        def start_export(self, operation_type: ExportOperation, data_to_export: FormatAnaliseInicial, template_path: Optional[str] = None):
+            _logger.info(f"EXPORT_MANAGER: start_export chamado. Operação: {operation_type}, Web: {self.page.web}")
+
+            # data_to_export já deve ser o objeto validado.
+            # Se self.current_data_for_export_obj foi definido pelo chamador (para o timer desktop), use-o.
+            # Caso contrário (chamada direta para web), use o argumento data_to_export.
+            actual_data_to_export = self.current_data_for_export_obj if self.current_data_for_export_obj and not self.page.web else data_to_export
+            
+            if not actual_data_to_export: # Checagem de segurança
+                _logger.error("EXPORT_MANAGER: Nenhum dado válido para exportar fornecido.")
+                show_snackbar(self.page, "Erro interno: Dados para exportação ausentes.", theme.COLOR_ERROR)
+                return
+            
+            default_filename_base = self._get_default_filename_base()
+
+            if self.page.web:
+                # --- LÓGICA PARA MODO WEB ---
+                _logger.info("EXPORT_MANAGER (Web): Executando lógica de download via servidor.")
+                # ... (lógica web como implementada anteriormente, sem o timer) ...
+                show_loading_overlay(self.page, "Preparando arquivo para download...")
+                temp_server_filename = ""
+                export_success_on_server = False
+                missing_keys_on_server: List[str] = []
+                server_save_path = ""
+
+                if operation_type == ExportOperation.SIMPLE_DOCX:
+                    temp_server_filename = f"{default_filename_base}_simples_{int(time())}.docx"
+                    server_save_path = os.path.join(UPLOAD_TEMP_DIR, temp_server_filename) # UPLOAD_TEMP_DIR é o assets_dir
+                    export_success_on_server = self.docx_exporter.export_simple_docx(actual_data_to_export, server_save_path)
+                elif operation_type == ExportOperation.TEMPLATE_DOCX and template_path:
+                    template_name_friendly_for_filename = os.path.basename(template_path).replace(".docx","").replace(" ", "_").lower()
+                    temp_server_filename = f"{default_filename_base}_{template_name_friendly_for_filename}_{int(time())}.docx"
+                    server_save_path = os.path.join(UPLOAD_TEMP_DIR, temp_server_filename) # UPLOAD_TEMP_DIR é o assets_dir
+                    export_success_on_server, missing_keys_on_server = self.docx_exporter.export_from_template_docx(
+                        actual_data_to_export, template_path, server_save_path)
+                else:
+                    _logger.error(f"EXPORT_MANAGER (Web): Tipo de operação desconhecido ou template_path ausente: {operation_type}")
+                    hide_loading_overlay(self.page)
+                    show_snackbar(self.page, "Erro: Tipo de exportação inválido.", theme.COLOR_ERROR)
+                    self.current_data_for_export_obj = None # Limpa
+                    return
+                
+                hide_loading_overlay(self.page)
+                if export_success_on_server and temp_server_filename:
+                    #upload_dir_folder_name = Path(UPLOAD_TEMP_DIR).name
+                    #download_url = f"/{upload_dir_folder_name}/{temp_server_filename}"
+                    # Se UPLOAD_TEMP_DIR está em assets_dir:
+                    download_url = f"/{temp_server_filename}" # URL direta ao arquivo
+                    _logger.info(f"EXPORT_MANAGER (Web): Arquivo gerado em '{server_save_path}'. URL para download: {download_url}")
+                    self.page.launch_url(download_url, web_window_name="_self") # ou _blank
+                    show_snackbar(self.page, f"Download de '{temp_server_filename}' iniciado.", theme.COLOR_SUCCESS)
+                    if missing_keys_on_server and operation_type == ExportOperation.TEMPLATE_DOCX:
+                        template_name_friendly = os.path.basename(template_path or "").replace(".docx","").replace("_", " ").title()
+                        missing_keys_str = "\n".join(missing_keys_on_server)
+                        threading.Timer(1.0, lambda: show_confirmation_dialog(
+                            self.page, title="Aviso de Exportação",
+                            content=ft.Column([
+                                ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados como placeholders no template '{template_name_friendly}':"),
+                                ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)], tight=True),
+                            confirm_text="OK", cancel_text=None )).start()
+                else:
+                    _logger.error(f"EXPORT_MANAGER (Web): Falha ao gerar arquivo DOCX no servidor. Arquivo: {server_save_path}")
+                    show_snackbar(self.page, "Falha ao gerar arquivo para download.", theme.COLOR_ERROR)
+                self.current_data_for_export_obj = None # Limpa após uso
+
+            else:
+                # --- LÓGICA PARA MODO DESKTOP ---
+                if not self.global_file_picker:
+                    show_snackbar(self.page, "FilePicker não está disponível (Desktop).", theme.COLOR_ERROR)
+                    _logger.error("EXPORT_MANAGER (Desktop): global_file_picker é None.")
+                    self.current_data_for_export_obj = None # Limpa
+                    return
+
+                _logger.info("EXPORT_MANAGER (Desktop): Iniciando save_file().")
+                self.desktop_picker_operation = operation_type
+                self.desktop_picker_template_path = template_path
+                
+                self.global_file_picker.on_result = self._handle_desktop_save_result
+                _logger.debug("EXPORT_MANAGER (Desktop): on_result do global_file_picker DEFINIDO para _handle_desktop_save_result.")
+
+                dialog_title_str = "Salvar Relatório Como..."
+                file_name_str = f"{default_filename_base}.docx"
+
+                if operation_type == ExportOperation.SIMPLE_DOCX:
+                    dialog_title_str = "Salvar DOCX Simples Como..."
+                    file_name_str = f"{default_filename_base}_simples.docx"
+                elif operation_type == ExportOperation.TEMPLATE_DOCX and template_path:
+                    template_name_friendly_for_filename = os.path.basename(template_path).replace(".docx","").replace(" ", "_").lower()
+                    dialog_title_str = "Salvar Cópia de Template Como..."
+                    file_name_str = f"{default_filename_base}_{template_name_friendly_for_filename}.docx"
+                
+                try:
+                    # A chamada page.update() ANTES de save_file é crucial aqui para DESKTOP.
+                    self.page.update()
+                    _logger.info("EXPORT_MANAGER (Desktop): page.update() chamado ANTES de save_file().")
+                    
+                    self.global_file_picker.save_file(
+                        dialog_title=dialog_title_str,
+                        file_name=file_name_str,
+                        allowed_extensions=["docx"],
+                        file_type=ft.FilePickerFileType.ANY 
+                    )
+                    _logger.info(f"EXPORT_MANAGER (Desktop): Chamada a save_file() com nome: {file_name_str} concluída.")
+                except Exception as e_save_file_desktop:
+                    _logger.error(f"EXPORT_MANAGER (Desktop): Exceção ao chamar save_file(): {e_save_file_desktop}", exc_info=True)
+                    show_snackbar(self.page, f"Erro ao tentar abrir diálogo de salvar: {e_save_file_desktop}", theme.COLOR_ERROR)
+                    self.desktop_picker_operation = ExportOperation.NONE # Reseta estado em erro
+                    self.desktop_picker_template_path = None
+                    self.current_data_for_export_obj = None
+
 class LLMStructuredResultDisplay(ft.Column):
     def __init__(self, page: ft.Page):
         super().__init__(
@@ -1949,7 +2173,7 @@ class LLMStructuredResultDisplay(ft.Column):
         )
         self.page = page
         self.data: Optional[FormatAnaliseInicial] = None
-        self.ui_fields: Dict[str, ft.Control] = {}
+        self.gui_fields: Dict[str, ft.Control] = {}
 
         # Referências para controles que precisam ser atualizados dinamicamente (ex: municípios)
         self.dropdown_uf_origem: Optional[ft.Dropdown] = None
@@ -2006,7 +2230,7 @@ class LLMStructuredResultDisplay(ft.Column):
     def update_data(self, data: FormatAnaliseInicial):
         self.data = data # Armazena os dados originais/base
         self.controls.clear()
-        self.ui_fields.clear() # Limpa referências de campos antigos
+        self.gui_fields.clear() # Limpa referências de campos antigos
 
         if not self.data:
             self.controls.append(ft.Text("Nenhum dado de análise estruturada para exibir."))
@@ -2020,16 +2244,22 @@ class LLMStructuredResultDisplay(ft.Column):
         self.data.uf_fato = get_sigla_uf(self.data.uf_fato)
 
         # --- Seção 1: Identificação do Documento ---
-        self.ui_fields["descricao_geral"] = ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, width=1600)
-        self.ui_fields["tipo_documento_origem"] = ft.Dropdown(label="Tipo Documento Origem", options=[ft.dropdown.Option(td) for td in tipos_doc], value=self.data.tipo_documento_origem, width=400, dense=True)
-        self.ui_fields["orgao_origem"] = ft.Dropdown(label="Órgão de Origem", options=[ft.dropdown.Option(oo) for oo in origens_doc], value=self.data.orgao_origem, width=530, dense=True) # Removido expand=True
+        self.gui_fields["descricao_geral"] = ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, width=1600)
+        self.gui_fields["tipo_documento_origem"] = ft.Dropdown(label="Tipo Documento Origem", 
+                                                               options=[ft.dropdown.Option(td) for td in tipos_doc], 
+                                                               value=self.data.tipo_documento_origem if self.data.tipo_documento_origem in tipos_doc else None, 
+                                                               width=400, dense=True)
+        self.gui_fields["orgao_origem"] = ft.Dropdown(label="Órgão de Origem", 
+                                                      options=[ft.dropdown.Option(oo) for oo in origens_doc], 
+                                                      value=self.data.orgao_origem if self.data.orgao_origem in origens_doc else None, 
+                                                      width=530, dense=True) # Removido expand=True
 
         self.dropdown_uf_origem = ft.Dropdown(
             label="UF de Origem", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
             value=self.data.uf_origem if self.data.uf_origem in self.ufs_list else None,
             on_change=self._atualizar_municipios_origem, width=170, dense=True
         )
-        self.ui_fields["uf_origem"] = self.dropdown_uf_origem # Adiciona ao ui_fields
+        self.gui_fields["uf_origem"] = self.dropdown_uf_origem # Adiciona ao ui_fields
 
         municipios_origem_init = MUNICIPIOS_POR_UF.get(self.data.uf_origem, []) if self.data.uf_origem else []
         self.dropdown_municipio_origem = ft.Dropdown(
@@ -2038,16 +2268,16 @@ class LLMStructuredResultDisplay(ft.Column):
             value=obter_string_normalizada(self.data.municipio_origem, municipios_origem_init),
             dense=True, width=320, # Removido expand=True
         )
-        self.ui_fields["municipio_origem"] = self.dropdown_municipio_origem
+        self.gui_fields["municipio_origem"] = self.dropdown_municipio_origem
         
         self._atualizar_municipios_origem() # Popula municípios com base na UF inicial
 
         id_doc_card_content = ft.Column([
-            self.ui_fields["descricao_geral"],
+            self.gui_fields["descricao_geral"],
             ft.Row([
-                self.ui_fields["tipo_documento_origem"],
+                self.gui_fields["tipo_documento_origem"],
                 self._create_justificativa_icon(self.data.justificativa_tipo_documento_origem),
-                self.ui_fields["orgao_origem"],
+                self.gui_fields["orgao_origem"],
                 self._create_justificativa_icon(self.data.justificativa_orgao_origem),
                 self.dropdown_uf_origem, # Já está em ui_fields
                 self.dropdown_municipio_origem, # Já está em ui_fields
@@ -2060,14 +2290,14 @@ class LLMStructuredResultDisplay(ft.Column):
 
 
         # --- Seção 2: Detalhes do Fato ---
-        self.ui_fields["resumo_fato"] = ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, width=1600)
+        self.gui_fields["resumo_fato"] = ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, width=1600)
         
         self.dropdown_uf_fato = ft.Dropdown(
             label="UF do Fato", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
             value=self.data.uf_fato if self.data.uf_fato in self.ufs_list else None,
             on_change=self._atualizar_municipios_fato, width=170, dense=True
         )
-        self.ui_fields["uf_fato"] = self.dropdown_uf_fato
+        self.gui_fields["uf_fato"] = self.dropdown_uf_fato
 
         municipios_fato_init = MUNICIPIOS_POR_UF.get(self.data.uf_fato, []) if self.data.uf_fato else []
         self.dropdown_municipio_fato = ft.Dropdown(
@@ -2076,54 +2306,65 @@ class LLMStructuredResultDisplay(ft.Column):
             value=obter_string_normalizada(self.data.municipio_fato, municipios_fato_init),
             dense=True, width=320, # Removido expand=True
         )
-        self.ui_fields["municipio_fato"] = self.dropdown_municipio_fato
+        self.gui_fields["municipio_fato"] = self.dropdown_municipio_fato
         self._atualizar_municipios_fato()
 
-        self.ui_fields["tipo_local"] = ft.Dropdown(label="Tipo de Local", options=[ft.dropdown.Option(tl) for tl in tipos_locais], value=self.data.tipo_local, width=480, dense=True) # expand=True
+        self.gui_fields["tipo_local"] = ft.Dropdown(label="Tipo de Local", 
+                                                    options=[ft.dropdown.Option(tl) for tl in tipos_locais], 
+                                                    value=self.data.tipo_local if self.data.tipo_local in tipos_locais else None, 
+                                                    width=480, dense=True) # expand=True
         
         valor_apuracao_str = f"{self.data.valor_apuracao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(self.data.valor_apuracao, float) else str(self.data.valor_apuracao)
-        self.ui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER, width=480, prefix_text="R$ ", dense=True)
+        self.gui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER, width=480, prefix_text="R$ ", dense=True)
         
-        self.ui_fields["pessoas_envolvidas"] = ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, width=1600)
-        self.ui_fields["linha_do_tempo"] = ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, width=1600)
+        self.gui_fields["pessoas_envolvidas"] = ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, width=1600)
+        self.gui_fields["linha_do_tempo"] = ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, width=1600)
 
         det_fato_card_content = ft.Column([
-            self.ui_fields["resumo_fato"],
+            self.gui_fields["resumo_fato"],
             ft.Row([
                 self.dropdown_uf_fato,
                 self.dropdown_municipio_fato,
                 self._create_justificativa_icon(self.data.justificativa_municipio_uf_fato),
-                self.ui_fields["tipo_local"],
+                self.gui_fields["tipo_local"],
                 self._create_justificativa_icon(self.data.justificativa_tipo_local),
-                self.ui_fields["valor_apuracao"],
+                self.gui_fields["valor_apuracao"],
                 self._create_justificativa_icon(self.data.justificativa_valor_apuracao)
             ], spacing=10), # Ajuste o spacing
-            self.ui_fields["pessoas_envolvidas"],
-            self.ui_fields["linha_do_tempo"],
+            self.gui_fields["pessoas_envolvidas"],
+            self.gui_fields["linha_do_tempo"],
         ], spacing=12)
         det_fato_card = CardWithHeader(title="Detalhes do Fato", content=det_fato_card_content, header_bgcolor=ft.Colors.GREY_300)
         self.controls.append(det_fato_card)
 
         # --- Seção 3: Classificação e Encaminhamento ---
-        self.ui_fields["area_atribuicao"] = ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição], value=self.data.area_atribuicao, width=660, dense=True)
-        self.ui_fields["tipificacao_penal"] = ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=840, dense=True)
-        self.ui_fields["destinacao"] = ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas], value=self.data.destinacao, width=250, dense=True)
-        self.ui_fields["tipo_a_autuar"] = ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipo_a_autuar], value=self.data.tipo_a_autuar, width=350, dense=True)
-        self.ui_fields["assunto_re"] = ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re], value=self.data.assunto_re, width=840, dense=True)
+        self.gui_fields["area_atribuicao"] = ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição], 
+                                                         value=self.data.area_atribuicao if self.data.area_atribuicao in areas_de_atribuição else None, 
+                                                         width=660, dense=True)
+        self.gui_fields["tipificacao_penal"] = ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=840, dense=True)
+        self.gui_fields["destinacao"] = ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas], 
+                                                    value=self.data.destinacao if self.data.destinacao in destinacoes_completas else None, 
+                                                    width=250, dense=True)
+        self.gui_fields["tipo_a_autuar"] = ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipo_a_autuar], 
+                                                       value=self.data.tipo_a_autuar if self.data.tipo_a_autuar in tipo_a_autuar else None, 
+                                                       width=350, dense=True)
+        self.gui_fields["assunto_re"] = ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re], 
+                                                    value=self.data.assunto_re if self.data.assunto_re in assuntos_re else None, 
+                                                    width=840, dense=True)
 
         class_enc_card_content = ft.Column([
             ft.Row([
-                self.ui_fields["area_atribuicao"],
+                self.gui_fields["area_atribuicao"],
                 self._create_justificativa_icon(self.data.justificativa_area_atribuicao),
-                self.ui_fields["tipificacao_penal"],
+                self.gui_fields["tipificacao_penal"],
                 self._create_justificativa_icon(self.data.justificativa_tipificacao_penal)
             ], spacing=10), # Ajuste
             ft.Row([
-                self.ui_fields["destinacao"],
+                self.gui_fields["destinacao"],
                 self._create_justificativa_icon(self.data.justificativa_destinacao),
-                self.ui_fields["tipo_a_autuar"],
+                self.gui_fields["tipo_a_autuar"],
                 self._create_justificativa_icon(self.data.justificativa_tipo_a_autuar),
-                self.ui_fields["assunto_re"],
+                self.gui_fields["assunto_re"],
                 self._create_justificativa_icon(self.data.justificativa_assunto_re)
             ], spacing=10), # Ajuste
         ], spacing=12)
@@ -2131,56 +2372,112 @@ class LLMStructuredResultDisplay(ft.Column):
         self.controls.append(class_enc_card)
 
         # --- Seção 4: Observações ---
-        self.ui_fields["observacoes"] = ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, width=1600)
-        obs_card_content = ft.Column([self.ui_fields["observacoes"]], spacing=10)
+        self.gui_fields["observacoes"] = ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, width=1600)
+        obs_card_content = ft.Column([self.gui_fields["observacoes"]], spacing=10)
         obs_card = CardWithHeader(title="Observações Adicionais", content=obs_card_content, header_bgcolor=ft.Colors.GREY_300)
         self.controls.append(obs_card)
 
         if self.page and self.uid:
             self.update()
 
-    def get_current_form_data(self) -> Optional[FormatAnaliseInicial]:
+    def get_current_form_data(self, validate_for_export: bool = False) -> Union[Optional[FormatAnaliseInicial], List[str]]:
         """
-        Coleta os dados atuais dos campos da UI, atualiza self.data e retorna o objeto.
+        Coleta os dados atuais dos campos da UI, atualiza self.data.
+        Se validate_for_export for True, valida campos obrigatórios para exportação.
+
+        Returns:
+            - FormatAnaliseInicial: se os dados são válidos (ou validação não solicitada).
+            - List[str]: Lista de nomes de campos inválidos/vazios se validate_for_export é True e há erros.
+            - None: Se self.data base não estiver definido.
         """
         if not self.data: # Se não há dados base (ex: LLM não retornou nada)
             _logger.warning("get_current_form_data: self.data não está definido. Não é possível coletar dados da UI.")
             return None
 
-        current_ui_data = FormatAnaliseInicial(
-            # Preserva justificativas e outros campos não diretamente editáveis na lista principal
-            justificativa_tipo_documento_origem=self.data.justificativa_tipo_documento_origem,
-            justificativa_orgao_origem=self.data.justificativa_orgao_origem,
-            justificativa_municipio_uf_origem=self.data.justificativa_municipio_uf_origem,
-            justificativa_tipo_local=self.data.justificativa_tipo_local,
-            justificativa_municipio_uf_fato=self.data.justificativa_municipio_uf_fato,
-            justificativa_valor_apuracao=self.data.justificativa_valor_apuracao,
-            justificativa_area_atribuicao=self.data.justificativa_area_atribuicao,
-            justificativa_tipificacao_penal=self.data.justificativa_tipificacao_penal,
-            justificativa_tipo_a_autuar=self.data.justificativa_tipo_a_autuar,
-            justificativa_assunto_re=self.data.justificativa_assunto_re,
-            justificativa_destinacao=self.data.justificativa_destinacao
-        )
+        # Passo 1: Coletar valores dos campos da UI (self.ui_fields)
+        collected_values_from_ui = {}
+        invalid_fields_for_export: List[Tuple[str, ft.Control]] = [] # (field_name, control_instance)
 
-        for field_name, control in self.ui_fields.items():
-            if hasattr(current_ui_data, field_name):
-                value = None
-                if isinstance(control, (ft.TextField, ft.Dropdown)):
-                    value = control.value
-                
-                # Tratamentos específicos de tipo
-                if field_name == "valor_apuracao":
-                    value = clean_and_convert_to_float(value)
+        # Define aqui os campos que são OBRIGATÓRIOS para a exportação; Estes devem corresponder às chaves em self.ui_fields
+        required_fields_for_export = [
+            "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
+            "resumo_fato", # Mesmo sendo multiline, pode ser obrigatório
+            "tipo_local", "uf_fato", "municipio_fato",
+            # "valor_apuracao", # Pode ser opcional ou zero
+            "area_atribuicao",
+            "tipo_a_autuar", "destinacao",
+            # "descricao_geral" 
+            # "tipificacao_penal" e "assunto_re" são Optional[str] no FormatAnaliseInicial
+            # "pessoas_envolvidas", "linha_do_tempo", "observacoes" são Optional[List[str]]
+        ]
+        _logger.debug(f"Campos definidos como obrigatórios para exportação: {required_fields_for_export}")
+
+        for field_name, control in self.gui_fields.items():
+            value = None
+            is_dropdown = isinstance(control, ft.Dropdown)
+            if isinstance(control, (ft.TextField, ft.Dropdown)):
+                value = control.value
+                _logger.debug(f"Coletando para '{field_name}': '{value}' (Tipo: {type(value)}, É Dropdown: {is_dropdown})")
+            
+            # Validação para exportação
+            if validate_for_export and field_name in required_fields_for_export:
+                is_empty = False
+                if value is None: # Principal condição para Dropdowns não selecionados ou TextFields vazios que retornam None
+                    is_empty = True
+                elif isinstance(value, str) and not value.strip(): # Para TextFields que podem ter string vazia
+                    is_empty = True
+                # Para TextFields multiline que representam listas (como pessoas_envolvidas)
                 elif field_name in ["pessoas_envolvidas", "linha_do_tempo"] and isinstance(value, str):
-                    # Converte strings multiline de volta para listas de strings
-                    value = [line.strip() for line in value.split('\n') if line.strip()] if value else []
+                    processed_list_val = [line.strip() for line in value.split('\n') if line.strip()]
+                    if not processed_list_val:
+                        is_empty = True
                 
-                setattr(current_ui_data, field_name, value)
+                if is_empty:
+                    _logger.warning(f"Campo obrigatório '{field_name}' está vazio. Valor atual: '{value}'")
+                    invalid_fields_for_export.append((field_name, control))
+
+
+            # Tratamentos específicos de tipo (continua como antes)
+            if field_name == "valor_apuracao":
+                value = clean_and_convert_to_float(value)
+            elif field_name in ["pessoas_envolvidas", "linha_do_tempo"] and isinstance(value, str):
+                value = [line.strip() for line in value.split('\n') if line.strip()] if value else []
+            
+            collected_values_from_ui[field_name] = value
+
+        if validate_for_export and invalid_fields_for_export:
+            _logger.warning(f"Validação para exportação falhou. Campos vazios: {[f[0] for f in invalid_fields_for_export]}")
+            # Retorna a lista de tuplas (nome_do_campo, instancia_do_controle)
+            return invalid_fields_for_export 
+
+        # Se passou na validação (ou não foi solicitada), prossiga para criar o objeto
+        final_data_for_pydantic = {}
+        if self.data:
+            final_data_for_pydantic = self.data.model_dump()
+        final_data_for_pydantic.update(collected_values_from_ui)
+
+        for pydantic_field_name in FormatAnaliseInicial.model_fields.keys():
+            if pydantic_field_name not in final_data_for_pydantic:
+                if hasattr(self.data, pydantic_field_name):
+                    final_data_for_pydantic[pydantic_field_name] = getattr(self.data, pydantic_field_name)
         
-        # Atualiza o self.data interno com os dados recém-coletados da UI
-        self.data = current_ui_data
-        _logger.info("Dados do formulário estruturado coletados e self.data atualizado.")
-        return self.data
+        try:
+            _logger.debug(f"Dados para instanciar FormatAnaliseInicial: {final_data_for_pydantic}")
+            current_ui_data = FormatAnaliseInicial(**final_data_for_pydantic)
+            self.data = current_ui_data 
+            _logger.info("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
+            self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, self.data)
+            return self.data
+        except Exception as pydantic_error: # Use ValidationError de Pydantic se importado
+            _logger.error(f"Erro de validação Pydantic FINAL ao criar FormatAnaliseInicial: {pydantic_error}", exc_info=False)
+            # ... (logar erros pydantic detalhados)
+            if hasattr(pydantic_error, 'errors'): # Se for ValidationError do Pydantic
+                 for error in pydantic_error.errors():
+                    _logger.error(f"  - Pydantic Detail: Campo: {'.'.join(map(str, error['loc'])) if error.get('loc') else 'N/A'}, Erro: {error['msg']}")
+
+            if validate_for_export:
+                return [("pydantic_validation_error_final", None)] 
+            return None
     
 
 # Função principal da view (chamada pelo router)

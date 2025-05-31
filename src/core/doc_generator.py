@@ -13,7 +13,6 @@ from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
 
 TEMPLATES_SUBDIR = "templates_docx"
-TEMPLATE_PREFIX = "template_"
 
 class DocxExporter:
     def __init__(self):
@@ -136,10 +135,10 @@ class DocxExporter:
             return templates
 
         for filename in os.listdir(self.templates_dir):
-            if filename.startswith(TEMPLATE_PREFIX) and filename.lower().endswith(".docx"):
+            if filename.lower().endswith(".docx"):
                 full_path = os.path.join(self.templates_dir, filename)
                 # Cria um nome amigável removendo o prefixo e a extensão
-                friendly_name = filename[len(TEMPLATE_PREFIX):-len(".docx")].replace("_", " ").title()
+                friendly_name = filename[:-len(".docx")].replace("_", " ").title()
                 templates.append((friendly_name, full_path))
         
         _logger.info(f"Encontrados {len(templates)} templates em '{self.templates_dir}'.")
@@ -180,24 +179,79 @@ class DocxExporter:
             placeholders_found_in_template = set()
 
             # Função auxiliar para substituir texto em parágrafos e tabelas
-            def replace_text_in_element(element, placeholder, replacement_text):
-                if hasattr(element, 'text'):
-                    if placeholder in element.text:
-                        placeholders_found_in_template.add(placeholder.strip("{}"))
-                        # A substituição em 'runs' é mais robusta para manter a formatação
-                        for run in element.runs:
-                            if placeholder in run.text:
-                                run.text = run.text.replace(placeholder, replacement_text)
-                # Se for um parágrafo, verifica os 'runs'
-                if hasattr(element, 'paragraphs'):
-                    for p in element.paragraphs:
-                        replace_text_in_element(p, placeholder, replacement_text)
+            # def replace_text_in_element(element, placeholder, replacement_text):
+            #    if hasattr(element, 'text'):
+            #        if placeholder in element.text:
+            #            placeholders_found_in_template.add(placeholder.strip("<>"))
+            #            # A substituição em 'runs' é mais robusta para manter a formatação
+            #            for run in element.runs:
+            #                if placeholder in run.text:
+            #                    run.text = run.text.replace(placeholder, replacement_text)
+            #    # Se for um parágrafo, verifica os 'runs'
+            #    if hasattr(element, 'paragraphs'):
+            #        for p in element.paragraphs:
+            #            replace_text_in_element(p, placeholder, replacement_text)
 
+            def replace_text_in_element(paragraph, field_name, value):
+                placeholder = f"<{field_name}>" # Formato do placeholder: <nome_do_campo>
+                placeholder_found = False
+                inline = paragraph.runs
+                
+                # Primeira tentativa: substituição direta em runs individuais
+                for line in range(len(inline)):
+                    if inline[line].text != '' and placeholder in inline[line].text:
+                        placeholders_found_in_template.add(placeholder[1:-1])
+                        inline[line].text = inline[line].text.replace(placeholder, str(value))
+                        placeholder_found = True
+                
+                # Se não encontrou o placeholder em runs individuais
+                if not placeholder_found:
+                    # Tenta encontrar placeholders que atravessam múltiplos runs
+                    # Encontra os runs que contêm partes do placeholder
+                    current_text = ''
+                    start_run_index = -1
+                    last_run_index = -1
+                    
+                    # Percorre todos os runs para encontrar o placeholder completo
+                    for run_index, run in enumerate(inline):
+                        current_text += run.text
+                        
+                        # Verifica se o placeholder foi completamente encontrado
+                        if placeholder in current_text:
+                            placeholders_found_in_template.add(placeholder[1:-1])
+                            last_run_index = run_index
+                            
+                            # Encontra o primeiro run do placeholder
+                            temp_text = ''
+                            for i in range(run_index, -1, -1):
+                                temp_text = inline[i].text + temp_text
+                                if placeholder in temp_text:
+                                    start_run_index = i
+                                    break
+                            
+                            # Preserva formatação do primeiro run
+                            first_run = inline[start_run_index]
+                            
+                            # Calcula o texto total dos runs do placeholder
+                            total_text = ''.join(r.text for r in inline[start_run_index:last_run_index+1])
+                            total_text = total_text.replace(placeholder, str(value))
+                            
+                            # Remove runs extras
+                            for extra_run in inline[start_run_index+1:last_run_index+1]:
+                                extra_run.text = ''
+                            
+                            # Substitui no primeiro run
+                            first_run.text = total_text
+                            
+                            placeholder_found = True
+                            break
+                        
+                        if placeholder_found:
+                            break
 
             for field_name in fields_to_replace:
                 if hasattr(data, field_name):
                     value = getattr(data, field_name)
-                    placeholder = f"{{{field_name}}}" # Formato do placeholder: {nome_do_campo}
                     
                     # Formata o valor para string
                     if isinstance(value, list):
@@ -209,13 +263,14 @@ class DocxExporter:
 
                     # Substitui em todos os parágrafos
                     for paragraph in document.paragraphs:
-                        replace_text_in_element(paragraph, placeholder, replacement)
+                        replace_text_in_element(paragraph, field_name, replacement)
 
                     # Substitui em todas as tabelas
                     for table in document.tables:
                         for row in table.rows:
                             for cell in row.cells:
-                                replace_text_in_element(cell, placeholder, replacement)
+                                for paragraph in cell.paragraphs:
+                                    replace_text_in_element(paragraph, field_name, replacement)
             
             # Verifica por placeholders não encontrados no template mas com valor nos dados
             for field_name in fields_to_replace:

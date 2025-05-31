@@ -2,6 +2,9 @@
 import flet as ft
 import re
 from typing import Optional, Dict, Callable, Any
+from pathlib import Path
+
+from src.settings import UPLOAD_TEMP_DIR 
 
 from .theme import COLOR_WARNING, COLOR_ERROR, PADDING_L 
 from .layout import create_app_bar, _find_nav_index_for_route, icones_navegacao
@@ -208,6 +211,12 @@ def route_change_content_only(
     route: str
 ):
     logger.info(f"Router (content_only): Navegando para rota '{route}'")
+
+    upload_dir_base_url_path = f"/{Path(UPLOAD_TEMP_DIR).name}/" # Ex: "/uploads_temp/"
+    if route.startswith(upload_dir_base_url_path):
+        logger.info(f"Router: Rota '{route}' parece ser um arquivo do diretório de upload. Deixando o Flet servir o arquivo.")
+        return
+
     authenticated = is_user_authenticated(page)
 
     # --- Lógica de Autenticação e Redirecionamento ---

@@ -65,7 +65,7 @@ if __name__ == "__main__":
         target=main,                 # Função principal a ser executada
         view=ft.AppView.WEB_BROWSER, # Executa como uma aplicação web no navegador padrão
         port=8550,                   # Porta em que a aplicação será servida (ex: http://localhost:8550)
-        assets_dir=ASSETS_DIR_ABS,         # Descomente se você tiver uma pasta 'assets' na raiz
+        assets_dir=UPLOAD_TEMP_DIR,  # ASSETS_DIR_ABS,         # Descomente se você tiver uma pasta 'assets' na raiz
         upload_dir=UPLOAD_TEMP_DIR
     )
 
@@ -93,13 +93,17 @@ TODO:
 
 > Upload de métricas: 11 + files_names + parâmetros json do llm
 > Doc_generator
+
+-----------------------------------------
+
 > Upload de acertos
+> formas de feedback
 
 > Acrescentar casos prometheus
 > Testes de Score sobre multiplas formas de prompt 
 
 > Exibir prompt_estruturado
-> formas de feedback
+
 > Linkar alertas e msgs informativas de responsabilidade no uso de IA
 
 > revisar sistemática do logging em nuvem

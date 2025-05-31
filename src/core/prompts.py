@@ -474,4 +474,12 @@ TODO: Agrupar:
 # quanto ao tipo de procedimento a gerar:
 11. TIPO A AUTUAR
 12. ASSUNTO DO RE
+
+
+# TODO:
+Se municipio_fato fora da circunscrição:
+    - reset: 
+        - tipo_autuação = RDF
+        - destinação = DPF ou COR respectiva
+
 '''
