@@ -1,5 +1,3 @@
-''' TODO: Criar pytestes para este módulo. '''
-
 from rich import print
 from src.utils import timing_decorator
 

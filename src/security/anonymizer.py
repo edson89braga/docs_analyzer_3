@@ -7,6 +7,9 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+def Person():
+    ...
+    
 @dataclass
 class AnonymizationRule:
     """Regra de anonimização para tipos específicos de dados."""

@@ -96,6 +96,8 @@ TODO:
 
 -----------------------------------------
 
+> Reorganizar src.settings.py e analyze_pdf_view1.py
+
 > Upload de acertos
 > formas de feedback
 
@@ -108,6 +110,9 @@ TODO:
 
 > revisar sistemática do logging em nuvem
 > pyinstaller e testes na rede
+
+> Tests pdf_processor.py, ai_orchestrator.py, doc_generator.py
+> Test  View: analyze_pdf1
 
 # Posteriormente:
 > Melhorias na apresentação dos metadados;

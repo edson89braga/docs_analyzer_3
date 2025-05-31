@@ -1317,8 +1317,6 @@ class AnalyzePDFViewContent(ft.Column):
         else:
             self._show_info_balloon_or_result(show_balloon=True)
         
-        # Configurações do Drawer (TODO: Ler da sessão/configurações do usuário)
-
         self._update_button_states() # Fundamental após restaurar estado
         
         if self.page: # Garante que a página está disponível
@@ -1704,7 +1702,7 @@ class AnalyzePDFViewContent(ft.Column):
                     _logger.error("Falha ao registrar métricas da análise no Firestore.")
                 else:
                     _logger.info("Métricas da análise registradas com sucesso no Firestore.")
-                    #TODO: Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
+                    #Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
                     if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
                         self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
 

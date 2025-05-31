@@ -86,26 +86,6 @@ ROUTES_WITHOUT_NAV_RAIL = ["/login", "/signup"]
 def is_user_authenticated(page: ft.Page) -> bool:
     """Verifica se há um token de ID válido na sessão ou client_storage."""
     token = page.session.get("auth_id_token") or (page.client_storage.get("auth_id_token") if page.client_storage else None)
-    # TODO: Validar expiração do token aqui (já existe em app.py, pode ser centralizado)
-    # TODO: Idealmente, verificar a validade/expiração do token aqui.
-    # Por agora, apenas a presença é verificada.
-    # if token:
-    #     try:
-    #         # decoded_token = firebase_admin.auth.verify_id_token(token) # Requer Admin SDK
-    #         # Ou, se você tiver a lógica de decodificação JWT e verificação de expiração:
-    #         # payload = jwt.decode(token, options={"verify_signature": False}) # Simples para expiração
-    #         # expiration_timestamp = payload.get("exp")
-    #         # current_timestamp = time.time()
-    #         # if expiration_timestamp and expiration_timestamp < current_timestamp:
-    #         #     _logger.warning("Token de autenticação expirado.")
-    #         #     page.session.remove("auth_id_token") # Limpa token expirado
-    #         #     # Limpar outros dados de sessão e client_storage
-    #         #     if page.client_storage: page.client_storage.remove("auth_id_token")
-    #         #     return False
-    #         return True
-    #     except Exception as e:
-    #         _logger.error(f"Erro ao verificar token: {e}. Considerando não autenticado.")
-    #         return False
     return bool(token)
 
 def app_router(page: ft.Page, route: str):
