@@ -360,9 +360,34 @@ def main(page: ft.Page, dev_mode: bool = False):
         page.data = {}
         
     # Adiciona ao overlay uma única vez.
-    global_file_picker = ft.FilePicker()
-    page.overlay.append(global_file_picker)
-    page.data["global_file_picker"] = global_file_picker
+    page_file_picker = ft.FilePicker()
+    page.overlay.append(page_file_picker)
+    page.data["global_file_picker"] = page_file_picker
+
+    page_snackbar = ft.SnackBar(content=ft.Text(""), show_close_icon=True, action_color=ft.colors.WHITE) # Configurações padrão
+    page.overlay.append(page_snackbar)
+    page.data["global_snackbar"] = page_snackbar
+
+    page_loading_text = ft.Text("", size=16, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
+    page_loading_overlay = ft.Container(
+        content=ft.Column(
+            [
+                ft.ProgressRing(),
+                ft.Container(height=10),
+                page_loading_text,
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            alignment=ft.MainAxisAlignment.CENTER,
+            tight=True,
+        ),
+        alignment=ft.alignment.center,
+        expand=True,
+        bgcolor=ft.colors.with_opacity(0.5, ft.colors.BLACK),
+        visible=False # Começa invisível
+    )
+    page.overlay.append(page_loading_overlay)
+    page.data["global_loading_overlay"] = page_loading_overlay
+    page.data["global_loading_text"] = page_loading_text # Para fácil acesso à mensagem
 
     # --- Elementos Persistentes do Layout ---
     # AppBar será atualizada pelo router se o título precisar mudar,
@@ -485,46 +510,4 @@ def main(page: ft.Page, dev_mode: bool = False):
     if not os.getenv("FLET_SECRET_KEY"):
         os.environ["FLET_SECRET_KEY"] = FLET_SECRET_KEY
 
-def OLD_main(page: ft.Page):
-    '''
-    Este modelo baseado em ft.View empilhadas foi substituído por um modelo de "Single Page Application (SPA)" acima;
-    '''
-    app_router = None
-    logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando...")
-    page.title = APP_TITLE
-    page.vertical_alignment = ft.MainAxisAlignment.START
-    page.horizontal_alignment = ft.CrossAxisAlignment.START
 
-    # --- Aplicar Temas ---
-    page.theme = theme.APP_THEME
-    page.dark_theme = theme.APP_DARK_THEME
-    page.theme_mode = ft.ThemeMode.SYSTEM
-    
-    # Tenta carregar o estado de autenticação persistido
-    load_auth_state_from_storage(page)
-
-    # --- Conectar o Roteador ---
-    page.on_route_change = lambda route_event: app_router(page, route_event.route)
-    
-    # --- Limpeza ao Fechar ---
-    def on_disconnect(e):
-        logger.info("Cliente desconectado ou aplicação Flet fechando...")
-        # Limpar contexto do logger de nuvem ao desconectar
-        LoggerSetup.set_cloud_user_context(None, None)
-        logger.info("Contexto do logger de nuvem limpo ao desconectar.")
-        # ... (outras limpezas como fechar sessão DB, se houver) ...
-
-    page.on_disconnect = on_disconnect
-    
-    # --- Navegar para a Rota Inicial ---
-    # O router agora lida com o redirecionamento para /login se não autenticado.
-    # Se a rota for / ou vazia, o router pode decidir para onde ir (ex: /home se logado, /login se não).
-    initial_route = page.route
-    if not initial_route or initial_route == "/":
-        # O app_router decidirá se vai para /login ou /home baseado na autenticação
-        initial_route = "/home" # Ou deixe o router decidir implicitamente indo para "/"
-                                 # e sendo redirecionado.
-                                 # Mas page.go("/") pode ser mais explícito.
-
-    logger.info(f"Disparando navegação inicial para: {initial_route}")
-    page.go(initial_route) # Dispara o on_route_change

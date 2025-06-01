@@ -1,6 +1,6 @@
 # src/flet_ui/views/analyze_pdf_view.py
 import flet as ft
-import threading, json, os
+import threading, json, os, shutil
 from typing import Optional, Dict, Any, List, Union, Tuple
 from time import time, sleep
 from datetime import datetime
@@ -19,7 +19,7 @@ from src.core.ai_orchestrator import get_api_key_in_firestore, analyze_text_with
 
 from src.services.firebase_client import FirebaseClientFirestore
 
-from src.settings import (APP_VERSION , UPLOAD_TEMP_DIR, cotacao_dolar_to_real,
+from src.settings import (APP_VERSION , UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR, cotacao_dolar_to_real,
                           KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, 
                           FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_LOADED_LLM_PROVIDERS,
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST)
@@ -38,7 +38,7 @@ from src.core.prompts import (
 
 destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
 
-from src.core.doc_generator import DocxExporter
+from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
@@ -235,9 +235,9 @@ class AnalyzePDFViewContent(ft.Column):
         self.llm_result_container = ft.Container(
             content=ft.Column( # Usar Stack para sobrepor o balão e o resultado
                 [
-                    #self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON],
-                    #self.gui_controls[CTL_LLM_RESULT_TEXT], # Fallback
-                    #self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY] # Novo
+                   #self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON],
+                   #self.gui_controls[CTL_LLM_RESULT_TEXT], # Fallback
+                   #self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY] # Novo
                 ]
             ),
             padding=10,
@@ -409,9 +409,10 @@ class AnalyzePDFViewContent(ft.Column):
         
         return ft.Column(
             [
-                ft.Row([ft.Text("Configurações específicas", style=ft.TextThemeStyle.TITLE_LARGE), 
-                        ft.IconButton(icon=ft.Icons.CLOSE_ROUNDED, on_click=self._handle_toggle_settings_drawer, tooltip="Fechar Configurações")],
-                       alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                #ft.Row([ft.Text("Configurações específicas", style=ft.TextThemeStyle.TITLE_LARGE), 
+                #        ft.IconButton(icon=ft.Icons.CLOSE_ROUNDED, on_click=self._handle_toggle_settings_drawer, tooltip="Fechar Configurações")],
+                #       alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ft.Text("Configurações específicas", style=ft.TextThemeStyle.TITLE_LARGE),
                 ft.Divider(),
 
                 ft.Text("Processamento de Documento", style=ft.TextThemeStyle.TITLE_MEDIUM),
@@ -762,49 +763,50 @@ class AnalyzePDFViewContent(ft.Column):
         selected_action_data = e.control.data
         _logger.info(f"Opção de exportação selecionada pelo PopupMenuItem.data: {selected_action_data}")
 
-        structured_display_ctrl = self.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
-        if not isinstance(structured_display_ctrl, LLMStructuredResultDisplay):
-            show_snackbar(self.page, "Erro interno: Display de resultados não operacional.", theme.COLOR_ERROR)
-            return
-
-        validation_result = structured_display_ctrl.get_current_form_data(validate_for_export=True)
-        # ... (lógica de tratamento de validation_result e invalid_field_details como antes) ...
         current_data_for_export: Optional[FormatAnaliseInicial] = None
         invalid_field_details: List[Tuple[str, Optional[ft.Control]]] = []
-        if isinstance(validation_result, FormatAnaliseInicial):
-            current_data_for_export = validation_result
-        elif isinstance(validation_result, list):
-            invalid_field_details = validation_result
+
+        if selected_action_data != "manage_templates": # Só valida dados se não for gerenciar templates
+            structured_display_ctrl = self.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+            if not isinstance(structured_display_ctrl, LLMStructuredResultDisplay):
+                show_snackbar(self.page, "Erro interno: Display de resultados não operacional.", theme.COLOR_ERROR)
+                return
+
+            validation_result = structured_display_ctrl.get_current_form_data(validate_for_export=True)
+
+            if isinstance(validation_result, FormatAnaliseInicial):
+                current_data_for_export = validation_result
+            elif isinstance(validation_result, list):
+                invalid_field_details = validation_result
         
-        if invalid_field_details or not current_data_for_export:
-            # ... (lógica de exibir diálogo de erro/snackbar como antes) ...
-            if invalid_field_details: # Copiando a lógica de tratamento de erro de validação
-                _logger.info("Exibindo diálogo de campos inválidos/problemáticos para exportação...")
-                first_error_tuple = invalid_field_details[0]
-                if first_error_tuple[0].startswith("pydantic_validation_error") or first_error_tuple[0].startswith("internal_form_data_error"):
-                    error_msg_detail = "Verifique os campos e tente novamente." if "pydantic" in first_error_tuple[0] else "Tente recarregar os dados."
-                    show_snackbar(self.page, f"Erro de validação nos dados do formulário. {error_msg_detail}", theme.COLOR_ERROR, duration=5000)
+            if invalid_field_details or not current_data_for_export:
+                if invalid_field_details: # Copiando a lógica de tratamento de erro de validação
+                    _logger.info("Exibindo diálogo de campos inválidos/problemáticos para exportação...")
+                    first_error_tuple = invalid_field_details[0]
+                    if first_error_tuple[0].startswith("pydantic_validation_error") or first_error_tuple[0].startswith("internal_form_data_error"):
+                        error_msg_detail = "Verifique os campos e tente novamente." if "pydantic" in first_error_tuple[0] else "Tente recarregar os dados."
+                        show_snackbar(self.page, f"Erro de validação nos dados do formulário. {error_msg_detail}", theme.COLOR_ERROR, duration=5000)
+                        return
+                    error_messages_list = []
+                    first_invalid_control_to_focus: Optional[ft.Control] = None
+                    for field_name, control_instance in invalid_field_details:
+                        friendly_field_name = field_name.replace("_", " ").title()
+                        error_messages_list.append(f"- {friendly_field_name}")
+                        if control_instance and not first_invalid_control_to_focus: first_invalid_control_to_focus = control_instance
+                    if error_messages_list:
+                        dialog_content_controls_list = [ft.Text("Os seguintes campos obrigatórios precisam ser preenchidos antes da exportação:")]
+                        for msg_item in error_messages_list: dialog_content_controls_list.append(ft.Text(msg_item))
+                        show_confirmation_dialog(
+                            page=self.page, title="Campos Obrigatórios Pendentes",
+                            content=ft.Column(dialog_content_controls_list, tight=True, spacing=5),
+                            confirm_text="OK", cancel_text=None,
+                            on_confirm= lambda: first_invalid_control_to_focus.focus() if first_invalid_control_to_focus and hasattr(first_invalid_control_to_focus, 'focus') else None)
                     return
-                error_messages_list = []
-                first_invalid_control_to_focus: Optional[ft.Control] = None
-                for field_name, control_instance in invalid_field_details:
-                    friendly_field_name = field_name.replace("_", " ").title()
-                    error_messages_list.append(f"- {friendly_field_name}")
-                    if control_instance and not first_invalid_control_to_focus: first_invalid_control_to_focus = control_instance
-                if error_messages_list:
-                    dialog_content_controls_list = [ft.Text("Os seguintes campos obrigatórios precisam ser preenchidos antes da exportação:")]
-                    for msg_item in error_messages_list: dialog_content_controls_list.append(ft.Text(msg_item))
-                    show_confirmation_dialog(
-                        page=self.page, title="Campos Obrigatórios Pendentes",
-                        content=ft.Column(dialog_content_controls_list, tight=True, spacing=5),
-                        confirm_text="OK", cancel_text=None,
-                        on_confirm= lambda: first_invalid_control_to_focus.focus() if first_invalid_control_to_focus and hasattr(first_invalid_control_to_focus, 'focus') else None)
-                return
-            if not current_data_for_export:
-                show_snackbar(self.page, "Não há dados de análise válidos para exportar (após checagem final).", theme.COLOR_ERROR)
-                _logger.error("current_data_for_export ainda é None após todas as verificações antes de chamar o ExportManager.")
-                return
-            return # Sai se houve erro de validação ou dados nulos
+                if not current_data_for_export:
+                    show_snackbar(self.page, "Não há dados de análise válidos para exportar (após checagem final).", theme.COLOR_ERROR)
+                    _logger.error("current_data_for_export ainda é None após todas as verificações antes de chamar o ExportManager.")
+                    return
+                return # Sai se houve erro de validação ou dados nulos
 
         # Se chegou aqui, current_data_for_export é válido
         if not self.export_manager:
@@ -821,7 +823,8 @@ class AnalyzePDFViewContent(ft.Column):
             operation_to_perform = ExportOperation.TEMPLATE_DOCX
             template_path_for_operation = selected_action_data[len("export_template_"):]
         elif selected_action_data == "manage_templates":
-            show_snackbar(self.page, "Gerenciamento de templates ainda não implementado.", theme.COLOR_WARNING)
+            #show_snackbar(self.page, "Gerenciamento de templates ainda não implementado.", theme.COLOR_WARNING)
+            self._handle_add_new_template_click()
             self._update_button_states() # Atualiza UI caso algo tenha mudado
             return
         else:
@@ -829,7 +832,7 @@ class AnalyzePDFViewContent(ft.Column):
             self._update_button_states()
             return
 
-        if not operation_to_perform: # Segurança
+        if not operation_to_perform or not current_data_for_export: # Segurança
             self._update_button_states()
             return
 
@@ -878,6 +881,159 @@ class AnalyzePDFViewContent(ft.Column):
         # ou se o fluxo desktop agendou um timer e já fez um update antes.
         # Removê-lo por enquanto para ver se o update antes do timer (desktop) ou o launch_url (web) são suficientes.
         # self.page.update()
+
+    def _handle_add_new_template_click(self): # Nova função
+        _logger.info("Botão 'Adicionar Novo Template' clicado.")
+        if not self.global_file_picker_instance:
+            show_snackbar(self.page, "Erro: Seletor de arquivos não está pronto.", theme.COLOR_ERROR)
+            _logger.error("_handle_add_new_template_click: global_file_picker_instance é None.")
+            return
+
+        if self.page.web:
+            # Para web, precisamos de um fluxo de upload explícito para obter o arquivo no servidor.
+            # Usaremos o file_picker global, mas precisamos de um callback de upload.
+            _logger.info("Modo Web: Configurando FilePicker para upload de template.")
+            self.global_file_picker_instance.on_result = self._on_template_file_selected_for_web_upload
+            self.global_file_picker_instance.on_upload = self._on_template_file_uploaded_web # Novo callback para upload
+        else:
+            # Modo Desktop: on_result é suficiente, pois temos o path direto.
+            self.global_file_picker_instance.on_result = self._on_new_template_picked # Callback original para desktop
+            self.global_file_picker_instance.on_upload = None # Garantir que não haja callback de upload antigo
+
+        self.global_file_picker_instance.pick_files(
+            dialog_title="Selecionar Template DOCX para Adicionar",
+            allowed_extensions=["docx"],
+            allow_multiple=False
+        )
+        self.page.update()
+
+    def _on_template_file_selected_for_web_upload(self, e: ft.FilePickerResultEvent):
+        """Callback do FilePicker.on_result ESPECÍFICO para upload de template no modo WEB."""
+        if not e.files:
+            show_snackbar(self.page, "Seleção de template cancelada.", theme.COLOR_INFO)
+            return
+
+        selected_file_for_upload = e.files[0]
+        file_name_to_upload = selected_file_for_upload.name
+        _logger.info(f"Modo Web: Template '{file_name_to_upload}' selecionado. Iniciando upload para UPLOAD_TEMP_DIR.")
+
+        # Limpa arquivo com mesmo nome no UPLOAD_TEMP_DIR se existir (para evitar usar um antigo)
+        temp_target_path = os.path.join(UPLOAD_TEMP_DIR, file_name_to_upload)
+        if os.path.exists(temp_target_path):
+            try:
+                os.remove(temp_target_path)
+                _logger.debug(f"Arquivo temporário anterior '{temp_target_path}' removido.")
+            except OSError as e_rem:
+                _logger.warning(f"Não foi possível remover arquivo temporário anterior '{temp_target_path}': {e_rem}")
+        try:
+            # Gera URL de upload para o UPLOAD_TEMP_DIR
+            upload_url = self.page.get_upload_url(file_name_to_upload, expires=300) # URL expira em 5 mins
+            if not upload_url:
+                raise ValueError("URL de upload para template não pôde ser gerada.")
+
+            self.global_file_picker_instance.upload([
+                ft.FilePickerUploadFile(name=file_name_to_upload, upload_url=upload_url)
+            ])
+            show_loading_overlay(self.page, f"Fazendo upload do template '{file_name_to_upload}'...")
+            self.page.update()
+        except Exception as ex_upload_web:
+            _logger.error(f"Erro ao iniciar upload do template no modo web: {ex_upload_web}", exc_info=True)
+            show_snackbar(self.page, f"Erro ao preparar upload do template: {ex_upload_web}", theme.COLOR_ERROR)
+            hide_loading_overlay(self.page)
+
+
+    def _on_template_file_uploaded_web(self, e: ft.FilePickerUploadEvent):
+        """Callback do FilePicker.on_upload ESPECÍFICO para upload de template no modo WEB."""
+        _logger.info(f"Modo Web (Upload Template): Evento on_upload - File: {e.file_name}, Prog: {e.progress}, Err: {e.error}")
+
+        if e.error:
+            hide_loading_overlay(self.page)
+            show_snackbar(self.page, f"Erro no upload do template: {e.error}", theme.COLOR_ERROR)
+            _logger.error(f"Erro durante o upload do template '{e.file_name}': {e.error}")
+            return
+
+        if e.progress is not None and e.progress < 1.0:
+            # Pode atualizar um progresso aqui se desejar
+            return
+
+        # Upload para UPLOAD_TEMP_DIR concluído
+        hide_loading_overlay(self.page)
+        _logger.info(f"Modo Web: Upload do template '{e.file_name}' para UPLOAD_TEMP_DIR concluído.")
+
+        # Agora que o arquivo está no UPLOAD_TEMP_DIR, chame a lógica de cópia.
+        # O source_file_path será construído a partir de UPLOAD_TEMP_DIR.
+        source_file_path_on_server = os.path.join(UPLOAD_TEMP_DIR, e.file_name)
+
+        # Verifica se o arquivo realmente existe no UPLOAD_TEMP_DIR
+        max_retries = 5
+        retry_delay = 0.3
+        file_found_on_server = False
+        for attempt in range(max_retries):
+            if os.path.exists(source_file_path_on_server):
+                file_found_on_server = True
+                break
+            _logger.warning(f"Template '{e.file_name}' ainda não no servidor (tentativa {attempt + 1}). Aguardando...")
+            time.sleep(retry_delay)
+        
+        if not file_found_on_server:
+            _logger.error(f"Template '{e.file_name}' não encontrado em '{source_file_path_on_server}' após upload.")
+            show_snackbar(self.page, "Erro: Arquivo de template não confirmado no servidor.", theme.COLOR_ERROR)
+            return
+
+        self._copy_template_to_assets(source_file_path_on_server, e.file_name, is_web_upload_temp=True)
+
+
+    def _on_new_template_picked(self, e: ft.FilePickerResultEvent):
+        """
+        Callback do FilePicker.on_result para adicionar template.
+        Usado diretamente pelo modo DESKTOP.
+        Para modo WEB, é chamado internamente por _on_template_file_uploaded_web
+        após o arquivo ser carregado para o servidor.
+        """
+        if not e.files:
+            show_snackbar(self.page, "Seleção de template cancelada.", theme.COLOR_INFO)
+            return
+
+        selected_file = e.files[0]
+        source_file_path = selected_file.path # Em modo desktop, este é o caminho local
+        original_file_name = selected_file.name
+
+        # No modo web, source_file_path será None aqui, e o arquivo já deve estar em UPLOAD_TEMP_DIR
+        # A chamada para _copy_template_to_assets virá de _on_template_file_uploaded_web.
+        # Esta função _on_new_template_picked só deve prosseguir com a cópia se for desktop.
+        if not self.page.web:
+            if not source_file_path: # Segurança para desktop
+                _logger.error("Modo Desktop: source_file_path está None em _on_new_template_picked, o que não deveria acontecer.")
+                show_snackbar(self.page, "Erro ao obter caminho do template selecionado.", theme.COLOR_ERROR)
+                return
+            self._copy_template_to_assets(source_file_path, original_file_name)
+        # Se for web, o fluxo é interrompido aqui e continuado por _on_template_file_uploaded_web
+
+    def _copy_template_to_assets(self, source_path: str, original_filename: str, is_web_upload_temp: bool = False): 
+        """Copia o arquivo de template para o diretório de assets."""
+        
+        templates_dir = os.path.join(ASSETS_DIR_ABS, DOCX_TEMPLATES_SUBDIR)
+        os.makedirs(templates_dir, exist_ok=True)
+        destination_file_path = os.path.join(templates_dir, original_filename)
+
+        try:
+            _logger.info(f"Copiando template de '{source_path}' para '{destination_file_path}'")
+            shutil.copy2(source_path, destination_file_path)
+            show_snackbar(self.page, f"Template '{original_filename}' adicionado com sucesso!", theme.COLOR_SUCCESS)
+
+            self._update_export_button_menu()
+            if self.page: self.page.update()
+
+        except Exception as ex:
+            _logger.error(f"Erro ao copiar template '{original_filename}': {ex}", exc_info=True)
+            show_snackbar(self.page, f"Falha ao adicionar o template: {ex}", theme.COLOR_ERROR)
+        finally:
+            if is_web_upload_temp and source_path.startswith(os.path.abspath(UPLOAD_TEMP_DIR)):
+                try:
+                    os.remove(source_path)
+                    _logger.info(f"Arquivo de template temporário '{source_path}' removido do UPLOAD_TEMP_DIR.")
+                except OSError as e_rem:
+                    _logger.warning(f"Não foi possível remover arquivo de template temporário '{source_path}': {e_rem}")
 
     # --- Handlers de Eventos (Implementações Iniciais) ---
     def _setup_event_handlers(self):
@@ -1235,14 +1391,20 @@ class AnalyzePDFViewContent(ft.Column):
             for ctl in [CTL_LLM_RESULT_INFO_BALLOON, CTL_LLM_RESULT_TEXT, CTL_LLM_STRUCTURED_RESULT_DISPLAY]:
                 if ctl != control:
                     self.gui_controls[ctl].visible = False            
-
         if show_balloon:
             only_one_visible(CTL_LLM_RESULT_INFO_BALLOON)
         elif isinstance(result_data, FormatAnaliseInicial):
             structured_display = self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY]
             if isinstance(structured_display, LLMStructuredResultDisplay): # Verifica o tipo
                 structured_display.update_data(result_data)
-                only_one_visible(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+                #only_one_visible(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+                structured_display.visible = True
+                scrollable_row_for_structured_display = ft.Row(
+                    [structured_display], scroll=ft.ScrollMode.ADAPTIVE, expand=True 
+                )
+                self.llm_result_container.content.controls.append(scrollable_row_for_structured_display)
+                self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON].visible = False 
+                self.gui_controls[CTL_LLM_RESULT_TEXT].visible = False 
             else: # Fallback se o controle não for o esperado
                 _logger.error("Controle CTL_LLM_STRUCTURED_RESULT_DISPLAY não é uma instância de LLMStructuredResultDisplay.")
                 self.gui_controls[CTL_LLM_RESULT_TEXT].value = "Erro interno ao exibir resultado estruturado."
@@ -2044,7 +2206,7 @@ class AnalyzePDFViewContent(ft.Column):
                     show_confirmation_dialog(
                         self.page, title="Aviso de Exportação",
                         content=ft.Column([
-                            ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados como placeholders no template '{template_name_friendly}':"),
+                            ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados placeholders respectivos no template '{template_name_friendly}':"),
                             ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)
                         ], tight=True),
                         confirm_text="OK", cancel_text=None)
@@ -2076,14 +2238,24 @@ class AnalyzePDFViewContent(ft.Column):
                 missing_keys_on_server: List[str] = []
                 server_save_path = ""
 
+                temp_exports_dir_on_server = os.path.join(ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR)
+                try:
+                    os.makedirs(temp_exports_dir_on_server, exist_ok=True) # Garante que o diretório exista
+                except OSError as e:
+                    _logger.error(f"EXPORT_MANAGER (Web): Falha ao criar diretório de exportações temporárias '{temp_exports_dir_on_server}': {e}")
+                    hide_loading_overlay(self.page)
+                    show_snackbar(self.page, "Erro ao preparar diretório para download.", theme.COLOR_ERROR)
+                    self.current_data_for_export_obj = None # Limpa
+                    return
+                
                 if operation_type == ExportOperation.SIMPLE_DOCX:
                     temp_server_filename = f"{default_filename_base}_simples_{int(time())}.docx"
-                    server_save_path = os.path.join(UPLOAD_TEMP_DIR, temp_server_filename) # UPLOAD_TEMP_DIR é o assets_dir
+                    server_save_path = os.path.join(temp_exports_dir_on_server, temp_server_filename) 
                     export_success_on_server = self.docx_exporter.export_simple_docx(actual_data_to_export, server_save_path)
                 elif operation_type == ExportOperation.TEMPLATE_DOCX and template_path:
                     template_name_friendly_for_filename = os.path.basename(template_path).replace(".docx","").replace(" ", "_").lower()
                     temp_server_filename = f"{default_filename_base}_{template_name_friendly_for_filename}_{int(time())}.docx"
-                    server_save_path = os.path.join(UPLOAD_TEMP_DIR, temp_server_filename) # UPLOAD_TEMP_DIR é o assets_dir
+                    server_save_path = os.path.join(temp_exports_dir_on_server, temp_server_filename) 
                     export_success_on_server, missing_keys_on_server = self.docx_exporter.export_from_template_docx(
                         actual_data_to_export, template_path, server_save_path)
                 else:
@@ -2095,10 +2267,7 @@ class AnalyzePDFViewContent(ft.Column):
                 
                 hide_loading_overlay(self.page)
                 if export_success_on_server and temp_server_filename:
-                    #upload_dir_folder_name = Path(UPLOAD_TEMP_DIR).name
-                    #download_url = f"/{upload_dir_folder_name}/{temp_server_filename}"
-                    # Se UPLOAD_TEMP_DIR está em assets_dir:
-                    download_url = f"/{temp_server_filename}" # URL direta ao arquivo
+                    download_url = f"/{WEB_TEMP_EXPORTS_SUBDIR}/{temp_server_filename}"
                     _logger.info(f"EXPORT_MANAGER (Web): Arquivo gerado em '{server_save_path}'. URL para download: {download_url}")
                     self.page.launch_url(download_url, web_window_name="_self") # ou _blank
                     show_snackbar(self.page, f"Download de '{temp_server_filename}' iniciado.", theme.COLOR_SUCCESS)
@@ -2108,7 +2277,7 @@ class AnalyzePDFViewContent(ft.Column):
                         threading.Timer(1.0, lambda: show_confirmation_dialog(
                             self.page, title="Aviso de Exportação",
                             content=ft.Column([
-                                ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados como placeholders no template '{template_name_friendly}':"),
+                                ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados placeholders respectivos no template '{template_name_friendly}':"),
                                 ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)], tight=True),
                             confirm_text="OK", cancel_text=None )).start()
                 else:
@@ -2189,7 +2358,7 @@ class LLMStructuredResultDisplay(ft.Column):
             icon_size=18,
             opacity=0.7 if justificativa else 0.3,
             disabled=not bool(justificativa),
-            padding=ft.padding.only(left=1, right=1),
+            padding=ft.padding.only(left=0, right=1),
         )
 
     def _atualizar_municipios_origem(self, e=None):
@@ -2283,7 +2452,7 @@ class LLMStructuredResultDisplay(ft.Column):
             ], spacing=10), # Ajuste o spacing conforme necessário
         ], spacing=12)
         
-        id_doc_card = CardWithHeader(title="Identificação do Documento", content=id_doc_card_content, header_bgcolor=ft.Colors.GREY_300)
+        id_doc_card = CardWithHeader(title="Identificação do Documento", content=id_doc_card_content, header_bgcolor=ft.Colors.GREY_300, width=1640)
         self.controls.append(id_doc_card)
 
 
@@ -2313,7 +2482,7 @@ class LLMStructuredResultDisplay(ft.Column):
                                                     width=480, dense=True) # expand=True
         
         valor_apuracao_str = f"{self.data.valor_apuracao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(self.data.valor_apuracao, float) else str(self.data.valor_apuracao)
-        self.gui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER, width=480, prefix_text="R$ ", dense=True)
+        self.gui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER, width=450, prefix_text="R$ ", dense=True)
         
         self.gui_fields["pessoas_envolvidas"] = ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, width=1600)
         self.gui_fields["linha_do_tempo"] = ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, width=1600)
@@ -2332,7 +2501,7 @@ class LLMStructuredResultDisplay(ft.Column):
             self.gui_fields["pessoas_envolvidas"],
             self.gui_fields["linha_do_tempo"],
         ], spacing=12)
-        det_fato_card = CardWithHeader(title="Detalhes do Fato", content=det_fato_card_content, header_bgcolor=ft.Colors.GREY_300)
+        det_fato_card = CardWithHeader(title="Detalhes do Fato", content=det_fato_card_content, header_bgcolor=ft.Colors.GREY_300, width=1640)
         self.controls.append(det_fato_card)
 
         # --- Seção 3: Classificação e Encaminhamento ---
@@ -2366,13 +2535,13 @@ class LLMStructuredResultDisplay(ft.Column):
                 self._create_justificativa_icon(self.data.justificativa_assunto_re)
             ], spacing=10), # Ajuste
         ], spacing=12)
-        class_enc_card = CardWithHeader(title="Classificação e Encaminhamento", content=class_enc_card_content, header_bgcolor=ft.Colors.GREY_300)
+        class_enc_card = CardWithHeader(title="Classificação e Encaminhamento", content=class_enc_card_content, header_bgcolor=ft.Colors.GREY_300, width=1640)
         self.controls.append(class_enc_card)
 
         # --- Seção 4: Observações ---
         self.gui_fields["observacoes"] = ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, width=1600)
         obs_card_content = ft.Column([self.gui_fields["observacoes"]], spacing=10)
-        obs_card = CardWithHeader(title="Observações Adicionais", content=obs_card_content, header_bgcolor=ft.Colors.GREY_300)
+        obs_card = CardWithHeader(title="Observações Adicionais", content=obs_card_content, header_bgcolor=ft.Colors.GREY_300, width=1640)
         self.controls.append(obs_card)
 
         if self.page and self.uid:

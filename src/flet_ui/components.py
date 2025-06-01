@@ -15,8 +15,6 @@ logger = LoggerSetup.get_logger(__name__)
 
 ### SnackBar global: ---------------------------------------------------------------------------------------
 
-_global_snackbar_instance: Optional[ft.SnackBar] = None
-
 def show_snackbar(page: ft.Page, message: str, color: str = theme.COLOR_INFO, duration: int = 5000):
     """
     Exibe uma mensagem no SnackBar, adicionando-o temporariamente ao overlay.
@@ -27,35 +25,17 @@ def show_snackbar(page: ft.Page, message: str, color: str = theme.COLOR_INFO, du
         color: A cor de fundo do SnackBar.
         duration: Duração em milissegundos.
     """
-    global _global_snackbar_instance
     
-    # Verifica se o SnackBar global já foi criado e adicionado à página
-    snackbar_added_key = "_global_snackbar_added"
-    
-    # AttributeError: 'Page' object has no attribute 'client_data'
-    if _global_snackbar_instance is None:
-        # Cria a instância global na primeira vez
-        _global_snackbar_instance = ft.SnackBar(
-            content=ft.Text(""),
-            duration=duration,
-            show_close_icon = True, # action="OK" Ou "Fechar"
-            action_color=ft.Colors.WHITE
-        )
-    # Adiciona a instância global ao overlay da página ATUAL
-    # Fazemos isso apenas uma vez por sessão de página (page)
-    if _global_snackbar_instance not in page.overlay:
-        page.overlay.append(_global_snackbar_instance)
-
-    snackbar = _global_snackbar_instance
-    if not snackbar:
+    snackbar_instance = page.data.get("global_snackbar")
+    if not snackbar_instance:
         print("ERRO: Instância global do SnackBar não está definida!")
         return # Sai se algo deu errado
     
     # Abre o SnackBar
-    snackbar.content.value = message
-    snackbar.bgcolor = color
-    snackbar.duration = duration
-    snackbar.open = True
+    snackbar_instance.content.value = message
+    snackbar_instance.bgcolor = color
+    snackbar_instance.duration = duration
+    snackbar_instance.open = True
     #threading.Timer(0.1, page.update).start()
     page.update() # Atualiza para efetivamente mostrar
 
@@ -342,47 +322,28 @@ class DataTableWrapper(ft.Column):
 
 ### LoadingIndicator: ---------------------------------------------------------------------------------------
 
-_loading_overlay_instance: Optional[ft.Container] = None
-_loading_text_instance: Optional[ft.Text] = None
+def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."):   
+    loading_overlay_instance = page.data.get("global_loading_overlay")
+    loading_text_instance = page.data.get("global_loading_text")
 
-def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."):
-    global _loading_overlay_instance, _loading_text_instance
-    if _loading_overlay_instance is None:
-        _loading_text_instance = ft.Text(message, size=16, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER)
-        _loading_overlay_instance = ft.Container(
-            content=ft.Column(
-                [
-                    ft.ProgressRing(),
-                    ft.Container(height=10), # Espaçador
-                    _loading_text_instance,
-                ],
-                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                alignment=ft.MainAxisAlignment.CENTER,
-                tight=True,
-            ),
-            alignment=ft.alignment.center,
-            expand=True, # Ocupa toda a página
-            bgcolor=ft.Colors.with_opacity(0.5, ft.Colors.BLACK), # Fundo semitransparente
-        )
-    
-    _loading_text_instance.value = message # Atualiza a mensagem
-    if _loading_overlay_instance not in page.overlay:
-        page.overlay.append(_loading_overlay_instance)
-    _loading_overlay_instance.visible = True
-    #threading.Timer(0.1, page.update).start()
+    if not isinstance(loading_overlay_instance, ft.Container) or \
+       not isinstance(loading_text_instance, ft.Text):
+        logger.error("show_loading_overlay: Instâncias do LoadingOverlay/Text não encontradas ou inválidas em page.data.")
+        print(f"ERRO INTERNO: LoadingOverlay não encontrado para a página. Mensagem: {message}")
+        return
+
+    loading_text_instance.value = message
+    loading_overlay_instance.visible = True
     page.update()
 
 def hide_loading_overlay(page: ft.Page):
-    global _loading_overlay_instance
-    if _loading_overlay_instance is not None:
-        _loading_overlay_instance.visible = False
-        # Não removemos do overlay para reutilização, apenas escondemos
-        # Se a remoção for desejada, seria:
-        # if _loading_overlay_instance in page.overlay:
-        #     page.overlay.remove(_loading_overlay_instance)
-        # _loading_overlay_instance = None 
-        # _loading_text_instance = None
-        #threading.Timer(0.1, page.update).start()
+    loading_overlay_instance = page.data.get("global_loading_overlay")
+    if not isinstance(loading_overlay_instance, ft.Container):
+        logger.error("hide_loading_overlay: Instância do LoadingOverlay não encontrada ou inválida em page.data.")
+        return
+
+    if loading_overlay_instance.visible: # Só atualiza se estiver visível
+        loading_overlay_instance.visible = False
         page.update()
 
 ### ValidatedTextField: ---------------------------------------------------------------------------------------

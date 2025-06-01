@@ -2,7 +2,7 @@
 
 import flet as ft
 import os
-from src.settings import PATH_IMAGE_LOGO_DEPARTAMENTO
+from src.settings import ASSETS_DIR_ABS, PATH_IMAGE_LOGO_DEPARTAMENTO
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)

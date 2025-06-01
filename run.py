@@ -53,19 +53,25 @@ logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING) # Manter acesso em WARNING
 logging.getLogger("starlette").setLevel(logging.WARNING)
 
-from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS
+from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR 
 from src.utils import register_temp_files_cleanup
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
+    import os
+
     register_temp_files_cleanup(UPLOAD_TEMP_DIR)
+
+    temp_exports_full_path = os.path.join(ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR)
+    os.makedirs(temp_exports_full_path, exist_ok=True) 
+    register_temp_files_cleanup(temp_exports_full_path)
     
     # Configura e inicia a aplicação Flet
     ft.app(
         target=main,                 # Função principal a ser executada
         view=ft.AppView.WEB_BROWSER, # Executa como uma aplicação web no navegador padrão
         port=8550,                   # Porta em que a aplicação será servida (ex: http://localhost:8550)
-        assets_dir=UPLOAD_TEMP_DIR,  # ASSETS_DIR_ABS,         # Descomente se você tiver uma pasta 'assets' na raiz
+        assets_dir=ASSETS_DIR_ABS,   # Descomente se você tiver uma pasta 'assets' na raiz
         upload_dir=UPLOAD_TEMP_DIR
     )
 

@@ -7,7 +7,7 @@ from typing import Union, Optional
 logger = logging.getLogger(__name__)
 
 from src.settings import (PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT, K_PROXY_ENABLED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, 
-                            K_PROXY_PASSWORD, K_PROXY_PASSWORD_SAVED)
+                            K_PROXY_PASSWORD, K_PROXY_PASSWORD_SAVED, ASSETS_DIR_ABS)
 
 import functools, urllib, ssl
 def with_proxy(skip_ssl_verify: bool = True):
@@ -361,7 +361,7 @@ def get_municipios_by_uf(uf):
 
 def update_dict_municipios_local():
     import json
-    file_path = os.path.join('assets', 'dict_municipios.json')
+    file_path = os.path.join(ASSETS_DIR_ABS, 'dict_municipios.json')
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     ufs = get_uf_list()
     dict_municipios = {uf: [] for uf in ufs}
@@ -382,7 +382,7 @@ def update_dict_municipios_local():
 def load_dict_municipios_local():
     try:
         import json
-        file_path = os.path.join('assets', 'dict_municipios.json')
+        file_path = os.path.join(ASSETS_DIR_ABS, 'dict_municipios.json')
         if os.path.exists(file_path):
             with open(file_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
