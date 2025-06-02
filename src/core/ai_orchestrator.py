@@ -18,12 +18,10 @@ from langchain_core.output_parsers import StrOutputParser # Para LCEL
 from langchain_community.callbacks.manager import get_openai_callback
 
 # Imports do Projeto
-from src.services.firebase_client import FirebaseClientFirestore # Para buscar chave criptografada
-from src.services import credentials_manager # Para descriptografar a chave
 from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 from src.core import prompts # Módulo que criamos para os prompts
 import flet as ft # Para obter contexto do usuário da página
-
+from src.utils import timing_decorator
 from src.core.prompts import FormatAnaliseInicial
 
 # Configuração do Logger
@@ -31,35 +29,68 @@ from src.core.prompts import FormatAnaliseInicial
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
 
+def criar_batches(textos, limite_tokens, codificador):
+    batches = []
+    batch_atual = []
+    tokens_batch = 0
 
-def get_api_key_in_firestore(user_token, user_id, provider):
-    firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
-    # O nome do serviço no Firestore precisa corresponder ao que foi salvo na Task 1.3
-    # Assumindo que foi salvo como "openai_api_key" para o provedor "openai"
-    
-    service_name_firestore = f"{provider}" # Ou uma lógica de mapeamento mais robusta
-    logger.debug(f"Buscando chave API criptografada para serviço: {service_name_firestore}")
-    encrypted_key_bytes = firestore_client.get_user_api_key_client(
-        user_token, user_id, service_name_firestore
-    )
+    def contar_tokens(texto, codificador):
+        return len(codificador.encode(texto))
 
-    if not encrypted_key_bytes:
-        logger.error(f"Chave API criptografada para '{service_name_firestore}' não encontrada no Firestore para o usuário {user_id}.")
-        # A UI deve informar o usuário para configurar a chave.
-        return None
+    for texto in textos:
+        tokens_texto = contar_tokens(texto, codificador)
+        if tokens_texto > limite_tokens:
+            continue  # Ignora textos que excedem o limite individual
+        if batch_atual and (tokens_batch + tokens_texto > limite_tokens):
+            batches.append(batch_atual)
+            batch_atual = []
+            tokens_batch = 0
+        
+        batch_atual.append(texto)
+        tokens_batch += tokens_texto
 
-    logger.debug("Descriptografando chave API...")
-    decrypted_api_key = credentials_manager.decrypt(encrypted_key_bytes)
+    if batch_atual:
+        batches.append(batch_atual)
 
-    if not decrypted_api_key:
-        logger.error(f"Falha ao descriptografar a chave API para '{service_name_firestore}' do usuário {user_id}.")
-        # Pode indicar chave de criptografia local ausente ou corrompida.
-        return None
-
-    logger.info(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
-    return decrypted_api_key
+    return batches
 
 client_openai = None
+
+@timing_decorator()
+def get_embeddings_from_api(pages_texts: List[str], model_embedding: str, api_key: str = None) -> Tuple:
+    global client_openai
+    import tiktoken
+    if model_embedding == 'text-embedding-3-small':
+        logger.info('[DEBUG]: Modelo embeddings: text-embedding-3-small')
+        try:
+            os.environ["OPENAI_API_KEY"] = api_key
+            if not client_openai:
+                client_openai = OpenAI()
+            
+            codificador = tiktoken.encoding_for_model("text-embedding-3-small")
+            limite_tokens = 300_000
+
+            batches = criar_batches(pages_texts, limite_tokens, codificador)
+
+            embeddings, total_tokens = [], 0
+            for batch in batches:
+                response = client_openai.embeddings.create(
+                    model=model_embedding,
+                    input=batch,
+                )
+                embeddings.extend([item.embedding for item in response.data])
+                total_tokens += (response.usage.total_tokens)
+            
+            cost_usd = (total_tokens / 1_000_000) * 0.02 # TODO: incluir e buscar de settings or firestore
+            print('\n') 
+            logger.info(f"Consumo de tokens no processamento de embeddings: {total_tokens} ({cost_usd:.4f} USD)  ({cost_usd*6:.4f} BRL)")
+            print('\n')
+        finally:
+            os.environ["OPENAI_API_KEY"] = ""
+    else:
+        raise ValueError(f"Modelo embeddings '{model_embedding}' desconhecido.")
+    
+    return embeddings, total_tokens
 
 # --- Função Principal de Análise ---
 
@@ -70,6 +101,7 @@ def analyze_text_with_llm(
         provider: str = DEFAULT_LLM_PROVIDER,
         model_name: Optional[str] = DEFAULT_LLM_MODEL,
         temperature: float = DEFAULT_TEMPERATURE,
+        api_key: str = None
     ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
     """
     Envia texto processado para um LLM através do LangChain para análise,
@@ -93,55 +125,6 @@ def analyze_text_with_llm(
     global client_openai
 
     logger.info(f"Iniciando análise de texto com LLM. Provider: {provider}, Prompt: {prompt_name}")
-
-    decrypted_api_key: Optional[str] = None # Gera a chave de sessão esperada (deve corresponder à lógica em LLMConfigCard)
-    service_name_firestore = f"{provider}" # Ou uma lógica de mapeamento mais robusta
-    session_key_for_decrypted_api_key = f"decrypted_api_key_{service_name_firestore}"
-
-    # 0. Tenta obter da sessão (cache)
-    if page.session.contains_key(session_key_for_decrypted_api_key):
-        decrypted_api_key = page.session.get(session_key_for_decrypted_api_key)
-        if decrypted_api_key: # Verifica se não é None ou string vazia, se isso for um estado válido
-            logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
-        else: # Chave na sessão mas é None/vazia, indica que não está configurada
-            logger.warning(f"Chave API para '{provider}' está na sessão como vazia/None. Considerada não configurada.")
-            # A UI deveria ter impedido a chamada ou o usuário precisa configurar.
-            # Ou, se uma chave vazia na sessão significa "sem chave", então o comportamento está correto.
-            # Vamos assumir que se está na sessão e não é uma string "válida", é porque não tem.
-            # Se uma chave pode ser explicitamente None na sessão para indicar "não configurado",
-            # a lógica abaixo de buscar no Firestore não seria acionada desnecessariamente.
-            # Para este caso, se está na sessão e é None/vazia, não prosseguimos.
-            if decrypted_api_key is None: # Se foi explicitamente setada como None
-                logger.error(f"Chave API para '{provider}' explicitamente definida como None na sessão. O usuário precisa configurar.")
-                return None, None # Ou mostrar mensagem para configurar
-
-    # 1. Obter Contexto do Usuário e Chave API
-    if not decrypted_api_key: # Se ainda não temos uma chave válida            
-        logger.info(f"Chave API para '{provider}' não encontrada na sessão ou inválida. Tentando carregar do Firestore.")
-
-        user_token = page.session.get("auth_id_token")
-        user_id = page.session.get("auth_user_id")
-
-        if not user_token or not user_id:
-            logger.error("Contexto do usuário (token/ID) não encontrado na sessão Flet. Abortando análise.")
-            # Idealmente, a UI já deveria ter garantido isso, mas é uma salvaguarda.
-            # A UI deve lidar com a ausência de resposta.
-            return None, None
-                    
-        try:
-            decrypted_api_key = get_api_key_in_firestore(user_token, user_id, provider)
-            if not decrypted_api_key:
-                return None, None
-            page.session.set(f"decrypted_api_key_{service_name_firestore}", decrypted_api_key)
-        except Exception as e:
-            logger.error(f"Erro ao obter/descriptografar chave API para '{provider}': {e}", exc_info=True)
-            return None, None
-
-    # Se após todas as tentativas, decrypted_api_key ainda for None ou vazia
-    if not decrypted_api_key:
-        logger.error(f"Chave API para o provedor '{provider}' não está configurada ou não pôde ser obtida.")
-        # A UI deve informar o usuário para configurar a chave.
-        return None, None
     
     # 2. Obter o Prompt (formato de mensagens de chat)
     # Ex: [{"role": "system", "content": "Você é um assistente."}, 
@@ -173,7 +156,7 @@ def analyze_text_with_llm(
             prompt_dicts = modified_prompt_dicts
 
             try:
-                os.environ["OPENAI_API_KEY"] = decrypted_api_key
+                os.environ["OPENAI_API_KEY"] = api_key
                 # Chamada à API de ChatCompletion
                 if not client_openai:
                     client_openai = OpenAI()
@@ -221,7 +204,7 @@ def analyze_text_with_llm(
             llm = ChatOpenAI(
                 model_name=model_name,
                 temperature=temperature,
-                openai_api_key=decrypted_api_key # Passa a chave aqui  
+                openai_api_key=api_key # Passa a chave aqui  
             )
             
             #prompt_template = PromptTemplate(input_variables=["input_text"], template=prompt_string)

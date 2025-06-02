@@ -940,6 +940,7 @@ class CardWithHeader(ft.Card):
         super().__init__(elevation=card_elevation, margin=card_margin, expand=expand, **kwargs)
 
         self.title_text = ft.Text(title, weight=header_title_weight, expand=True) # Título expande para empurrar ações
+        # Define a cor do texto do título com base no tema
         _header_actions_row = ft.Row(spacing=0) # Ações sem muito espaço entre elas
         if header_actions:
             _header_actions_row.controls.extend(header_actions)

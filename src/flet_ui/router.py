@@ -16,7 +16,7 @@ from .views.home_view import create_home_view
 from .views.profile_view import create_profile_view
 from .views.proxy_settings_view import create_proxy_settings_content
 from .views.llm_settings_view import create_llm_settings_view
-from .views.analyze_pdf_view1 import create_analyze_pdf_content
+from .views.nc_analyze_view import create_analyze_pdf_content
 from .views.others_view import create_chat_pdf_content
 
 from src.logger.logger import LoggerSetup

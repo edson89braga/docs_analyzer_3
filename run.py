@@ -90,23 +90,10 @@ Quanto à FLET_SECRET_KEY, na compilação com pyinstaller:
 TODO:
 > Fix: CreateUser: Tratar erro "message": "EMAIL_EXISTS"
 
-> Refinar prompt
-
-> Link de parâmetros:
-    - 6: Provider, Model, embeddings, limit_input, temperatura, prompt_estrutura
-    - 6: Fixos: pdf_ext, lang, token, tfidf, format_output, limit_output
-> Cômputo de custos: embeddings + llm
-
-> Upload de métricas: 11 + files_names + parâmetros json do llm
-> Doc_generator
-
------------------------------------------
-
-> Reorganizar src.settings.py e analyze_pdf_view1.py
-
+------------------------------
 > Upload de acertos
 > formas de feedback
-
+-------
 > Acrescentar casos prometheus
 > Testes de Score sobre multiplas formas de prompt 
 
@@ -114,8 +101,11 @@ TODO:
 
 > Linkar alertas e msgs informativas de responsabilidade no uso de IA
 
+-------
 > revisar sistemática do logging em nuvem
 > pyinstaller e testes na rede
+
+-------
 
 > Tests pdf_processor.py, ai_orchestrator.py, doc_generator.py
 > Test  View: analyze_pdf1

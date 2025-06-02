@@ -3,7 +3,7 @@ import flet as ft
 from src.flet_ui.components import show_snackbar
 from src.flet_ui import theme # Para COLOR_WARNING
 
-from src.flet_ui.views.analyze_pdf_view1 import KEY_SESSION_CURRENT_BATCH_NAME
+from src.flet_ui.views.nc_analyze_view import KEY_SESSION_CURRENT_BATCH_NAME
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
