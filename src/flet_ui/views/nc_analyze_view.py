@@ -507,109 +507,133 @@ class AnalyzePDFViewContent(ft.Column):
         else: # Fallback se o manager não estiver pronto
             primary_upload_action()
 
+    def _initiate_analysis_step(self, 
+                                step_type: str, # "process_only", "analyze_only", "process_and_analyze"
+                                event: Optional[ft.ControlEvent] = None): # Evento original, para logging se necessário
+        
+        _logger.info(f"Iniciando etapa de análise: '{step_type}'")
+
+        # 1. Verificar se há arquivos carregados (necessário para todas as etapas)
+        ordered_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED)
+        if not ordered_files and step_type != "analyze_only": # "analyze_only" pode teoricamente rodar se já processado
+            show_snackbar(self.page, "Nenhum PDF carregado para esta ação.", theme.COLOR_WARNING)
+            _logger.warning(f"Ação '{step_type}' abortada: Nenhum PDF carregado.")
+            return
+        
+        pdf_paths = [f['path'] for f in ordered_files] if ordered_files else []
+        batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
+
+        # 2. Definir a ação primária específica para a etapa
+        primary_action_callable: Optional[Callable[[], None]] = None
+        action_context_name_for_feedback = ""
+
+        if step_type == "process_only":
+            action_context_name_for_feedback = "Processar Arquivos"
+            
+            def primary_process_action():
+                self._files_processed = False 
+                self._analysis_requested = False
+                # Mantemos os metadados de processamento PDF anteriores até que o novo termine.
+                # Limpamos apenas o que é da LLM, pois um novo processamento PDF os invalidaria.
+                self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Invalida LLM anterior
+                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS) # Permite novo feedback
+                self._clear_llm_metadata_display()
+                self._show_info_balloon_or_result(show_balloon=True)
+                self._update_button_states()
+                self.analysis_controller.start_pdf_processing_only(pdf_paths, batch_name)
+            
+            primary_action_callable = primary_process_action
+
+        elif step_type == "analyze_only":
+            action_context_name_for_feedback = "Solicitar Nova Análise"
+            # Esta etapa requer que os arquivos já tenham sido processados
+            if not self._files_processed:
+                show_snackbar(self.page, "Conteúdo dos arquivos ainda não processado. Clique em 'Processar Conteúdo' primeiro.", theme.COLOR_WARNING, duration=5000)
+                _logger.warning("Ação 'analyze_only' abortada: Arquivos não processados.")
+                # Talvez chamar o _initiate_analysis_step("process_and_analyze") aqui?
+                # Por ora, apenas informa o usuário.
+                return # Retorna para o usuário clicar no botão correto.
+
+            def primary_llm_analysis_action():
+                # A lógica de decidir entre pipeline completo ou só LLM está dentro de proceed_with_llm_analysis
+                # do exemplo anterior, que agora será parte de primary_analyze_action.        
+                aggregated_text_info = self.page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
+                if not aggregated_text_info or not aggregated_text_info[1]: # [1] é o texto
+                    show_snackbar(self.page, "Não há texto agregado para análise. Verifique o processamento.", theme.COLOR_ERROR)
+                    return
+                
+                aggregated_text = aggregated_text_info[1]
+                
+                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
+                self._analysis_requested = False 
+                self._update_button_states()
+                self._show_info_balloon_or_result(show_balloon=True)
+                self.analysis_controller.start_llm_analysis_only(aggregated_text, batch_name)
+            
+            primary_action_callable = primary_llm_analysis_action
+
+        elif step_type == "process_and_analyze":
+            action_context_name_for_feedback = "Processar e Solicitar Nova Análise"
+            
+            def primary_full_pipeline_action():
+                self._files_processed = False
+                self._analysis_requested = False
+                self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
+                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
+                # self._clear_llm_metadata_display() # Limpa metadados da LLM anterior
+                # Não limpar _clear_processing_metadata_display() aqui, pois um novo será gerado?
+                self._show_info_balloon_or_result(show_balloon=True)
+                self._update_button_states()
+                self.analysis_controller.start_full_analysis_pipeline(pdf_paths, batch_name)
+            
+            primary_action_callable = primary_full_pipeline_action
+        
+        else:
+            _logger.error(f"Tipo de etapa de análise desconhecido: {step_type}")
+            return
+
+        # 3. Definir o callback "antes da ação" para limpar o estado da LLM anterior, se necessário
+        #    Este callback é chamado se o feedback for CONFIRMADO ou PULADO.
+        def before_primary_action_if_feedback_flow_triggered():
+            # Se estamos prestes a iniciar uma nova análise LLM (direta ou parte do pipeline completo),
+            # ou reprocessar os arquivos (que invalida a análise LLM),
+            # precisamos limpar a resposta LLM anterior.
+            if step_type in ["analyze_only", "process_and_analyze", "process_only"]:
+                self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
+                self._clear_llm_metadata_display()
+                self._show_info_balloon_or_result(show_balloon=True)
+            # A flag de feedback será resetada dentro da primary_action_callable correspondente.
+
+        # 4. Chamar o FeedbackWorkflowManager (se existir e for aplicável)
+        if self.feedback_workflow_manager:
+            self.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name=action_context_name_for_feedback,
+                primary_action_callable=primary_action_callable,
+                allow_return_to_edit=False, # Geralmente False para estas ações
+                on_feedback_confirmed_before_action=before_primary_action_if_feedback_flow_triggered
+            )
+        else:
+            # Se não houver gerenciador de feedback, executa a limpeza e a ação diretamente
+            before_primary_action_if_feedback_flow_triggered() # Garante a limpeza
+            if primary_action_callable:
+                primary_action_callable()
+
     def _handle_process_content_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Processar Conteúdo'."""
         _logger.info("Botão 'Processar Conteúdo' clicado.")
-        ordered_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED)
-        if not ordered_files:
-            show_snackbar(self.page, "Nenhum PDF carregado para processar.", theme.COLOR_WARNING)
-            return
-        
-        pdf_paths = [f['path'] for f in ordered_files]
-        batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
-
-        def primary_process_action():
-            self._files_processed = False 
-            self._analysis_requested = False
-            # Mantemos os metadados de processamento PDF anteriores até que o novo termine.
-            # Limpamos apenas o que é da LLM, pois um novo processamento PDF os invalidaria.
-            self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
-            self._clear_llm_metadata_display()
-            self._show_info_balloon_or_result(show_balloon=True)
-            self._update_button_states()
-            self.analysis_controller.start_pdf_processing_only(pdf_paths, batch_name)
-        
-        if self.feedback_workflow_manager:
-            self.feedback_workflow_manager.request_feedback_and_proceed(
-                action_context_name="Re-Processar Arquivos",
-                primary_action_callable=primary_process_action,
-                allow_return_to_edit=False # Não é sobre a análise LLM, mas sobre os PDFs
-            )
-        else:
-            primary_process_action()
+        self._initiate_analysis_step(step_type="process_only", event=e)
 
     def _handle_analyze_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Solicitar Análise'."""
         _logger.info("Botão 'Solicitar Análise' clicado.")
         if not self._files_processed:
-            self._handle_process_and_analyze(e)
-            #show_snackbar(self.page, "Conteúdo dos arquivos ainda não processado. Clique em 'Processar Conteúdo' primeiro.", theme.COLOR_WARNING, duration=5000)
-            return
-
-        def primary_analyze_action():
-            # A lógica de decidir entre pipeline completo ou só LLM está dentro de proceed_with_llm_analysis
-            # do exemplo anterior, que agora será parte de primary_analyze_action.        
-            aggregated_text_info = self.page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
-            if not aggregated_text_info or not aggregated_text_info[1]:
-                show_snackbar(self.page, "Não há texto agregado para análise.", theme.COLOR_ERROR)
-                return
-            
-            aggregated_text = aggregated_text_info[1]
-            batch_name_local = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
-            
-            self._analysis_requested = False
-            self._update_button_states()
-            self._show_info_balloon_or_result(show_balloon=True)
-            self.analysis_controller.start_llm_analysis_only(aggregated_text, batch_name_local)
-            
-            self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
-
-        if self.feedback_workflow_manager:
-            self.feedback_workflow_manager.request_feedback_and_proceed(
-                action_context_name="Solicitar Nova Análise",
-                primary_action_callable=primary_analyze_action,
-                allow_return_to_edit=False, 
-            )
+            _logger.info("'Solicitar Análise' clicado, mas arquivos não processados. Redirecionando para 'process_and_analyze'.")
+            # Se os arquivos não foram processados, o clique em "Analisar" deve, na verdade,
+            # executar o pipeline completo.
+            self._initiate_analysis_step(step_type="process_and_analyze", event=e)
         else:
-            primary_analyze_action()
-
-    def _handle_process_and_analyze(self, e: ft.ControlEvent):
-        """
-        Handler para iniciar o pipeline completo: processamento de PDF e análise LLM.
-        """
-        ordered_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED)
-        if not ordered_files:
-            show_snackbar(self.page, "Nenhum PDF carregado.", theme.COLOR_WARNING)
-            return
-
-        def primary_analyze_action():
-            pdf_paths = [f['path'] for f in ordered_files]
-            batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
-
-            self._files_processed = False
-            self._analysis_requested = False
-            self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Limpa resultado antigo da LLM
-            self._update_button_states()
-            self._show_info_balloon_or_result(show_balloon=True)
-
-            self.analysis_controller.start_full_analysis_pipeline(pdf_paths, batch_name)
-
-            self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
-        
-        if self.feedback_workflow_manager:
-            self.feedback_workflow_manager.request_feedback_and_proceed(
-                action_context_name="Processar e Solicitar Nova Análise",
-                primary_action_callable=primary_analyze_action,
-                allow_return_to_edit=False, 
-            )
-        else:
-            primary_analyze_action()
-
-    def _handle_prompt_structured_click(self, e: ft.ControlEvent):
-        """Handler para o clique no botão 'Prompt Estruturado'."""
-        _logger.info("Botão 'Prompt Estruturado' clicado.")
-        show_snackbar(self.page, "Visualização do 'Prompt Estruturado' ainda não implementado.", theme.COLOR_WARNING)
-        # TODO: Navegar para a view de prompt estruturado (page.go("/analyze_pdf/prompt_editor")?)
+            # Se os arquivos já foram processados, apenas executa a análise LLM.
+            self._initiate_analysis_step(step_type="analyze_only", event=e)
 
     def _handle_restart_click(self, e: ft.ControlEvent):
         _logger.info("Botão 'Reiniciar' clicado.")
@@ -689,6 +713,12 @@ class AnalyzePDFViewContent(ft.Column):
 
         self.settings_drawer_container.update()
         _logger.info(f"Drawer de configurações {'aberto' if self._is_drawer_open else 'fechado'}.")
+
+    def _handle_prompt_structured_click(self, e: ft.ControlEvent):
+        """Handler para o clique no botão 'Prompt Estruturado'."""
+        _logger.info("Botão 'Prompt Estruturado' clicado.")
+        show_snackbar(self.page, "Visualização do 'Prompt Estruturado' ainda não implementado.", theme.COLOR_WARNING)
+        # TODO: Navegar para a view de prompt estruturado (page.go("/analyze_pdf/prompt_editor")?)
 
     # --- Lógica de Atualização da UI (Métodos Internos) ---
     def _update_button_states(self):
@@ -1030,7 +1060,8 @@ class AnalyzePDFViewContent(ft.Column):
             KEY_SESSION_PDF_ANALYZER_DATA, KEY_SESSION_PDF_CLASSIFIED_INDICES_DATA,
             KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, KEY_SESSION_PDF_LLM_RESPONSE,
             KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA,
-            KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS
+            KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
+            KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL
         ]
         for key in keys_to_clear_from_session:
             self._remove_data_session(key)
@@ -1548,7 +1579,7 @@ class InternalAnalysisController:
             
             # Ajustamos o payload para se assemelhar mais a uma "métrica" para reutilizar a função
             metric_like_feedback_payload = {
-                "event_type": "llm_field_by_field_feedback", # Tipo de evento específico para feedback
+                "event_type": "llm_feedback", # Tipo de evento específico para feedback
                 "timestamp_event": feedback_document_payload["feedback_submission_timestamp"], # Timestamp do feedback
                 "app_version": feedback_document_payload["app_version"],
                 "details": { # Agrupa os dados específicos do feedback
@@ -3202,19 +3233,19 @@ class FeedbackDialog(ft.AlertDialog):
         
         actions.append(
             ft.ElevatedButton(
-                f"Confirmar Avaliação", width=150,
+                f"Confirmar Avaliação", width=150, bgcolor=ft.Colors.GREEN_100, color=ft.Colors.BLACK,
                 on_click=lambda _: self._handle_action_click(FeedbackDialogAction.CONFIRM_AND_CONTINUE),
             )
         )
         actions.append(
             ft.ElevatedButton(
-                "Retornar para Edição", width=150,
+                "Retornar para Edição", width=150, bgcolor=ft.Colors.AMBER_100, color=ft.Colors.BLACK,
                 on_click=lambda _: self._handle_action_click(FeedbackDialogAction.RETURN_TO_EDIT)
             )
         )
         actions.append(
             ft.ElevatedButton(
-                f"Ignorar avaliação", width=150,
+                f"Ignorar avaliação", width=150, bgcolor=ft.Colors.DEEP_ORANGE_100, color=ft.Colors.BLACK,
                 on_click=lambda _: self._handle_action_click(FeedbackDialogAction.SKIP_AND_CONTINUE)
             )
         )
