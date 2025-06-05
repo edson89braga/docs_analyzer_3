@@ -99,6 +99,8 @@ TODO:
 
 > Exibir prompt_estruturado
 
+-------
+> Analisar normativo PF de uso da IA
 > Linkar alertas e msgs informativas de responsabilidade no uso de IA
 
 -------

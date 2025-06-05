@@ -1,6 +1,6 @@
 import os, keyring, logging, re
 from rich import print
-from typing import Union, Optional
+from typing import Union, Optional, List
 
 #from src.logger.logger import LoggerSetup
 #logger = LoggerSetup.get_logger(__name__)
@@ -641,3 +641,82 @@ def format_seconds_to_min_sec(total_segundos):
     segundos = int(total_segundos) % 60
     return f"{minutos:02d}m:{segundos:02d}s"
 
+
+from rouge_score import rouge_scorer
+def calcular_similaridade_rouge_l(texto_original: str, texto_editado: str) -> float:
+    if not texto_original.strip() and not texto_editado.strip():
+        return 1.0 # Ambos vazios, considerados 100% similares
+    if not texto_original.strip() or not texto_editado.strip():
+        return 0.0 # Um vazio e outro não, 0% similares
+
+    scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
+    scores = scorer.score(texto_original, texto_editado)
+    return scores['rougeL'].fmeasure # Usamos o F-score, que é uma média harmônica de precisão e recall
+
+def calcular_similaridade_rouge_l(texto_original: str, texto_editado: str) -> float:
+    """
+    Calcula a similaridade ROUGE-L F-score entre dois textos.
+
+    Args:
+        texto_original (str): O texto original (ex: da LLM).
+        texto_editado (str): O texto modificado pelo usuário.
+
+    Returns:
+        float: O valor F-score do ROUGE-L (entre 0.0 e 1.0).
+               Retorna 1.0 se ambos os textos forem vazios/nulos.
+               Retorna 0.0 se um for vazio/nulo e o outro não.
+    """
+    original_strip = texto_original.strip() if isinstance(texto_original, str) else ""
+    editado_strip = texto_editado.strip() if isinstance(texto_editado, str) else ""
+
+    if not original_strip and not editado_strip:
+        logger.debug("Ambos os textos (original e editado) estão vazios. Similaridade: 1.0")
+        return 1.0
+    if not original_strip or not editado_strip:
+        logger.debug(f"Um dos textos está vazio. Original vazio: {not original_strip}, Editado vazio: {not editado_strip}. Similaridade: 0.0")
+        return 0.0
+
+    try:
+        # Se `use_stemmer=True` for problemático para português, remova-o ou use um tokenizer específico.
+        scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True) 
+        scores = scorer.score(original_strip, editado_strip)
+        fmeasure = scores['rougeL'].fmeasure
+        
+        logger.debug(f"ROUGE-L F-score calculado: {fmeasure:.4f}")
+        return fmeasure
+    except Exception as e:
+        logger.error(f"Erro ao calcular ROUGE-L: {e}", exc_info=True)
+        return 0.0 # Retorna 0 em caso de erro no cálculo
+
+### ----------------------------------------------------------------
+
+def testando_similaridade_rouge_l():
+
+    txt1 = "O sistema solar é composto por oito planetas."
+    txt2 = "O sistema solar é composto por 8 planetas." # Pequena edição
+    txt3 = "A via láctea é uma galáxia espiral." # Texto diferente
+    txt4 = "O sistema solar é composto por oito planetas e diversos corpos celestes." # Adição
+    txt5 = "oito planetas compõem o sistema solar" # Reordenado
+    txt6 = ""
+    txt7 = "O sistema solar é composto por oito planetas."
+
+    txt8 = "Eu ví um homem correr."
+    txt9 = "Eu ví um homem correndo."
+
+    print(f"\nSimilaridade entre '{txt1}' e '{txt2}': {calcular_similaridade_rouge_l(txt1, txt2):.4f}")
+    print(f"\nSimilaridade entre '{txt1}' e '{txt3}': {calcular_similaridade_rouge_l(txt1, txt3):.4f}")
+    print(f"\nSimilaridade entre '{txt1}' e '{txt4}': {calcular_similaridade_rouge_l(txt1, txt4):.4f}")
+    print(f"\nSimilaridade entre '{txt1}' e '{txt5}': {calcular_similaridade_rouge_l(txt1, txt5):.4f}")
+    print(f"\nSimilaridade entre '{txt1}' e '{txt6}': {calcular_similaridade_rouge_l(txt1, txt6):.4f}")
+    print(f"\nSimilaridade entre '{txt6}' e '{txt6}': {calcular_similaridade_rouge_l(txt6, txt6):.4f}")
+    print(f"\nSimilaridade entre '{txt1}' e '{txt7}': {calcular_similaridade_rouge_l(txt1, txt7):.4f}")
+    
+    print(f"\nSimilaridade entre '{txt8}' e '{txt9}': {calcular_similaridade_rouge_l(txt1, txt7):.4f}")
+    
+    # Teste com textos mais longos
+    long_txt_orig = "Este é um exemplo de um texto um pouco mais longo para testar a métrica de similaridade ROUGE-L. Ele contém várias frases e palavras que podem ou não se repetir no texto editado. O objetivo é verificar como a métrica lida com sobreposições parciais e reordenações de conteúdo dentro de um parágrafo ou documento."
+    long_txt_edit_similar = "Este é um exemplo de texto um pouco mais longo para testar a métrica ROUGE-L. Ele contém várias frases e palavras que podem ou não se repetir no texto editado. O objetivo é verificar como a métrica lida com sobreposições parciais e reordenações." # Removeu uma parte, reordenou um pouco
+    long_txt_edit_diferente = "A culinária italiana é conhecida mundialmente por sua diversidade e sabor. Ingredientes frescos como tomate, manjericão e azeite de oliva são fundamentais em muitos pratos. A pizza e a pasta são talvez os exemplos mais famosos, mas cada região da Itália possui suas próprias especialidades e tradições gastronômicas que valem a pena explorar."
+    
+    print(f"\nSimilaridade (longo) entre original e similar: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_similar):.4f}")
+    print(f"\nSimilaridade (longo) entre original e diferente: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_diferente):.4f}")

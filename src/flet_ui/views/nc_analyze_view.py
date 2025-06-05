@@ -1,7 +1,7 @@
 # src/flet_ui/views/analyze_pdf_view1.py
 import flet as ft
 import threading, json, os, shutil
-from typing import Optional, Dict, Any, List, Union, Tuple
+from typing import Optional, Dict, Any, List, Union, Tuple, Callable
 from time import time, sleep
 from datetime import datetime
 from enum import Enum 
@@ -26,7 +26,7 @@ from src.settings import (APP_VERSION , UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEM
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST)
 
 from src.utils import (format_seconds_to_min_sec, obter_string_normalizada, clean_and_convert_to_float, get_sigla_uf, 
-                        LISTA_UFS, MUNICIPIOS_POR_UF)
+                        LISTA_UFS, MUNICIPIOS_POR_UF, calcular_similaridade_rouge_l, unidecode)
 
 from src.core.prompts import (
     FormatAnaliseInicial,
@@ -97,8 +97,10 @@ KEY_SESSION_PDF_ANALYZER_DATA = "apv_pdf_analyzer_data" # Dados processados das 
 KEY_SESSION_PDF_CLASSIFIED_INDICES_DATA = "apv_pdf_classified_indices_data" # (relevant_indices, unintelligible_indices, counts...)
 KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "apv_pdf_aggregated_text_info" # (str_pages, aggregated_text, tokens_antes, tokens_depois)
 KEY_SESSION_PDF_LLM_RESPONSE = "apv_pdf_llm_response"
+KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL = "apv_pdf_llm_response_actual"
 KEY_SESSION_PROCESSING_METADATA = "apv_processing_metadata"
 KEY_SESSION_LLM_METADATA = "apv_llm_metadata"
+KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS = "apv_feedback_collected"
 
 # Constantes para nomes de controles (facilita acesso) CTL = Control
 CTL_UPLOAD_BTN = "upload_button"
@@ -129,6 +131,12 @@ class ExportOperation(Enum):
     NONE = "none"
     SIMPLE_DOCX = "simple_docx"
     TEMPLATE_DOCX = "template_docx"
+
+class FeedbackDialogAction(Enum):
+    CONFIRM_AND_CONTINUE = "confirm_and_continue"
+    RETURN_TO_EDIT = "return_to_edit"
+    SKIP_AND_CONTINUE = "skip_and_continue"
+    CANCELLED_OR_ERROR = "cancelled_or_error" 
 
 class AnalyzePDFViewContent(ft.Column):
     """
@@ -163,7 +171,10 @@ class AnalyzePDFViewContent(ft.Column):
         self._files_processed = False # Indica se o conteúdo dos PDFs foi processado
         self._analysis_requested = False # Indica se a análise LLM foi solicitada/concluída
 
+        self.feedback_workflow_manager: Optional[FeedbackWorkflowManager] = None
+
         self._build_gui_structure()
+        self.feedback_workflow_manager = FeedbackWorkflowManager(self.page, self)
         self._initialize_pickers()  # Deve ser chamado após _build_gui_structure e instanciação dos managers
         self._setup_event_handlers()
         self._restore_state_from_session() # que chama self._update_button_states(), que chama self._update_export_button_menu()
@@ -476,12 +487,25 @@ class AnalyzePDFViewContent(ft.Column):
     def _handle_upload_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Carregar Arquivo(s)'."""
         _logger.info("Botão 'Carregar Arquivo(s)' clicado.")
-        if self.managed_file_picker:
-            threading.Timer(0.1, show_loading_overlay, args=[self.page, "A carregar arquivo(s)..."]).start()
-            self.managed_file_picker.pick_files(allow_multiple=True, dialog_title_override="Selecione PDF(s) para análise")
-            # O hide_loading_overlay será chamado no batch_upload_complete_cb
-        else:
-            show_snackbar(self.page, "Erro: Gerenciador de upload não está pronto.", theme.COLOR_ERROR)
+
+        def primary_upload_action():            
+            if self.managed_file_picker:
+                threading.Timer(0.1, show_loading_overlay, args=[self.page, "A carregar arquivo(s)..."]).start()
+                self.managed_file_picker.pick_files(allow_multiple=True, dialog_title_override="Selecione PDF(s) para análise")
+            else:
+                show_snackbar(self.page, "Erro: Gerenciador de upload não está pronto.", theme.COLOR_ERROR)
+
+        if self.feedback_workflow_manager:
+            self.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Carregar Novos Arquivos",
+                primary_action_callable=primary_upload_action,
+                allow_return_to_edit=False,
+                # Não há necessidade de on_feedback_confirmed_before_action aqui,
+                # pois _clear_all_data_and_gui será chamado dentro da primary_action
+                # após o fluxo de feedback.
+            )
+        else: # Fallback se o manager não estiver pronto
+            primary_upload_action()
 
     def _handle_process_content_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Processar Conteúdo'."""
@@ -494,14 +518,25 @@ class AnalyzePDFViewContent(ft.Column):
         pdf_paths = [f['path'] for f in ordered_files]
         batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
 
-        # Desabilitar botões de processamento
-        self._files_processed = False # Sinaliza que está reprocessando
-        self._analysis_requested = False
-        self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
-        self._update_button_states()
-        self._show_info_balloon_or_result(show_balloon=True)
-
-        self.analysis_controller.start_pdf_processing_only(pdf_paths, batch_name)
+        def primary_process_action():
+            self._files_processed = False 
+            self._analysis_requested = False
+            # Mantemos os metadados de processamento PDF anteriores até que o novo termine.
+            # Limpamos apenas o que é da LLM, pois um novo processamento PDF os invalidaria.
+            self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
+            self._clear_llm_metadata_display()
+            self._show_info_balloon_or_result(show_balloon=True)
+            self._update_button_states()
+            self.analysis_controller.start_pdf_processing_only(pdf_paths, batch_name)
+        
+        if self.feedback_workflow_manager:
+            self.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Re-Processar Arquivos",
+                primary_action_callable=primary_process_action,
+                allow_return_to_edit=False # Não é sobre a análise LLM, mas sobre os PDFs
+            )
+        else:
+            primary_process_action()
 
     def _handle_analyze_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Solicitar Análise'."""
@@ -511,19 +546,32 @@ class AnalyzePDFViewContent(ft.Column):
             #show_snackbar(self.page, "Conteúdo dos arquivos ainda não processado. Clique em 'Processar Conteúdo' primeiro.", theme.COLOR_WARNING, duration=5000)
             return
 
-        aggregated_text_info = self.page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
-        if not aggregated_text_info or not aggregated_text_info[1]: # [1] é o aggregated_text
-            show_snackbar(self.page, "Não há texto agregado para análise. Verifique o processamento.", theme.COLOR_ERROR)
-            return
-        
-        aggregated_text = aggregated_text_info[1]
-        batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
+        def primary_analyze_action():
+            # A lógica de decidir entre pipeline completo ou só LLM está dentro de proceed_with_llm_analysis
+            # do exemplo anterior, que agora será parte de primary_analyze_action.        
+            aggregated_text_info = self.page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
+            if not aggregated_text_info or not aggregated_text_info[1]:
+                show_snackbar(self.page, "Não há texto agregado para análise.", theme.COLOR_ERROR)
+                return
+            
+            aggregated_text = aggregated_text_info[1]
+            batch_name_local = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
+            
+            self._analysis_requested = False
+            self._update_button_states()
+            self._show_info_balloon_or_result(show_balloon=True)
+            self.analysis_controller.start_llm_analysis_only(aggregated_text, batch_name_local)
+            
+            self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
 
-        self._analysis_requested = False # Sinaliza que está reanalisando
-        self._update_button_states()
-        self._show_info_balloon_or_result(show_balloon=True) # Limpa resultado anterior
-
-        self.analysis_controller.start_llm_analysis_only(aggregated_text, batch_name)
+        if self.feedback_workflow_manager:
+            self.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Solicitar Nova Análise",
+                primary_action_callable=primary_analyze_action,
+                allow_return_to_edit=False, 
+            )
+        else:
+            primary_analyze_action()
 
     def _handle_process_and_analyze(self, e: ft.ControlEvent):
         """
@@ -534,16 +582,28 @@ class AnalyzePDFViewContent(ft.Column):
             show_snackbar(self.page, "Nenhum PDF carregado.", theme.COLOR_WARNING)
             return
 
-        pdf_paths = [f['path'] for f in ordered_files]
-        batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
+        def primary_analyze_action():
+            pdf_paths = [f['path'] for f in ordered_files]
+            batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
 
-        self._files_processed = False
-        self._analysis_requested = False
-        self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Limpa resultado antigo da LLM
-        self._update_button_states()
-        self._show_info_balloon_or_result(show_balloon=True)
+            self._files_processed = False
+            self._analysis_requested = False
+            self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Limpa resultado antigo da LLM
+            self._update_button_states()
+            self._show_info_balloon_or_result(show_balloon=True)
 
-        self.analysis_controller.start_full_analysis_pipeline(pdf_paths, batch_name)
+            self.analysis_controller.start_full_analysis_pipeline(pdf_paths, batch_name)
+
+            self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
+        
+        if self.feedback_workflow_manager:
+            self.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Processar e Solicitar Nova Análise",
+                primary_action_callable=primary_analyze_action,
+                allow_return_to_edit=False, 
+            )
+        else:
+            primary_analyze_action()
 
     def _handle_prompt_structured_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Prompt Estruturado'."""
@@ -552,10 +612,20 @@ class AnalyzePDFViewContent(ft.Column):
         # TODO: Navegar para a view de prompt estruturado (page.go("/analyze_pdf/prompt_editor")?)
 
     def _handle_restart_click(self, e: ft.ControlEvent):
-        """Handler para o clique no botão 'Reiniciar Análise'."""
         _logger.info("Botão 'Reiniciar' clicado.")
-        self._clear_all_data_and_gui()
-        show_snackbar(self.page, "Análise reiniciada. Carregue novos arquivos.", theme.COLOR_INFO)
+
+        def primary_restart_action():
+            self._clear_all_data_and_gui()
+            show_snackbar(self.page, "Análise reiniciada. Carregue novos arquivos.", theme.COLOR_INFO)
+
+        if self.feedback_workflow_manager:
+            self.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Reiniciar Análise",
+                primary_action_callable=primary_restart_action,
+                allow_return_to_edit=False
+            )
+        else:
+            primary_restart_action()
 
     def _update_export_button_menu(self):
         """Atualiza os itens do menu do botão de Exportar."""
@@ -915,7 +985,7 @@ class AnalyzePDFViewContent(ft.Column):
         else: # Caso não haja nada na sessão ainda (ex: primeiro carregamento antes de app.py popular)
             self.settings_drawer_manager._load_settings_into_drawer_controls(FALLBACK_ANALYSIS_SETTINGS)
 
-        llm_response_from_session = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
+        llm_response_from_session = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL) or self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
         
         # Determina o tipo de dado para exibir
         data_to_display = None
@@ -959,7 +1029,8 @@ class AnalyzePDFViewContent(ft.Column):
             KEY_SESSION_CURRENT_BATCH_NAME, KEY_SESSION_PDF_FILES_ORDERED,
             KEY_SESSION_PDF_ANALYZER_DATA, KEY_SESSION_PDF_CLASSIFIED_INDICES_DATA,
             KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, KEY_SESSION_PDF_LLM_RESPONSE,
-            KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA
+            KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA,
+            KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS
         ]
         for key in keys_to_clear_from_session:
             self._remove_data_session(key)
@@ -1075,21 +1146,32 @@ class InternalFileListManager:
         """
         current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
         new_index = index + direction
-        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)): return
+        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)): 
+            return
 
-        current_files.insert(new_index, current_files.pop(index))
-        self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
-        self.update_selected_files_display(current_files)
-        self.parent_view._files_processed = False # Requer reprocessamento
-        self.parent_view._analysis_requested = False
-        self.parent_view._update_button_states()
-        self.parent_view._clear_processing_metadata_display()
-        self.parent_view._clear_llm_metadata_display()
-        self.parent_view._show_info_balloon_or_result(show_balloon=True)
-        title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
-        list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
-        self.page.update(title_text, list_view)
-
+        def primary_move_action():
+            current_files.insert(new_index, current_files.pop(index))
+            self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
+            self.update_selected_files_display(current_files)
+            self.parent_view._files_processed = False # Requer reprocessamento
+            self.parent_view._analysis_requested = False
+            self.parent_view._update_button_states()
+            self.parent_view._clear_processing_metadata_display()
+            self.parent_view._clear_llm_metadata_display()
+            self.parent_view._show_info_balloon_or_result(show_balloon=True)
+            title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
+            list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
+            self.page.update(title_text, list_view)
+        
+        if self.parent_view.feedback_workflow_manager:
+            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Reordenar Arquivos",
+                primary_action_callable=primary_move_action,
+                allow_return_to_edit=False
+            )
+        else:
+            primary_move_action()
+        
     def _remove_file_from_list(self, index: int):
         """
         Remove um arquivo da lista de arquivos selecionados.
@@ -1098,28 +1180,39 @@ class InternalFileListManager:
             index: O índice do arquivo a ser removido.
         """
         current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
-        if not (0 <= index < len(current_files)): return
+        if not (0 <= index < len(current_files)): 
+            return
         
-        removed_file_info = current_files.pop(index)
-        self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
-        
-        if self.parent_view.managed_file_picker:
-            self.parent_view.managed_file_picker.clear_upload_state_for_file(removed_file_info['name'])
-        
-        self.update_selected_files_display(current_files)
-        if not current_files: # Se a lista ficou vazia
-            self.parent_view._clear_all_data_and_gui() # Limpa tudo
-        else: # Apenas marca para reprocessar
-            self.parent_view._files_processed = False
-            self.parent_view._analysis_requested = False
-            self.parent_view._clear_processing_metadata_display()
-            self.parent_view._clear_llm_metadata_display()
-            self.parent_view._show_info_balloon_or_result(show_balloon=True)
+        def primary_remove_action():
+            removed_file_info = current_files.pop(index)
+            self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
+            
+            if self.parent_view.managed_file_picker:
+                self.parent_view.managed_file_picker.clear_upload_state_for_file(removed_file_info['name'])
+            
+            self.update_selected_files_display(current_files)
+            if not current_files: # Se a lista ficou vazia
+                self.parent_view._clear_all_data_and_gui() # Limpa tudo
+            else: # Apenas marca para reprocessar
+                self.parent_view._files_processed = False
+                self.parent_view._analysis_requested = False
+                self.parent_view._clear_processing_metadata_display()
+                self.parent_view._clear_llm_metadata_display()
+                self.parent_view._show_info_balloon_or_result(show_balloon=True)
 
-        self.parent_view._update_button_states()
-        title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
-        list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
-        self.page.update(title_text, list_view)
+            self.parent_view._update_button_states()
+            title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
+            list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
+            self.page.update(title_text, list_view)
+
+        if self.parent_view.feedback_workflow_manager:
+            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Remover Arquivo da Lista",
+                primary_action_callable=primary_remove_action,
+                allow_return_to_edit=False
+            )
+        else:
+            primary_remove_action()
 
 class InternalAnalysisController:
     """
@@ -1308,7 +1401,8 @@ class InternalAnalysisController:
             filenames_uploaded = [f.get('name', 'unknown_file') for f in files_ordered_session if isinstance(f, dict)]
 
             # 2. Processing Metadata
-            proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {}
+            # Adicionar o timestamp do evento da LLM para referência no feedback_metric
+            proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {}            
             processing_metadata_to_log = {
                 "total_pages_processed": proc_meta_session.get("total_pages_processed"),
                 "relevant_pages_global_keys_formatted": proc_meta_session.get("relevant_pages_global_keys_formatted"),
@@ -1323,8 +1417,17 @@ class InternalAnalysisController:
                 processing_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0] # Não está sendo salvo o modelo_embedding, por ser único.
                 processing_metadata_to_log["calculated_embedding_cost_usd"] = calculated_embedding_cost_usd
 
+            processing_metadata_to_log = {k: v for k, v in processing_metadata_to_log.items() if v is not None}
+
             # 3. LLM Analysis Metadata           
             llm_meta_session = self.page.session.get(KEY_SESSION_LLM_METADATA) or {}
+
+            event_timestamp_for_llm_analysis = datetime.now().isoformat() # Timestamp desta análise
+            if llm_meta_session: # Salva no objeto que será logado
+                 llm_meta_session["event_timestamp_iso"] = event_timestamp_for_llm_analysis
+                 # Também salva na sessão para que o save_feedback_data_now possa pegar
+                 self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_session)
+
             llm_analysis_metadata_to_log = {
                 "input_tokens": llm_meta_session.get("input_tokens"),
                 "cached_tokens": llm_meta_session.get("cached_tokens"),
@@ -1333,6 +1436,7 @@ class InternalAnalysisController:
                 "llm_provider_used": llm_meta_session.get("llm_provider_used"),
                 "llm_model_used": llm_meta_session.get("llm_model_used"),
                 "processing_time": llm_meta_session.get("processing_time"), # Tempo da LLM
+                "event_timestamp_iso": llm_meta_session.get("event_timestamp_iso"), 
             } 
             
             # Remover chaves com valor None para não poluir o Firestore
@@ -1392,7 +1496,76 @@ class InternalAnalysisController:
 
         except Exception as e:
             _logger.error(f"Erro ao coletar ou enviar métricas da análise: {e}", exc_info=True)
+
+    def save_feedback_data_now(self, feedback_data_list: List[Dict[str, Any]]):
+        """
+        Salva os dados detalhados de feedback do usuário no Firestore como um documento separado,
+        referenciando a análise LLM principal através de um timestamp.
+        """
+        _logger.info("Salvando dados de feedback detalhado do usuário...")
+        try:
+            user_id = self.page.session.get("auth_user_id")
+            user_token = self.page.session.get("auth_id_token")
+
+            if not user_id or not user_token:
+                _logger.error("Não foi possível salvar feedback: usuário não autenticado.")
+                return
+
+            # Tenta obter um timestamp de referência da análise LLM principal, se existir
+            # Este timestamp viria dos metadados da LLM que foram salvos na sessão
+            llm_metadata_session = self.page.session.get(KEY_SESSION_LLM_METADATA)
+            analysis_timestamp_ref = None
+            if llm_metadata_session and isinstance(llm_metadata_session.get("event_timestamp_iso"), str): # Supondo que salvaremos isso
+                analysis_timestamp_ref = llm_metadata_session["event_timestamp_iso"]
+            else:
+                # Fallback: usar o timestamp atual se o da análise não estiver disponível
+                # Isso pode acontecer se o feedback for dado antes de _log_analysis_metrics ser chamado
+                # ou se a estrutura de llm_metadata_session mudar.
+                analysis_timestamp_ref = datetime.now().isoformat()
+                _logger.warning(f"Timestamp de referência da análise principal não encontrado em llm_metadata. Usando timestamp atual para feedback: {analysis_timestamp_ref}")
+
+
+            # Preparar os campos de feedback, removendo valores originais/atuais para tipos específicos
+            processed_feedback_fields = []
+            for field_data in feedback_data_list:
+                field_copy = field_data.copy() # Trabalha com uma cópia
+                tipo_campo = field_copy.get("tipo_campo", "")
+                
+                if tipo_campo in ["textfield_multiline", "textfield_lista"]:
+                    field_copy.pop("valor_original_llm", None)
+                    field_copy.pop("valor_atual_ui", None)
+                field_copy.pop("foi_editado", None)
+                processed_feedback_fields.append(field_copy)
+
+
+            feedback_document_payload = {
+                "analysis_timestamp_ref": analysis_timestamp_ref,
+                "feedback_submission_timestamp": datetime.now().isoformat(),
+                "app_version": APP_VERSION, # Definido em settings.py
+                "related_batch_name": self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "N/A",
+                "feedback_fields_details": processed_feedback_fields # Lista de dicts
+            }
             
+            # Ajustamos o payload para se assemelhar mais a uma "métrica" para reutilizar a função
+            metric_like_feedback_payload = {
+                "event_type": "llm_field_by_field_feedback", # Tipo de evento específico para feedback
+                "timestamp_event": feedback_document_payload["feedback_submission_timestamp"], # Timestamp do feedback
+                "app_version": feedback_document_payload["app_version"],
+                "details": { # Agrupa os dados específicos do feedback
+                    "analysis_timestamp_ref": feedback_document_payload["analysis_timestamp_ref"],
+                    "related_batch_name": feedback_document_payload["related_batch_name"],
+                    "feedback_fields": feedback_document_payload["feedback_fields_details"]
+                }
+            }
+
+            if self.firestore_client_for_metrics.save_metrics_client(user_token, user_id, metric_like_feedback_payload):
+                _logger.info("Dados de feedback detalhado salvos com sucesso no Firestore.")
+                self.page.session.set(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, True) # FB-5.4
+            else:
+                _logger.error("Falha ao salvar dados de feedback detalhado no Firestore.")
+        except Exception as e:
+            _logger.error(f"Erro ao salvar dados de feedback detalhado: {e}", exc_info=True)
+
     def _get_current_analysis_settings(self) -> Dict[str, Any]:
         """Busca as configurações de análise atuais da sessão."""
         settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
@@ -1786,7 +1959,8 @@ class InternalExportManager:
                         ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)
                     ], tight=True),
                     confirm_text="OK", cancel_text=None)
-        else: show_snackbar(self.page, "Falha ao exportar arquivo DOCX.", theme.COLOR_ERROR)
+        else: 
+            show_snackbar(self.page, "Falha ao exportar arquivo DOCX.", theme.COLOR_ERROR)
 
     def start_export(self, operation_type: ExportOperation, data_to_export: FormatAnaliseInicial, template_path: Optional[str] = None):
         """
@@ -1892,91 +2066,6 @@ class InternalExportManager:
                 self.desktop_picker_operation = ExportOperation.NONE
                 self.desktop_picker_template_path = None
                 self.current_data_for_export_obj  = None
-
-    def handle_export_selected(self, e: ft.ControlEvent):
-        """
-        Handler para a seleção de um item no menu do botão de Exportar.
-
-        Args:
-            e: O evento do controle.
-        """
-        selected_action_data = e.control.data
-        current_data_for_export: Optional[FormatAnaliseInicial] = None
-        invalid_field_details: List[Tuple[str, Optional[ft.Control]]] = []
-
-        if selected_action_data != "manage_templates":
-            structured_display_ctrl = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY) # Acesso via parent_view
-            if not isinstance(structured_display_ctrl, LLMStructuredResultDisplay):
-                show_snackbar(self.page, "Erro: Display de resultados não operacional.", theme.COLOR_ERROR)
-                return
-            
-            validation_result = structured_display_ctrl.get_current_form_data(validate_for_export=True)
-            
-            if isinstance(validation_result, FormatAnaliseInicial): 
-                current_data_for_export = validation_result
-            elif isinstance(validation_result, list): 
-                invalid_field_details = validation_result
-            
-            if invalid_field_details or not current_data_for_export:
-                if invalid_field_details:
-                    first_error_tuple = invalid_field_details[0]
-                    if first_error_tuple[0].startswith("pydantic_validation_error") or first_error_tuple[0].startswith("internal_form_data_error"):
-                        error_msg_detail = "Verifique os campos e tente novamente." if "pydantic" in first_error_tuple[0] else "Tente recarregar os dados."
-                        show_snackbar(self.page, f"Erro de validação nos dados do formulário. {error_msg_detail}", theme.COLOR_ERROR, duration=5000)
-                        return
-                    
-                    error_messages = []
-                    first_invalid_ctrl: Optional[ft.Control] = None
-                    for field_name, control_instance in invalid_field_details:
-                        friendly_field_name = field_name.replace("_", " ").title()
-                        error_messages.append(f"- {friendly_field_name}")
-                        if control_instance and not first_invalid_ctrl: 
-                            first_invalid_ctrl = control_instance
-                    if error_messages:
-                        dialog_content_controls_list = [ft.Text("Os seguintes campos obrigatórios precisam ser preenchidos antes da exportação:")]
-                        for msg_item in error_messages: dialog_content_controls_list.append(ft.Text(msg_item))
-                        show_confirmation_dialog(
-                            page=self.page, title="Campos Obrigatórios Pendentes",
-                            content=ft.Column(dialog_content_controls_list, tight=True, spacing=5),
-                            confirm_text="OK", cancel_text=None,
-                            on_confirm= lambda: first_invalid_ctrl.focus() if first_invalid_ctrl and hasattr(first_invalid_ctrl, 'focus') else None)
-                elif not current_data_for_export: 
-                    show_snackbar(self.page, "Dados de análise inválidos.", theme.COLOR_ERROR)
-                return
-        
-        operation: Optional[ExportOperation] = None
-        template_p: Optional[str] = None
-
-        if selected_action_data == "export_simple_docx": 
-            operation = ExportOperation.SIMPLE_DOCX
-        elif selected_action_data and selected_action_data.startswith("export_template_"):
-            operation = ExportOperation.TEMPLATE_DOCX
-            template_p = selected_action_data[len("export_template_"):]
-        elif selected_action_data == "manage_templates": 
-            self.handle_add_new_template_click()
-            self.parent_view._update_button_states()
-            return
-        else:
-            _logger.warning(f"Ação exportação desconhecida: {selected_action_data}")
-            self.parent_view._update_button_states()
-            return
-
-        if not operation or (operation == ExportOperation.TEMPLATE_DOCX and not template_p) or not current_data_for_export:
-            self.parent_view._update_button_states()
-            return
-        
-        self.current_data_for_export_obj = current_data_for_export # Armazena para o timer desktop
-        
-        if self.page.web: 
-            self.start_export(operation, current_data_for_export, template_p)
-        else:
-            def desktop_export_action(): 
-                self.start_export(operation, self.current_data_for_export_obj, template_p) # type: ignore
-            
-            self.page.update()
-            threading.Timer(0.2, desktop_export_action).start()
-
-        self.parent_view._update_button_states()
 
     def handle_add_new_template_click(self):
         """Handler para o clique no item 'Adicionar Novo Template'."""
@@ -2108,6 +2197,110 @@ class InternalExportManager:
                     os.remove(source_path)
                 except OSError as er: 
                     _logger.warning(f"Não remover temp template '{source_path}': {er}")
+
+    def _trigger_feedback_and_export(self, export_operation: ExportOperation, template_path: Optional[str]): # Removido data_to_export
+        _logger.info(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
+
+        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+        if not isinstance(llm_display_component, LLMStructuredResultDisplay):
+            _logger.error("ExportManager: LLMStructuredResultDisplay não encontrado.")
+            show_snackbar(self.page, "Erro interno: Display de resultados não operacional.", theme.COLOR_ERROR)
+            return
+
+        # Garante que os dados da UI sejam validados E obtidos.
+        # A validação para exportação acontece aqui, antes do diálogo de feedback.
+        data_to_export_or_errors = llm_display_component.get_current_form_data(validate_for_export=True)
+
+        if isinstance(data_to_export_or_errors, list):
+            first_error_tuple = data_to_export_or_errors[0]
+            if first_error_tuple[0].startswith("pydantic_validation_error") or first_error_tuple[0].startswith("internal_form_data_error"):
+                error_msg_detail = "Verifique os campos e tente novamente." if "pydantic" in first_error_tuple[0] else "Tente recarregar os dados."
+                show_snackbar(self.page, f"Erro de validação nos dados do formulário. {error_msg_detail}", theme.COLOR_ERROR, duration=5000)
+                return
+            
+            error_messages = []
+            first_invalid_ctrl: Optional[ft.Control] = None
+            for field_name, control_instance in data_to_export_or_errors:
+                friendly_field_name = field_name.replace("_", " ").title()
+                error_messages.append(f"- {friendly_field_name}")
+                if control_instance and not first_invalid_ctrl: 
+                    first_invalid_ctrl = control_instance
+            if error_messages:
+                dialog_content_controls_list = [ft.Text("Os seguintes campos obrigatórios precisam ser preenchidos antes da exportação:")]
+                for msg_item in error_messages: dialog_content_controls_list.append(ft.Text(msg_item))
+                show_confirmation_dialog(
+                    page=self.page, title="Campos Obrigatórios Pendentes",
+                    content=ft.Column(dialog_content_controls_list, tight=True, spacing=5),
+                    confirm_text="OK", cancel_text=None,
+                    on_confirm= lambda: first_invalid_ctrl.focus() if first_invalid_ctrl and hasattr(first_invalid_ctrl, 'focus') else None)
+                return
+        elif not data_to_export_or_errors: 
+            show_snackbar(self.page, "Dados de análise inválidos.", theme.COLOR_ERROR)
+            return
+
+        if not isinstance(data_to_export_or_errors, FormatAnaliseInicial):
+            # Se não for FormatAnaliseInicial, é uma lista de erros ou None.
+            # A mensagem de erro/validação já foi tratada por get_current_form_data ou será por handle_export_selected
+            _logger.warning("ExportManager: Dados do formulário inválidos para exportação. Exportação abortada antes do feedback.")
+            # O handle_export_selected que chamou este método deve ter mostrado o snackbar de validação.
+            return # Aborta
+
+        # Se chegou aqui, data_to_export_or_errors é um objeto FormatAnaliseInicial válido
+        current_data_for_export = data_to_export_or_errors
+
+        def primary_export_action():
+            self.start_export(export_operation, current_data_for_export, template_path)
+        
+        # `feedback_workflow_manager` é acessado via `self.parent_view`
+        if self.parent_view.feedback_workflow_manager:
+            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Exportar Análise",
+                primary_action_callable=primary_export_action,
+                allow_return_to_edit=True # Permite voltar para editar antes de exportar
+            )
+        else: # Fallback se o manager não estiver pronto
+            primary_export_action()
+
+    def handle_export_selected(self, e: ft.ControlEvent):
+        """
+        Handler para a seleção de um item no menu do botão de Exportar.
+
+        Args:
+            e: O evento do controle.
+        """
+        _logger.info(f"ExportManager: Item de exportação selecionado - Data: {e.control.data}")
+        selected_action_data = e.control.data
+        
+        # current_data_for_export será validado e obtido dentro de _trigger_feedback_and_export
+        # pelo llm_display_component.get_current_form_data(validate_for_export=True)
+            
+        operation: Optional[ExportOperation] = None
+        template_p: Optional[str] = None
+
+        if selected_action_data == "export_simple_docx": 
+            operation = ExportOperation.SIMPLE_DOCX
+        elif selected_action_data and selected_action_data.startswith("export_template_"):
+            operation = ExportOperation.TEMPLATE_DOCX
+            template_p = selected_action_data[len("export_template_"):]
+        elif selected_action_data == "manage_templates": 
+            self.handle_add_new_template_click()
+            self.parent_view._update_button_states()
+            return
+        else:
+            _logger.warning(f"Ação de exportação desconhecida: {selected_action_data}")
+            self.parent_view._update_button_states()
+            return
+
+        if not operation: # Se a operação não foi definida (ex: manage_templates já retornou)
+            self.parent_view._update_button_states()
+            return
+            
+        # A validação e obtenção dos dados, bem como o disparo do diálogo de feedback,
+        # são agora responsabilidade de _trigger_feedback_and_export.
+        # Se a validação em _trigger_feedback_and_export falhar (get_current_form_data retornar lista de erros),
+        # a exportação não prosseguirá.
+        self._trigger_feedback_and_export(operation, template_p) # Passa template_p
+        self.parent_view._update_button_states() # Garante que os botões estejam corretos após a ação
 
 class SettingsDrawerManager:
     """
@@ -2482,6 +2675,7 @@ class LLMStructuredResultDisplay(ft.Column):
         )
         self.page = page
         self.data: Optional[FormatAnaliseInicial] = None
+        self.original_llm_data_snapshot: Optional[FormatAnaliseInicial] = None
         self.gui_fields: Dict[str, ft.Control] = {}
 
         # Referências para controles que precisam ser atualizados dinamicamente (ex: municípios)
@@ -2566,6 +2760,17 @@ class LLMStructuredResultDisplay(ft.Column):
         Args:
             data: O objeto FormatAnaliseInicial contendo os dados a serem exibidos.
         """
+        # data aqui é o objeto FormatAnaliseInicial como recebido (após parsing inicial da resposta da LLM)
+        if not data:
+            self.original_llm_data_snapshot = None
+            _logger.warning("update_data chamado com data=None. Snapshot original não será definido.")
+        elif not self.original_llm_data_snapshot or self.original_llm_data_snapshot != data: 
+
+            self.original_llm_data_snapshot = data.model_copy(deep=True)
+            _logger.info("Snapshot dos dados originais da LLM capturado em LLMStructuredResultDisplay.")
+        else:
+            _logger.info("update_data: 'data' recebido é o mesmo que o snapshot original existente. Snapshot mantido.")
+
         self.data = data # Armazena os dados originais/base
         self.controls.clear()
         self.gui_fields.clear() # Limpa referências de campos antigos
@@ -2585,25 +2790,26 @@ class LLMStructuredResultDisplay(ft.Column):
         self.gui_fields["descricao_geral"] = ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, width=1600)
         self.gui_fields["tipo_documento_origem"] = ft.Dropdown(label="Tipo Documento Origem", 
                                                                options=[ft.dropdown.Option(td) for td in tipos_doc], 
-                                                               value=self.data.tipo_documento_origem if self.data.tipo_documento_origem in tipos_doc else None, 
+                                                               value=self.data.tipo_documento_origem if self.data.tipo_documento_origem in tipos_doc else "", 
                                                                width=400, dense=True)
         self.gui_fields["orgao_origem"] = ft.Dropdown(label="Órgão de Origem", 
                                                       options=[ft.dropdown.Option(oo) for oo in origens_doc], 
-                                                      value=self.data.orgao_origem if self.data.orgao_origem in origens_doc else None, 
+                                                      value=self.data.orgao_origem if self.data.orgao_origem in origens_doc else "", 
                                                       width=530, dense=True) # Removido expand=True
 
         self.dropdown_uf_origem = ft.Dropdown(
             label="UF de Origem", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
-            value=self.data.uf_origem if self.data.uf_origem in self.ufs_list else None,
+            value=self.data.uf_origem if self.data.uf_origem in self.ufs_list else "",
             on_change=self._atualizar_municipios_origem, width=170, dense=True
         )
         self.gui_fields["uf_origem"] = self.dropdown_uf_origem # Adiciona ao ui_fields
 
         municipios_origem_init = MUNICIPIOS_POR_UF.get(self.data.uf_origem, []) if self.data.uf_origem else []
+        municipio_origem = obter_string_normalizada(self.data.municipio_origem, municipios_origem_init)
         self.dropdown_municipio_origem = ft.Dropdown(
             label="Município de Origem",
             options=[ft.dropdown.Option(m) for m in municipios_origem_init],
-            value=obter_string_normalizada(self.data.municipio_origem, municipios_origem_init),
+            value=municipio_origem if municipio_origem else "",
             dense=True, width=320, # Removido expand=True
         )
         self.gui_fields["municipio_origem"] = self.dropdown_municipio_origem
@@ -2632,16 +2838,17 @@ class LLMStructuredResultDisplay(ft.Column):
         
         self.dropdown_uf_fato = ft.Dropdown(
             label="UF do Fato", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
-            value=self.data.uf_fato if self.data.uf_fato in self.ufs_list else None,
+            value=self.data.uf_fato if self.data.uf_fato in self.ufs_list else "",
             on_change=self._atualizar_municipios_fato, width=170, dense=True
         )
         self.gui_fields["uf_fato"] = self.dropdown_uf_fato
 
         municipios_fato_init = MUNICIPIOS_POR_UF.get(self.data.uf_fato, []) if self.data.uf_fato else []
+        municipio_fato = obter_string_normalizada(self.data.municipio_fato, municipios_fato_init)
         self.dropdown_municipio_fato = ft.Dropdown(
             label="Município do Fato",
             options=[ft.dropdown.Option(m) for m in municipios_fato_init],
-            value=obter_string_normalizada(self.data.municipio_fato, municipios_fato_init),
+            value=municipio_fato if municipio_fato else "",
             dense=True, width=320, # Removido expand=True
         )
         self.gui_fields["municipio_fato"] = self.dropdown_municipio_fato
@@ -2649,7 +2856,7 @@ class LLMStructuredResultDisplay(ft.Column):
 
         self.gui_fields["tipo_local"] = ft.Dropdown(label="Tipo de Local", 
                                                     options=[ft.dropdown.Option(tl) for tl in tipos_locais], 
-                                                    value=self.data.tipo_local if self.data.tipo_local in tipos_locais else None, 
+                                                    value=self.data.tipo_local if self.data.tipo_local in tipos_locais else "", 
                                                     width=480, dense=True) # expand=True
         
         valor_apuracao_str = f"{self.data.valor_apuracao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(self.data.valor_apuracao, float) else str(self.data.valor_apuracao)
@@ -2677,17 +2884,17 @@ class LLMStructuredResultDisplay(ft.Column):
 
         # --- Seção 3: Classificação e Encaminhamento ---
         self.gui_fields["area_atribuicao"] = ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição], 
-                                                         value=self.data.area_atribuicao if self.data.area_atribuicao in areas_de_atribuição else None, 
+                                                         value=self.data.area_atribuicao if self.data.area_atribuicao in areas_de_atribuição else "", 
                                                          width=660, dense=True)
         self.gui_fields["tipificacao_penal"] = ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=840, dense=True)
         self.gui_fields["destinacao"] = ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas], 
-                                                    value=self.data.destinacao if self.data.destinacao in destinacoes_completas else None, 
+                                                    value=self.data.destinacao if self.data.destinacao in destinacoes_completas else "", 
                                                     width=250, dense=True)
         self.gui_fields["tipo_a_autuar"] = ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipo_a_autuar], 
-                                                       value=self.data.tipo_a_autuar if self.data.tipo_a_autuar in tipo_a_autuar else None, 
+                                                       value=self.data.tipo_a_autuar if self.data.tipo_a_autuar in tipo_a_autuar else "", 
                                                        width=350, dense=True)
         self.gui_fields["assunto_re"] = ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re], 
-                                                    value=self.data.assunto_re if self.data.assunto_re in assuntos_re else None, 
+                                                    value=self.data.assunto_re if self.data.assunto_re in assuntos_re else "", 
                                                     width=840, dense=True)
 
         class_enc_card_content = ft.Column([
@@ -2774,7 +2981,6 @@ class LLMStructuredResultDisplay(ft.Column):
                     _logger.warning(f"Campo obrigatório '{field_name}' está vazio. Valor atual: '{value}'")
                     invalid_fields_for_export.append((field_name, control))
 
-
             # Tratamentos específicos de tipo (continua como antes)
             if field_name == "valor_apuracao":
                 value = clean_and_convert_to_float(value)
@@ -2789,22 +2995,42 @@ class LLMStructuredResultDisplay(ft.Column):
             return invalid_fields_for_export 
 
         # Se passou na validação (ou não foi solicitada), prossiga para criar o objeto
-        final_data_for_pydantic = {}
-        if self.data:
-            final_data_for_pydantic = self.data.model_dump()
+        # final_data_for_pydantic = {}
+        # if self.data:
+        #    final_data_for_pydantic = self.data.model_dump()
+        
+        # Começa com uma cópia do snapshot original para pegar as justificativas e outros campos não na UI
+        if self.original_llm_data_snapshot:
+            final_data_for_pydantic = self.original_llm_data_snapshot.model_dump()
+        else: # Fallback se original_llm_data_snapshot for None (não deveria acontecer se update_data foi chamado com dados)
+            final_data_for_pydantic = {}
+
         final_data_for_pydantic.update(collected_values_from_ui)
 
         for pydantic_field_name in FormatAnaliseInicial.model_fields.keys():
+            # Se não foi coletado da UI e não estava no snapshot original (improvável para campos principais),
+            # pegue o valor default do modelo Pydantic se existir, ou defina como None.
+            # O model_dump() do snapshot já cuida disso.
+            # Essa parte é mais para garantir que não haja chaves ausentes se a lógica mudar.
             if pydantic_field_name not in final_data_for_pydantic:
-                if hasattr(self.data, pydantic_field_name):
-                    final_data_for_pydantic[pydantic_field_name] = getattr(self.data, pydantic_field_name)
-        
+                #if hasattr(self.data, pydantic_field_name):
+                #    final_data_for_pydantic[pydantic_field_name] = getattr(self.data, pydantic_field_name)
+                if hasattr(self.original_llm_data_snapshot, pydantic_field_name) and self.original_llm_data_snapshot:
+                     final_data_for_pydantic[pydantic_field_name] = getattr(self.original_llm_data_snapshot, pydantic_field_name)
+                elif FormatAnaliseInicial.model_fields[pydantic_field_name].default is not Ellipsis: # type: ignore
+                     final_data_for_pydantic[pydantic_field_name] = FormatAnaliseInicial.model_fields[pydantic_field_name].default
+                else:
+                     final_data_for_pydantic[pydantic_field_name] = None
         try:
             _logger.debug(f"Dados para instanciar FormatAnaliseInicial: {final_data_for_pydantic}")
-            current_ui_data = FormatAnaliseInicial(**final_data_for_pydantic)
-            self.data = current_ui_data 
+            current_ui_data_as_pydantic  = FormatAnaliseInicial(**final_data_for_pydantic)
+
+            self.data = current_ui_data_as_pydantic  # Atualiza o self.data da instância com os dados atuais da UI, já validados por Pydantic
             _logger.info("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
-            self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, self.data)
+
+            # Atualiza também a sessão com a representação mais recente (objeto Pydantic)
+            self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL, self.data)
+            _logger.info("KEY_SESSION_PDF_LLM_RESPONSE atualizado na sessão com os dados da UI.")
             return self.data
         except Exception as pydantic_error: # Use ValidationError de Pydantic se importado
             _logger.error(f"Erro de validação Pydantic FINAL ao criar FormatAnaliseInicial: {pydantic_error}", exc_info=False)
@@ -2816,7 +3042,446 @@ class LLMStructuredResultDisplay(ft.Column):
             if validate_for_export:
                 return [("pydantic_validation_error_final", None)] 
             return None
+
+    def _get_field_type_for_feedback(self, field_name: str) -> str:
+        """Retorna o tipo do campo para categorização no feedback."""
+        # Mapeamento simplificado, pode ser expandido
+        if field_name in ["descricao_geral", "resumo_fato", "tipificacao_penal", "observacoes"]:
+            return "textfield_multiline"
+        elif field_name == "valor_apuracao":
+            return "textfield_valor"
+        elif field_name in ["pessoas_envolvidas", "linha_do_tempo"]:
+            return "textfield_lista" # Representa uma lista, mas editado como multiline
+        elif self.gui_fields.get(field_name) and isinstance(self.gui_fields[field_name], ft.Dropdown):
+            return "dropdown"
+        # Adicionar outros tipos se necessário (radio, checkbox etc.)
+        return "textfield" # Default
     
+class FeedbackDialog(ft.AlertDialog):
+    """
+    Diálogo para coletar feedback do usuário sobre a precisão da análise da LLM.
+    """
+    def __init__(
+        self,
+        page_ref: ft.Page,
+        fields_feedback_data: List[Dict[str, Any]],
+        # Callback que será chamado com uma instância de FeedbackDialogAction
+        on_close_callback: Callable[[FeedbackDialogAction], None],
+        allow_return_to_edit: bool = True # Se o botão "Retornar para Edição" deve ser mostrado
+    ):
+        """
+        Inicializa o diálogo de feedback.
+
+        Args:
+            page_ref: Referência à página Flet.
+            fields_feedback_data: Lista de dicionários, cada um contendo:
+                - "nome_campo" (str): Nome interno do campo.
+                - "label_campo" (str): Nome amigável do campo para exibição.
+                - "valor_original_llm" (Any): Valor original da LLM.
+                - "valor_atual_ui" (Any): Valor atual na UI (editado ou não).
+                - "foi_editado" (bool): True se o campo foi editado.
+                - "tipo_campo" (str): Tipo do campo (ex: "textfield_multiline", "dropdown").
+            on_close_callback: Função a ser chamada quando o diálogo for fechado por uma ação.
+            action_context_name: Texto para o botão principal (ex: "Exportar", "Reiniciar").
+            allow_return_to_edit: Controla a visibilidade do botão "Retornar para Edição".
+        """
+        super().__init__(
+            modal=True,
+            title=ft.Text("Avaliação de Precisão da IA Assistente", weight=ft.FontWeight.BOLD, size=20),
+            # O conteúdo será construído dinamicamente
+            content=ft.Text("Carregando conteúdo do feedback..."),
+            actions_alignment=ft.MainAxisAlignment.CENTER,
+            # As actions também serão definidas dinamicamente
+        )
+        self.page_ref = page_ref
+        self.fields_feedback_data = fields_feedback_data
+        self.on_close_callback = on_close_callback
+        self.allow_return_to_edit = allow_return_to_edit
+
+        self.open = False # Controla a visibilidade
+
+        # FB-3.3: Construir dinamicamente o conteúdo do diálogo
+        self._build_dialog_content()
+        # FB-3.4: Implementar os botões de ação
+        self._build_dialog_actions()
+
+    def _build_dialog_content(self):
+        _logger.debug(f"FeedbackDialog: Construindo conteúdo com {len(self.fields_feedback_data)} campos.")
+        
+        intro_text = ft.Text(
+            "Sua avaliação é importante para aprimorar a ferramenta.\n"
+            "Revise os resultados abaixo.",
+            size=14,
+            italic=True,
+            color=ft.colors.ON_SURFACE # ft.colors.with_opacity(0.8, ft.colors.ON_SURFACE)
+        )
+
+        nao_editados_controls: List[ft.Control] = []
+        editados_controls: List[ft.Control] = []
+
+        for field_data in self.fields_feedback_data:
+            nome_campo = field_data.get("nome_campo", "Desconhecido")
+            label_campo = field_data.get("label_campo", nome_campo.replace("_", " ").title())
+            foi_editado = field_data.get("foi_editado", False)
+            tipo_campo = field_data.get("tipo_campo", "textfield")
+
+            if not foi_editado:
+                nao_editados_controls.append(
+                    ft.Row(
+                        [
+                            ft.Icon(ft.icons.CHECK_CIRCLE_OUTLINE, color=theme.COLOR_SUCCESS, size=18),
+                            ft.Text(label_campo, weight=ft.FontWeight.NORMAL, size=13, expand=True),
+                            #ft.Text("(Não Editado)", italic=True, color=ft.colors.with_opacity(0.7, ft.colors.ON_SURFACE), size=11)
+                        ],
+                        spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER
+                    )
+                )
+            else: # Foi editado
+                status_text = ""
+                status_color = ft.Colors.ORANGE_900 # Padrão para editado
+                icon_name = ft.icons.EDIT_NOTE_ROUNDED
+
+                if tipo_campo in ["textfield_multiline", "textfield_lista", "textfield"]:
+                    valor_original = str(field_data.get("valor_original_llm", ""))
+                    valor_atual = str(field_data.get("valor_atual_ui", ""))
+                    
+                    # calcula também similaridade para campos de lista representados como textfield 
+                    # if tipo_campo not in ["textfield_lista"]:
+                    similaridade = calcular_similaridade_rouge_l(valor_original, valor_atual)
+                    status_text = f"(Editado - Aproveitamento: {similaridade:.0%})" # Similaridade ROUGE-L
+                    #if similaridade > 0.85: # Exemplo de limite para "quase igual"
+                    #    icon_name = ft.icons.EDIT_ROUNDED # Um pouco menos "alerta"
+                    #    status_color = ft.colors.with_opacity(0.8, theme.COLOR_WARNING)
+
+                elif tipo_campo in ["dropdown", "radio_button", "textfield_valor"]: # Campos de valor único
+                    status_text = "(Alterada resposta)" # Corrigido pelo Usuário
+                    icon_name = ft.icons.SWAP_HORIZ_ROUNDED
+                    status_color = ft.Colors.RED_600
+                elif tipo_campo == "checkbox": # Campos de múltipla escolha
+                    # Lógica de comparação para checkboxes (ex: Jaccard ou contagem)
+                    # Por agora, uma mensagem genérica: # TODO
+                    status_text = "(Editado - Seleção Modificada)"
+                    icon_name = ft.icons.RULE_ROUNDED
+                
+                editados_controls.append(
+                    ft.Row(
+                        [
+                            ft.Icon(icon_name, color=status_color, size=18),
+                            ft.Text(label_campo, weight=ft.FontWeight.NORMAL, size=13, expand=True),
+                            ft.Text(status_text, italic=True, color=status_color, size=13)
+                        ],
+                        spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER
+                    )
+                )
+        
+        # Montar seções
+        sections: List[ft.Control] = [intro_text, ft.Divider(height=10)]
+
+        if nao_editados_controls:
+            sections.append(ft.Text("Respostas da IA consideradas Corretas (Sem edição):", weight=ft.FontWeight.BOLD, size=14))
+            sections.append(ft.Column(nao_editados_controls, spacing=5))
+            sections.append(ft.Divider(height=8))
+        
+        if editados_controls:
+            sections.append(ft.Text("Itens Corrigidos ou Complementados por Você:", weight=ft.FontWeight.BOLD, size=14))
+            sections.append(ft.Column(editados_controls, spacing=5))
+            sections.append(ft.Divider(height=8))
+        
+        if not nao_editados_controls and not editados_controls:
+            sections.append(ft.Text("Nenhum campo para avaliação /ou/ Dados de feedback ausentes.", italic=True))
+
+        self.content = ft.Container(
+            content=ft.Column(sections, spacing=10, scroll=ft.ScrollMode.ADAPTIVE),
+            width=450, # Largura do diálogo
+            height=620, # Altura máxima, com scroll
+            padding=ft.padding.symmetric(vertical=10)
+        )
+
+    def _build_dialog_actions(self):
+        actions = []
+        
+        actions.append(
+            ft.ElevatedButton(
+                f"Confirmar Avaliação", width=150,
+                on_click=lambda _: self._handle_action_click(FeedbackDialogAction.CONFIRM_AND_CONTINUE),
+            )
+        )
+        actions.append(
+            ft.ElevatedButton(
+                "Retornar para Edição", width=150,
+                on_click=lambda _: self._handle_action_click(FeedbackDialogAction.RETURN_TO_EDIT)
+            )
+        )
+        actions.append(
+            ft.ElevatedButton(
+                f"Ignorar avaliação", width=150,
+                on_click=lambda _: self._handle_action_click(FeedbackDialogAction.SKIP_AND_CONTINUE)
+            )
+        )
+        # TODO: Adicionar registro de solicitação de re-análise, quando é compreensível ignorar a avaliação
+        
+        self.actions = actions
+
+    def _handle_action_click(self, action: FeedbackDialogAction):
+        _logger.info(f"FeedbackDialog: Ação '{action.value}' selecionada.")
+        self.open = False
+        if self.page_ref and self.uid: # Garante que está na árvore da UI para atualizar
+            self.page_ref.update(self) # Atualiza para fechar visualmente
+
+        # Remove do overlay e chama o callback após um pequeno delay para a UI atualizar
+
+        data_for_callback: Optional[List[Dict[str, Any]]] = None
+        if action == FeedbackDialogAction.CONFIRM_AND_CONTINUE:
+            pass
+
+        def delayed_callback():
+            if self in self.page_ref.overlay:
+                self.page_ref.overlay.remove(self)
+                # Não é necessário self.page_ref.update() aqui se o callback for fazer algo
+                # que já atualize a página (ex: show_snackbar, navegação, etc.)
+                # Mas se o callback não fizer, pode ser preciso.
+            self.on_close_callback(action)
+
+        threading.Timer(0.15, delayed_callback).start() # Pequeno delay
+
+    def show(self):
+        _logger.info("FeedbackDialog: Solicitado para mostrar.")
+        if self not in self.page_ref.overlay:
+            self.page_ref.overlay.append(self)
+        self.open = True
+        self.page_ref.update()
+
+class FeedbackWorkflowManager:
+    """
+    Gerencia o fluxo de solicitação de feedback do usuário antes de executar ações
+    que podem invalidar ou concluir uma análise LLM.
+    """
+    def __init__(self, page: ft.Page, parent_view: 'AnalyzePDFViewContent'):
+        self.page = page
+        self.parent_view = parent_view # Referência à AnalyzePDFViewContent
+
+    def _get_prepared_feedback_data(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Prepara os dados para serem enviados ao FeedbackDialog, incluindo o status 'foi_editado'.
+        Este método deve ser chamado após garantir que get_current_form_data() foi executado
+        para que self.data reflita o estado atual da UI.
+
+        Returns:
+            Uma lista de dicionários, cada um representando um campo e seu status,
+            ou None se os dados originais não estiverem disponíveis.
+        """
+        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+        if not isinstance(llm_display_component, LLMStructuredResultDisplay):
+            _logger.error("FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado.")
+            return None
+
+        # Acessa o snapshot original e os dados atuais da UI através do llm_display_component
+        original_snapshot = llm_display_component.original_llm_data_snapshot
+        # self.data em llm_display_component já reflete a UI após get_current_form_data()
+        # que deve ter sido chamado antes de _get_prepared_feedback_data ser invocado.
+        current_data_ui = llm_display_component.data 
+        
+        if not original_snapshot or not current_data_ui:
+            _logger.warning("FeedbackWorkflowManager: Dados originais ou atuais da UI ausentes em LLMStructuredResultDisplay.")
+            return None
+
+        feedback_field_data_prepared  = []
+        fields_for_feedback = [
+            "descricao_geral", "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
+            "resumo_fato", "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
+            "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", "destinacao",
+            "pessoas_envolvidas", "linha_do_tempo", "observacoes"
+        ]
+
+        for field_name in fields_for_feedback:
+            # Pega os valores diretamente dos objetos Pydantic
+            original_value = getattr(original_snapshot, field_name, None)
+            current_value_ui = getattr(current_data_ui, field_name, None)
+
+            # Lógica de comparação para 'foi_editado' (permanece a mesma)
+            foi_editado = False
+            if field_name in ["uf_origem", "uf_fato"]:
+                original_uf_sigla = get_sigla_uf(str(original_value)) if original_value else None
+                foi_editado = (original_uf_sigla != current_value_ui)
+            elif field_name in ["municipio_origem", "municipio_fato"]:
+                foi_editado = (unidecode(original_value.lower()) != unidecode(current_value_ui.lower()))
+            elif field_name == "valor_apuracao":
+                # Supondo que original_value e current_value_ui são floats ou None
+                # (get_current_form_data deve garantir isso para current_value_ui)
+                original_float = original_value if isinstance(original_value, float) else 0.0
+                current_float_ui = current_value_ui if isinstance(current_value_ui, float) else 0.0
+                # Use math.isclose para comparar floats com tolerância, se necessário
+                # import math
+                # foi_editado = not math.isclose(original_float, current_float_ui, rel_tol=1e-9)
+                foi_editado = (original_float != current_float_ui)
+            elif field_name in ["pessoas_envolvidas", "linha_do_tempo"]:
+                original_list = original_value if isinstance(original_value, list) else []
+                current_list_ui = current_value_ui if isinstance(current_value_ui, list) else []
+                foi_editado = (original_list != current_list_ui)
+            else: # Campos string ou dropdowns diretos
+                foi_editado = (original_value != current_value_ui)
+            
+            _logger.debug(f"Feedback Prep (Manager): Campo '{field_name}', Original: '{original_value}', Atual UI: '{current_value_ui}', Editado: {foi_editado}")
+
+            # Obter o label amigável e o tipo do campo
+            label_campo = field_name.replace("_", " ").title() # Default label
+            control_gui = llm_display_component.gui_fields.get(field_name)
+            if control_gui and hasattr(control_gui, 'label') and control_gui.label:
+                label_campo = str(control_gui.label)
+            
+            tipo_campo_str = llm_display_component._get_field_type_for_feedback(field_name)
+
+
+            field_data_entry  = {
+                "nome_campo": field_name,
+                "label_campo": label_campo, # Adicionado para o diálogo
+                "tipo_campo": tipo_campo_str,
+                "llm_acertou": not foi_editado, # Novo campo para o Firestore
+                "foi_editado": foi_editado,
+                "valor_original_llm": original_value, 
+                "valor_atual_ui": current_value_ui,   
+            }
+
+            # Adiciona similaridade apenas se editado e for um tipo de texto aplicável
+            if foi_editado and tipo_campo_str in ["textfield_multiline", "textfield", "textfield_lista"]:
+                field_data_entry["similaridade_pos_edicao"] = calcular_similaridade_rouge_l(
+                    str(original_value or ""), str(current_value_ui or "")
+                )
+            
+            # Remoção dos campos valor_original_llm e valor_atual_ui para os tipos especificados
+            # Esta remoção agora acontece em `save_feedback_data_now` antes de enviar ao Firestore,
+            # pois o `FeedbackDialog` ainda pode precisar deles para exibir algo.
+            # Mas para o que vai ao Firestore, eles serão removidos lá.
+
+            feedback_field_data_prepared.append(field_data_entry)
+            
+        return feedback_field_data_prepared 
+
+    def _prepare_and_show_feedback_dialog(
+        self,
+        action_context_name: str,
+        # Este é o callback final que lida com a lógica de negócios após o feedback
+        on_feedback_flow_completed: Callable[[FeedbackDialogAction, Optional[List[Dict[str, Any]]]], None],
+        allow_return_to_edit: bool = True
+    ):
+        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+        if not isinstance(llm_display_component, LLMStructuredResultDisplay):
+            _logger.error("_prepare_and_show_feedback_dialog: LLMStructuredResultDisplay não encontrado.")
+            on_feedback_flow_completed(FeedbackDialogAction.CANCELLED_OR_ERROR, None)
+            return
+
+        current_form_data_or_errors = llm_display_component.get_current_form_data(validate_for_export=False)
+        if not isinstance(current_form_data_or_errors, FormatAnaliseInicial):
+            _logger.warning("_prepare_and_show_feedback_dialog: Dados do formulário inválidos ou não disponíveis para feedback.")
+            on_feedback_flow_completed(FeedbackDialogAction.CANCELLED_OR_ERROR, None)
+            return
+
+        # `feedback_fields_list_prepared` é o que potencialmente será salvo.
+        feedback_fields_list_prepared = self._get_prepared_feedback_data() # Este método agora é do WorkflowManager
+
+        if not feedback_fields_list_prepared:
+            _logger.warning("_prepare_and_show_feedback_dialog: Nenhum dado de campo preparado para o diálogo de feedback.")
+            on_feedback_flow_completed(FeedbackDialogAction.CANCELLED_OR_ERROR, None)
+            return
+        
+        def internal_on_close_wrapper_for_dialog(action_from_dialog: FeedbackDialogAction):
+            data_to_pass_to_final_callback = None
+            if action_from_dialog == FeedbackDialogAction.CONFIRM_AND_CONTINUE:
+                data_to_pass_to_final_callback = feedback_fields_list_prepared
+            
+            on_feedback_flow_completed(action_from_dialog, data_to_pass_to_final_callback)
+
+        feedback_dialog = FeedbackDialog(
+            page_ref=self.page,
+            fields_feedback_data=feedback_fields_list_prepared, # Passa os dados para o diálogo construir sua UI
+            on_close_callback=internal_on_close_wrapper_for_dialog, # Este é o callback que o diálogo chamará
+            #action_context_name=action_context_name,
+            allow_return_to_edit=allow_return_to_edit
+        )
+        feedback_dialog.show()
+
+    def request_feedback_and_proceed(
+        self,
+        action_context_name: str,
+        primary_action_callable: Callable[[], None], # Ação a ser executada (upload, restart, etc.)
+        allow_return_to_edit: bool = False, # Geralmente False, exceto para exportação
+        # Callback opcional para executar após o feedback ser salvo (se confirmado)
+        # mas ANTES da primary_action_callable. Útil para limpar dados.
+        on_feedback_confirmed_before_action: Optional[Callable[[], None]] = None
+    ):
+        """
+        Verifica se o feedback deve ser solicitado. Se sim, mostra o diálogo.
+        Executa a `primary_action_callable` com base na resposta do diálogo.
+        """
+        if self.page.session.get(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS):
+            _logger.info(f"FeedbackWorkflowManager: Feedback já coletado para '{action_context_name}'. Prosseguindo com ação primária.")
+            if on_feedback_confirmed_before_action: # Mesmo se pulou, se precisava limpar algo
+                on_feedback_confirmed_before_action()
+            primary_action_callable()
+            return
+
+        # Só pede feedback se houver uma análise LLM anterior
+        if not self.page.session.contains_key(KEY_SESSION_PDF_LLM_RESPONSE):
+            _logger.info(f"FeedbackWorkflowManager: Nenhuma análise LLM anterior para '{action_context_name}'. Prosseguindo com ação primária.")
+            if on_feedback_confirmed_before_action: # Mesmo se pulou, se precisava limpar algo
+                on_feedback_confirmed_before_action()
+            primary_action_callable()
+            return
+
+        # Chamada a get_current_form_data ANTES de _get_prepared_feedback_data
+        # para garantir que llm_display_component.data está atualizado com a UI.
+        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+        if isinstance(llm_display_component, LLMStructuredResultDisplay):
+            current_form_data_or_errors = llm_display_component.get_current_form_data(validate_for_export=False)
+            if not isinstance(current_form_data_or_errors, FormatAnaliseInicial):
+                _logger.warning("FeedbackWorkflowManager: Dados do formulário inválidos ou não disponíveis ao tentar preparar feedback. Prosseguindo com ação primária.")
+                if on_feedback_confirmed_before_action: on_feedback_confirmed_before_action()
+                primary_action_callable()
+                return
+        else:
+            _logger.error("FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado para get_current_form_data. Prosseguindo com ação primária.")
+            if on_feedback_confirmed_before_action: on_feedback_confirmed_before_action()
+            primary_action_callable()
+            return
+
+        # Agora _get_prepared_feedback_data pode usar o llm_display_component.data atualizado
+        feedback_fields_data = self._get_prepared_feedback_data()
+
+        if not feedback_fields_data:
+            _logger.warning(f"FeedbackWorkflowManager: Não foi possível preparar dados para feedback para '{action_context_name}'. Prosseguindo com ação primária.")
+            if on_feedback_confirmed_before_action:
+                on_feedback_confirmed_before_action()
+            primary_action_callable()
+            return
+
+        def on_feedback_dialog_closed_final_logic(action_taken: FeedbackDialogAction, collected_feedback_data: Optional[List[Dict[str, Any]]]):
+            _logger.info(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado com ação: {action_taken.value}")
+            
+            if action_taken == FeedbackDialogAction.CONFIRM_AND_CONTINUE:
+                if collected_feedback_data:
+                    self.parent_view.analysis_controller.save_feedback_data_now(collected_feedback_data)
+                if on_feedback_confirmed_before_action:
+                    on_feedback_confirmed_before_action()
+                primary_action_callable()
+            
+            elif action_taken == FeedbackDialogAction.SKIP_AND_CONTINUE:
+                if on_feedback_confirmed_before_action:
+                    on_feedback_confirmed_before_action()
+                primary_action_callable()
+            
+            elif action_taken == FeedbackDialogAction.RETURN_TO_EDIT:
+                _logger.info(f"FeedbackWorkflowManager (final_logic): Usuário escolheu retornar para edição para '{action_context_name}'. Ação primária cancelada.")
+            
+            elif action_taken == FeedbackDialogAction.CANCELLED_OR_ERROR:
+                _logger.warning(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado inesperadamente. Ação primária não será executada.")
+
+        # Chama _prepare_and_show_feedback_dialog, passando o callback final
+        self._prepare_and_show_feedback_dialog(
+            action_context_name=action_context_name,
+            on_feedback_flow_completed=on_feedback_dialog_closed_final_logic,
+            allow_return_to_edit=allow_return_to_edit
+        )
+
 # Função principal da view (chamada pelo router)
 def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     """
