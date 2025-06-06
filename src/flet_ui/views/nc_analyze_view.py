@@ -1,10 +1,11 @@
-# src/flet_ui/views/analyze_pdf_view1.py
+# src/flet_ui/views/nc_analyze_view.py
 import flet as ft
 import threading, json, os, shutil
 from typing import Optional, Dict, Any, List, Union, Tuple, Callable
 from time import time, sleep
 from datetime import datetime
-from enum import Enum 
+from enum import Enum
+
 #from pathlib import Path
 #from rich import print
 
@@ -101,6 +102,7 @@ KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL = "apv_pdf_llm_response_actual"
 KEY_SESSION_PROCESSING_METADATA = "apv_processing_metadata"
 KEY_SESSION_LLM_METADATA = "apv_llm_metadata"
 KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS = "apv_feedback_collected"
+KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK = "apv_llm_response_snapshot_for_feedback"
 
 # Constantes para nomes de controles (facilita acesso) CTL = Control
 CTL_UPLOAD_BTN = "upload_button"
@@ -450,6 +452,7 @@ class AnalyzePDFViewContent(ft.Column):
                     self._analysis_requested = False # Análise LLM também precisará ser refeita
                     self._remove_data_session(KEY_SESSION_PDF_ANALYZER_DATA)
                     self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Limpa dados antigos
+                    self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
                     self._clear_processing_metadata_display()
                     self._clear_llm_metadata_display()
                     self._show_info_balloon_or_result(show_balloon=True)
@@ -499,7 +502,6 @@ class AnalyzePDFViewContent(ft.Column):
             self.feedback_workflow_manager.request_feedback_and_proceed(
                 action_context_name="Carregar Novos Arquivos",
                 primary_action_callable=primary_upload_action,
-                allow_return_to_edit=False,
                 # Não há necessidade de on_feedback_confirmed_before_action aqui,
                 # pois _clear_all_data_and_gui será chamado dentro da primary_action
                 # após o fluxo de feedback.
@@ -536,9 +538,9 @@ class AnalyzePDFViewContent(ft.Column):
                 # Mantemos os metadados de processamento PDF anteriores até que o novo termine.
                 # Limpamos apenas o que é da LLM, pois um novo processamento PDF os invalidaria.
                 self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Invalida LLM anterior
-                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS) # Permite novo feedback
                 self._clear_llm_metadata_display()
                 self._show_info_balloon_or_result(show_balloon=True)
+                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS) # Permite novo feedback
                 self._update_button_states()
                 self.analysis_controller.start_pdf_processing_only(pdf_paths, batch_name)
             
@@ -564,10 +566,13 @@ class AnalyzePDFViewContent(ft.Column):
                 
                 aggregated_text = aggregated_text_info[1]
                 
-                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
                 self._analysis_requested = False 
-                self._update_button_states()
+                # self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) 
+                # self._clear_llm_metadata_display()
+                # Coomentado porque a limpeza está sendo feito no batch_upload_complete_cb
                 self._show_info_balloon_or_result(show_balloon=True)
+                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
+                self._update_button_states()
                 self.analysis_controller.start_llm_analysis_only(aggregated_text, batch_name)
             
             primary_action_callable = primary_llm_analysis_action
@@ -579,10 +584,10 @@ class AnalyzePDFViewContent(ft.Column):
                 self._files_processed = False
                 self._analysis_requested = False
                 self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
-                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
-                # self._clear_llm_metadata_display() # Limpa metadados da LLM anterior
-                # Não limpar _clear_processing_metadata_display() aqui, pois um novo será gerado?
+                # self._clear_llm_metadata_display() 
+                # Coomentado porque a limpeza está sendo feito no batch_upload_complete_cb
                 self._show_info_balloon_or_result(show_balloon=True)
+                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
                 self._update_button_states()
                 self.analysis_controller.start_full_analysis_pipeline(pdf_paths, batch_name)
             
@@ -592,29 +597,15 @@ class AnalyzePDFViewContent(ft.Column):
             _logger.error(f"Tipo de etapa de análise desconhecido: {step_type}")
             return
 
-        # 3. Definir o callback "antes da ação" para limpar o estado da LLM anterior, se necessário
-        #    Este callback é chamado se o feedback for CONFIRMADO ou PULADO.
-        def before_primary_action_if_feedback_flow_triggered():
-            # Se estamos prestes a iniciar uma nova análise LLM (direta ou parte do pipeline completo),
-            # ou reprocessar os arquivos (que invalida a análise LLM),
-            # precisamos limpar a resposta LLM anterior.
-            if step_type in ["analyze_only", "process_and_analyze", "process_only"]:
-                self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
-                self._clear_llm_metadata_display()
-                self._show_info_balloon_or_result(show_balloon=True)
-            # A flag de feedback será resetada dentro da primary_action_callable correspondente.
-
         # 4. Chamar o FeedbackWorkflowManager (se existir e for aplicável)
         if self.feedback_workflow_manager:
             self.feedback_workflow_manager.request_feedback_and_proceed(
                 action_context_name=action_context_name_for_feedback,
                 primary_action_callable=primary_action_callable,
-                allow_return_to_edit=False, # Geralmente False para estas ações
-                on_feedback_confirmed_before_action=before_primary_action_if_feedback_flow_triggered
+
             )
         else:
-            # Se não houver gerenciador de feedback, executa a limpeza e a ação diretamente
-            before_primary_action_if_feedback_flow_triggered() # Garante a limpeza
+            # Se não houver gerenciador de feedback, executa a ação diretament
             if primary_action_callable:
                 primary_action_callable()
 
@@ -646,7 +637,6 @@ class AnalyzePDFViewContent(ft.Column):
             self.feedback_workflow_manager.request_feedback_and_proceed(
                 action_context_name="Reiniciar Análise",
                 primary_action_callable=primary_restart_action,
-                allow_return_to_edit=False
             )
         else:
             primary_restart_action()
@@ -933,7 +923,8 @@ class AnalyzePDFViewContent(ft.Column):
                 if content_area.page and content_area.uid:
                     content_area.update()
 
-    def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, FormatAnaliseInicial]] = None):
+    def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, FormatAnaliseInicial]] = None, 
+                                     is_initial_llm_response: bool = False):
         """
         Controla a visibilidade entre o balão informativo, o resultado LLM em texto puro
         e o display estruturado, exibindo o conteúdo apropriado.
@@ -955,7 +946,7 @@ class AnalyzePDFViewContent(ft.Column):
         elif isinstance(result_data, FormatAnaliseInicial):
             structured_display = self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY]
             if isinstance(structured_display, LLMStructuredResultDisplay): # Verifica o tipo
-                structured_display.update_data(result_data)
+                structured_display.update_data(result_data, is_new_llm_response=is_initial_llm_response)
                 #only_one_visible(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
                 structured_display.visible = True
                 scrollable_row_for_structured_display = ft.Row(
@@ -1000,55 +991,83 @@ class AnalyzePDFViewContent(ft.Column):
     def _restore_state_from_session(self):
         """Restaura o estado da view a partir dos dados salvos na sessão."""
         _logger.info("Restaurando estado da view Análise PDF da sessão.")
-        self.file_list_manager.update_selected_files_display() # Restaura lista de arquivos
+        self.file_list_manager.update_selected_files_display()
         
         self._files_processed = bool(self.page.session.get(KEY_SESSION_PDF_ANALYZER_DATA))
-        self._analysis_requested = bool(self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE))
+        self._analysis_requested = bool(self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE) or \
+                                     self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL) or \
+                                     self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)) # Ajuste aqui
         
         self._update_processing_metadata_display()
         self._update_llm_metadata_display()
 
-        # Carrega as configurações da sessão para o drawer
         analysis_settings_from_session = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
         if analysis_settings_from_session:
             self.settings_drawer_manager._load_settings_into_drawer_controls(analysis_settings_from_session)
-        else: # Caso não haja nada na sessão ainda (ex: primeiro carregamento antes de app.py popular)
+        else:
             self.settings_drawer_manager._load_settings_into_drawer_controls(FALLBACK_ANALYSIS_SETTINGS)
 
-        llm_response_from_session = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL) or self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
+        # --- Lógica de restauração do resultado da LLM e snapshot ---
+        data_to_display_in_ui: Optional[FormatAnaliseInicial] = None
+        is_this_the_initial_llm_response_for_snapshot = False
+
+        # Prioridade 1: Tentar carregar o snapshot dedicado, se existir. Ele é o "original" se foi salvo.
+        snapshot_for_feedback = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
         
-        # Determina o tipo de dado para exibir
-        data_to_display = None
-        if isinstance(llm_response_from_session, str):
+        # Prioridade 2: Tentar carregar a resposta "atual" (potencialmente editada)
+        llm_response_actual = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL)
+        
+        # Prioridade 3: Tentar carregar a resposta "original da LLM" (se as anteriores não existirem)
+        llm_response_original = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
+
+        source_for_ui_data = None
+        
+        if llm_response_actual: # Se temos dados "atuais", são eles que a UI deve mostrar
+            source_for_ui_data = llm_response_actual
+            _logger.info("_restore_state_from_session: Usando KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL para popular a UI.")
+            # Se não há snapshot dedicado, mas temos o "original" da LLM,
+            # E o "atual" é o mesmo que o "original", então podemos considerar o "atual" como inicial para o snapshot.
+            if not snapshot_for_feedback and llm_response_original and llm_response_actual == llm_response_original:
+                is_this_the_initial_llm_response_for_snapshot = True
+                _logger.info("_restore_state_from_session: Marcando dados de ACTUAL como 'initial' pois não há snapshot dedicado e ACTUAL == ORIGINAL.")
+
+        elif snapshot_for_feedback: # Se não há "actual", mas há snapshot, a UI mostra o snapshot.
+            source_for_ui_data = snapshot_for_feedback
+            is_this_the_initial_llm_response_for_snapshot = True # O snapshot é, por definição, o "inicial"
+            _logger.info("_restore_state_from_session: Usando SNAPSHOT_FOR_FEEDBACK para popular a UI e como 'initial'.")
+        elif llm_response_original: # Se não há "actual" nem snapshot, mas há "original"
+            source_for_ui_data = llm_response_original
+            is_this_the_initial_llm_response_for_snapshot = True # Este é o melhor candidato para "inicial"
+            _logger.info("_restore_state_from_session: Usando KEY_SESSION_PDF_LLM_RESPONSE para popular a UI e como 'initial'.")
+
+        if isinstance(source_for_ui_data, str):
             try:
-                json_data = json.loads(llm_response_from_session)
-                
-                if 'valor_apuracao' in json_data:
+                json_data = json.loads(source_for_ui_data)
+                if 'valor_apuracao' in json_data: # Normalização
                     raw_valor = json_data['valor_apuracao']
                     json_data['valor_apuracao'] = clean_and_convert_to_float(raw_valor)
-                    _logger.info(f"Restaurando da sessão: Valor apuracao original: '{raw_valor}', convertido para: {json_data['valor_apuracao']}")
-
-                data_to_display = FormatAnaliseInicial(**json_data)
-                _logger.info("Resposta LLM (string da sessão) parseada para FormatAnaliseInicial para restauração.")
-            except (json.JSONDecodeError, TypeError, Exception):
-                data_to_display = llm_response_from_session # Mantém como string se falhar
-                _logger.warning("String da sessão não pôde ser parseada/validada como FormatAnaliseInicial na restauração.")
-        elif isinstance(llm_response_from_session, FormatAnaliseInicial):
-            data_to_display = llm_response_from_session
+                data_to_display_in_ui = FormatAnaliseInicial(**json_data)
+            except (json.JSONDecodeError, TypeError, Exception) as e:
+                _logger.warning(f"Erro ao parsear dados da sessão para UI em _restore_state_from_session: {e}. Fonte: '{str(source_for_ui_data)[:100]}...'")
+                data_to_display_in_ui = source_for_ui_data # Mantém como string
+        elif isinstance(source_for_ui_data, FormatAnaliseInicial):
+            data_to_display_in_ui = source_for_ui_data
         
-        if data_to_display:
-            self._show_info_balloon_or_result(show_balloon=False, result_data=data_to_display)
+        if data_to_display_in_ui:
+            self._show_info_balloon_or_result(
+                show_balloon=False, 
+                result_data=data_to_display_in_ui, 
+                is_initial_llm_response=is_this_the_initial_llm_response_for_snapshot
+            )
         else:
             self._show_info_balloon_or_result(show_balloon=True)
         
-        self._update_button_states() # Fundamental após restaurar estado
+        self._update_button_states()
         
-        if self.page: # Garante que a página está disponível
-            # self.update() # Atualiza a view principal (AnalyzePDFViewContent)
-            # E também os painéis que podem ter mudado de visibilidade
-            if self.gui_controls[CTL_PROC_METADATA_PANEL].page:
+        if self.page:
+            if self.gui_controls.get(CTL_PROC_METADATA_PANEL) and self.gui_controls[CTL_PROC_METADATA_PANEL].page:
                 self.gui_controls[CTL_PROC_METADATA_PANEL].update()
-            if self.gui_controls[CTL_LLM_METADATA_PANEL].page:
+            if self.gui_controls.get(CTL_LLM_METADATA_PANEL) and self.gui_controls[CTL_LLM_METADATA_PANEL].page:
                 self.gui_controls[CTL_LLM_METADATA_PANEL].update()
 
     def _clear_all_data_and_gui(self):
@@ -1061,7 +1080,8 @@ class AnalyzePDFViewContent(ft.Column):
             KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, KEY_SESSION_PDF_LLM_RESPONSE,
             KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA,
             KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
-            KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL
+            KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL,
+            KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK
         ]
         for key in keys_to_clear_from_session:
             self._remove_data_session(key)
@@ -1198,7 +1218,6 @@ class InternalFileListManager:
             self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
                 action_context_name="Reordenar Arquivos",
                 primary_action_callable=primary_move_action,
-                allow_return_to_edit=False
             )
         else:
             primary_move_action()
@@ -1240,7 +1259,6 @@ class InternalFileListManager:
             self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
                 action_context_name="Remover Arquivo da Lista",
                 primary_action_callable=primary_remove_action,
-                allow_return_to_edit=False
             )
         else:
             primary_remove_action()
@@ -1830,7 +1848,7 @@ class InternalAnalysisController:
                     _logger.info("Resposta LLM já é um objeto FormatAnaliseInicial.")
 
                 self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, llm_response_data)
-                self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, llm_response_data)
+                self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, llm_response_data, True)
                 
                 llm_meta_for_gui = token_usage_info if token_usage_info else {} 
                 llm_meta_for_gui.update({
@@ -1930,9 +1948,6 @@ class InternalExportManager:
         self.page = parent_view.page
         self.docx_exporter = docx_exporter
         self.global_file_picker = global_file_picker
-        self.desktop_picker_operation: ExportOperation = ExportOperation.NONE
-        self.desktop_picker_template_path: Optional[str] = None
-        self.current_data_for_export_obj: Optional[FormatAnaliseInicial] = None
 
     def _get_default_filename_base(self) -> str:
         base = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "analise_documento"
@@ -1941,57 +1956,12 @@ class InternalExportManager:
     def _handle_desktop_save_result(self, event: ft.FilePickerResultEvent):
         """
         Handler para o resultado do diálogo "Salvar Como" no desktop.
-
-        Args:
-            event: O evento do FilePicker com o caminho selecionado.
+        Args: event: O evento do FilePicker com o caminho selecionado.
         """
-        _logger.info(f"ExportManager (Desktop): _handle_desktop_save_result. Op: {self.desktop_picker_operation}, Path: {event.path}")
-        if not self.current_data_for_export_obj:
-            _logger.error("ExportManager (Desktop): current_data_for_export_obj é None.")
-            return
-
-        output_path = event.path # Vem do diálogo "Salvar Como"
-        
-        # Resetar estado antes de processar, independentemente do resultado
-        operation_that_finished = self.desktop_picker_operation
-        template_path_that_finished = self.desktop_picker_template_path
-        data_that_was_exported = self.current_data_for_export_obj 
-        
-        # Resetar estado do picker desktop
-        self.desktop_picker_operation = ExportOperation.NONE
-        self.desktop_picker_template_path = None
-        self.current_data_for_export_obj = None # Limpa após uso
-
-        if not output_path: 
-            _logger.info("ExportManager (Desktop): Salvamento cancelado.")
-            show_snackbar(self.page, "Operação cancelada.", theme.COLOR_INFO)
-            return
-        
-        output_path_final = output_path if output_path.lower().endswith(".docx") else output_path + ".docx"
-        show_loading_overlay(self.page, f"Exportando para {os.path.basename(output_path_final)}...")
-        
-        success, missing_keys_report = False, []
-        
-        if operation_that_finished == ExportOperation.SIMPLE_DOCX:
-            success = self.docx_exporter.export_simple_docx(data_that_was_exported, output_path_final)
-        elif operation_that_finished == ExportOperation.TEMPLATE_DOCX and template_path_that_finished:
-            success, missing_keys_report = self.docx_exporter.export_from_template_docx(data_that_was_exported, template_path_that_finished, output_path_final)
-        
-        hide_loading_overlay(self.page)
-        if success:
-            show_snackbar(self.page, f"Arquivo salvo em: {output_path_final}", theme.COLOR_SUCCESS)
-            if missing_keys_report:
-                template_name_friendly = os.path.basename(template_path_that_finished or "").replace(".docx","").replace("_", " ").title()
-                missing_keys_str = ", ".join(missing_keys_report)
-                show_confirmation_dialog(
-                    self.page, title="Aviso de Exportação",
-                    content=ft.Column([
-                        ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados placeholders respectivos no template '{template_name_friendly}':"),
-                        ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)
-                    ], tight=True),
-                    confirm_text="OK", cancel_text=None)
-        else: 
-            show_snackbar(self.page, "Falha ao exportar arquivo DOCX.", theme.COLOR_ERROR)
+        self.desktop_picker_operation: ExportOperation = ExportOperation.NONE
+        self.desktop_picker_template_path: Optional[str] = None
+        self.current_data_for_export_obj: Optional[FormatAnaliseInicial] = None
+        pass # descontinuado
 
     def start_export(self, operation_type: ExportOperation, data_to_export: FormatAnaliseInicial, template_path: Optional[str] = None):
         """
@@ -2003,10 +1973,10 @@ class InternalExportManager:
             template_path: O caminho para o arquivo de template DOCX (obrigatório para exportação com template).
         """
         _logger.info(f"ExportManager: start_export. Op: {operation_type}, Web: {self.page.web}")
-        actual_data_to_export = self.current_data_for_export_obj if self.current_data_for_export_obj and not self.page.web else data_to_export
-        if not actual_data_to_export:
-            _logger.error("ExportManager: Dados para exportação ausentes.")
-            show_snackbar(self.page, "Erro: Dados para exportação ausentes.", theme.COLOR_ERROR)
+
+        if not data_to_export: # Verificação de segurança
+            _logger.error("ExportManager (start_export): Dados para exportação ausentes ou inválidos.")
+            show_snackbar(self.page, "Erro: Dados para exportação inválidos.", theme.COLOR_ERROR)
             return
         
         default_filename_base = self._get_default_filename_base()
@@ -2025,23 +1995,21 @@ class InternalExportManager:
                 _logger.error(f"EXPORT_MANAGER (Web): Falha ao criar diretório de exportações temporárias '{temp_exports_dir}': {e}")
                 hide_loading_overlay(self.page)
                 show_snackbar(self.page, "Erro ao preparar diretório para download.", theme.COLOR_ERROR)
-                self.current_data_for_export_obj = None # Limpa
                 return
             
             if operation_type == ExportOperation.SIMPLE_DOCX:
                 temp_server_filename = f"{default_filename_base}_simples_{int(time())}.docx"
                 server_save_path = os.path.join(temp_exports_dir, temp_server_filename)
-                export_success_on_server = self.docx_exporter.export_simple_docx(actual_data_to_export, server_save_path)
+                export_success_on_server = self.docx_exporter.export_simple_docx(data_to_export, server_save_path)
             elif operation_type == ExportOperation.TEMPLATE_DOCX and template_path:
                 template_name = os.path.basename(template_path).replace(".docx","").replace(" ", "_").lower()
                 temp_server_filename = f"{default_filename_base}_{template_name}_{int(time())}.docx"
                 server_save_path = os.path.join(temp_exports_dir, temp_server_filename)
-                export_success_on_server, missing_keys_on_server = self.docx_exporter.export_from_template_docx(actual_data_to_export, template_path, server_save_path)
+                export_success_on_server, missing_keys_on_server = self.docx_exporter.export_from_template_docx(data_to_export, template_path, server_save_path)
             else: 
                 _logger.error(f"EXPORT_MANAGER (Web): Tipo de operação desconhecido ou template_path ausente: {operation_type}")
                 hide_loading_overlay(self.page)
                 show_snackbar(self.page, "Erro: Tipo de exportação inválido.", theme.COLOR_ERROR)
-                self.current_data_for_export_obj = None # Limpa
                 return
             
             hide_loading_overlay(self.page)
@@ -2061,42 +2029,9 @@ class InternalExportManager:
             else: 
                 _logger.error(f"ExportManager (Web): Falha ao gerar DOCX: {server_save_path}")
                 show_snackbar(self.page, "Falha ao gerar arquivo para download.", theme.COLOR_ERROR)
-            
-            self.current_data_for_export_obj = None
-        
+                    
         else: # Desktop
-            if not self.global_file_picker:
-                show_snackbar(self.page, "FilePicker não está disponível (Desktop).", theme.COLOR_ERROR)
-                _logger.error("EXPORT_MANAGER (Desktop): global_file_picker é None.")
-                self.current_data_for_export_obj = None # Limpa
-                return
-            
-            self.desktop_picker_operation = operation_type
-            self.desktop_picker_template_path = template_path
-            
-            self.global_file_picker.on_result = self._handle_desktop_save_result
-            
-            dialog_title, file_name = "Salvar Relatório...", f"{default_filename_base}.docx"
-            
-            if operation_type == ExportOperation.SIMPLE_DOCX: 
-                file_name = f"{default_filename_base}_simples.docx"
-            elif operation_type == ExportOperation.TEMPLATE_DOCX and template_path: 
-                template_name_friendly_for_filename = os.path.basename(template_path).replace(".docx","").replace(" ", "_").lower()
-                file_name = f"{default_filename_base}_{template_name_friendly_for_filename}.docx"
-
-            try:
-                self.page.update()
-                self.global_file_picker.save_file(
-                    dialog_title=dialog_title, 
-                    file_name=file_name, 
-                    allowed_extensions=["docx"], 
-                    file_type=ft.FilePickerFileType.ANY)
-            except Exception as e: 
-                _logger.error(f"ExportManager (Desktop): Exceção save_file(): {e}", exc_info=True)
-                show_snackbar(self.page, f"Erro diálogo salvar: {e}", theme.COLOR_ERROR)
-                self.desktop_picker_operation = ExportOperation.NONE
-                self.desktop_picker_template_path = None
-                self.current_data_for_export_obj  = None
+            raise ValueError("Método não customizado para desktop!")
 
     def handle_add_new_template_click(self):
         """Handler para o clique no item 'Adicionar Novo Template'."""
@@ -2229,7 +2164,7 @@ class InternalExportManager:
                 except OSError as er: 
                     _logger.warning(f"Não remover temp template '{source_path}': {er}")
 
-    def _trigger_feedback_and_export(self, export_operation: ExportOperation, template_path: Optional[str]): # Removido data_to_export
+    def _trigger_feedback_and_export(self, export_operation: ExportOperation, template_path: Optional[str]): 
         _logger.info(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
 
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
@@ -2256,25 +2191,21 @@ class InternalExportManager:
                 error_messages.append(f"- {friendly_field_name}")
                 if control_instance and not first_invalid_ctrl: 
                     first_invalid_ctrl = control_instance
+
             if error_messages:
                 dialog_content_controls_list = [ft.Text("Os seguintes campos obrigatórios precisam ser preenchidos antes da exportação:")]
-                for msg_item in error_messages: dialog_content_controls_list.append(ft.Text(msg_item))
+                for msg_item in error_messages: 
+                    dialog_content_controls_list.append(ft.Text(msg_item))
                 show_confirmation_dialog(
                     page=self.page, title="Campos Obrigatórios Pendentes",
                     content=ft.Column(dialog_content_controls_list, tight=True, spacing=5),
                     confirm_text="OK", cancel_text=None,
                     on_confirm= lambda: first_invalid_ctrl.focus() if first_invalid_ctrl and hasattr(first_invalid_ctrl, 'focus') else None)
                 return
+            
         elif not data_to_export_or_errors: 
             show_snackbar(self.page, "Dados de análise inválidos.", theme.COLOR_ERROR)
             return
-
-        if not isinstance(data_to_export_or_errors, FormatAnaliseInicial):
-            # Se não for FormatAnaliseInicial, é uma lista de erros ou None.
-            # A mensagem de erro/validação já foi tratada por get_current_form_data ou será por handle_export_selected
-            _logger.warning("ExportManager: Dados do formulário inválidos para exportação. Exportação abortada antes do feedback.")
-            # O handle_export_selected que chamou este método deve ter mostrado o snackbar de validação.
-            return # Aborta
 
         # Se chegou aqui, data_to_export_or_errors é um objeto FormatAnaliseInicial válido
         current_data_for_export = data_to_export_or_errors
@@ -2287,7 +2218,6 @@ class InternalExportManager:
             self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
                 action_context_name="Exportar Análise",
                 primary_action_callable=primary_export_action,
-                allow_return_to_edit=True # Permite voltar para editar antes de exportar
             )
         else: # Fallback se o manager não estiver pronto
             primary_export_action()
@@ -2301,10 +2231,7 @@ class InternalExportManager:
         """
         _logger.info(f"ExportManager: Item de exportação selecionado - Data: {e.control.data}")
         selected_action_data = e.control.data
-        
-        # current_data_for_export será validado e obtido dentro de _trigger_feedback_and_export
-        # pelo llm_display_component.get_current_form_data(validate_for_export=True)
-            
+                   
         operation: Optional[ExportOperation] = None
         template_p: Optional[str] = None
 
@@ -2782,35 +2709,61 @@ class LLMStructuredResultDisplay(ft.Column):
             if e is not None and self.page and self.dropdown_municipio_fato.uid: # 'e' indica chamada por evento de usuário
                 self.dropdown_municipio_fato.update()
 
-    def update_data(self, data: FormatAnaliseInicial):
+    def update_data(self, data_to_display_in_gui: FormatAnaliseInicial, is_new_llm_response: bool = False):
         """
         Atualiza o display com novos dados de análise estruturada.
-
-        Popula os campos da UI com os valores do objeto FormatAnaliseInicial fornecido.
+        Popula os campos da UI e gerencia o snapshot original para feedback.
 
         Args:
-            data: O objeto FormatAnaliseInicial contendo os dados a serem exibidos.
+            data_to_display_in_ui: O objeto FormatAnaliseInicial para exibir na UI.
+                                   Pode ser None para limpar a UI.
+            is_new_llm_response: True se data_to_display_in_ui é uma resposta fresca da LLM,
+                                 False caso contrário (ex: restauração de sessão).
         """
         # data aqui é o objeto FormatAnaliseInicial como recebido (após parsing inicial da resposta da LLM)
-        if not data:
+        _logger.info(f"LLMStructuredResultDisplay.update_data chamado. is_new_llm_response={is_new_llm_response}, data_is_none={data_to_display_in_gui is None}")
+        
+        if data_to_display_in_gui is None:
+            _logger.warning("LLMStructuredResultDisplay.update_data: data_to_display_in_ui é None. Limpando display e snapshots.")
             self.original_llm_data_snapshot = None
-            _logger.warning("update_data chamado com data=None. Snapshot original não será definido.")
-        elif not self.original_llm_data_snapshot or self.original_llm_data_snapshot != data: 
-
-            self.original_llm_data_snapshot = data.model_copy(deep=True)
-            _logger.info("Snapshot dos dados originais da LLM capturado em LLMStructuredResultDisplay.")
-        else:
-            _logger.info("update_data: 'data' recebido é o mesmo que o snapshot original existente. Snapshot mantido.")
-
-        self.data = data # Armazena os dados originais/base
-        self.controls.clear()
-        self.gui_fields.clear() # Limpa referências de campos antigos
-
-        if not self.data:
-            self.controls.append(ft.Text("Nenhum dado de análise estruturada para exibir."))
+            self.data = None
+            if self.page.session.contains_key(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK):
+                self.page.session.remove(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
+            self.controls.clear()
+            self.gui_fields.clear()
             if self.page and self.uid:
                 self.update()
             return
+
+        # 1. Define self.data (o que será usado para construir/atualizar a UI)
+        self.data = data_to_display_in_gui
+
+        # 2. Gerencia o original_llm_data_snapshot
+        if is_new_llm_response:
+            # É uma resposta fresca da LLM, este é o nosso "original" definitivo.
+            self.original_llm_data_snapshot = data_to_display_in_gui.model_copy(deep=True)
+            self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK, self.original_llm_data_snapshot)
+            _logger.info("Snapshot dos dados ORIGINAIS da LLM capturado e salvo na sessão (is_new_llm_response=True).")
+        else:
+            # Não é uma nova resposta LLM (ex: restauração de sessão, ou após edição do usuário).
+            # Tentamos carregar o snapshot da sessão dedicada.
+            snapshot_from_session = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
+            if snapshot_from_session and isinstance(snapshot_from_session, FormatAnaliseInicial):
+                self.original_llm_data_snapshot = snapshot_from_session
+                _logger.info("Snapshot original da LLM restaurado da sessão dedicada.")
+            else:
+                # Se não há snapshot na sessão dedicada, e não é uma nova resposta LLM,
+                # este é o caso "tardio". Usamos os dados atuais (data_to_display_in_ui) como base, com warning.
+                self.original_llm_data_snapshot = data_to_display_in_gui.model_copy(deep=True)
+                _logger.warning("LLMStructuredResultDisplay.update_data: Snapshot original não encontrado na sessão dedicada e dados não são 'is_new_llm_response'. "
+                                "Capturando snapshot com dados atuais da UI como base. O feedback pode ser impreciso se os dados já foram editados anteriormente e o snapshot original não foi salvo corretamente.")
+                # Opcional: Salvar este snapshot "tardio" na sessão dedicada também, para consistência na sessão atual,
+                # mas sabendo que pode não ser o "verdadeiro" original da LLM.
+                self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK, self.original_llm_data_snapshot)
+
+        # Limpa controles antigos e reconstrói a UI
+        self.controls.clear()
+        self.gui_fields.clear()
 
         # Normaliza UFs nos dados recebidos antes de popular a UI
         # Isso garante que os valores iniciais dos dropdowns de UF sejam válidos.
@@ -3098,7 +3051,6 @@ class FeedbackDialog(ft.AlertDialog):
         fields_feedback_data: List[Dict[str, Any]],
         # Callback que será chamado com uma instância de FeedbackDialogAction
         on_close_callback: Callable[[FeedbackDialogAction], None],
-        allow_return_to_edit: bool = True # Se o botão "Retornar para Edição" deve ser mostrado
     ):
         """
         Inicializa o diálogo de feedback.
@@ -3127,7 +3079,6 @@ class FeedbackDialog(ft.AlertDialog):
         self.page_ref = page_ref
         self.fields_feedback_data = fields_feedback_data
         self.on_close_callback = on_close_callback
-        self.allow_return_to_edit = allow_return_to_edit
 
         self.open = False # Controla a visibilidade
 
@@ -3173,13 +3124,11 @@ class FeedbackDialog(ft.AlertDialog):
                 icon_name = ft.icons.EDIT_NOTE_ROUNDED
 
                 if tipo_campo in ["textfield_multiline", "textfield_lista", "textfield"]:
-                    valor_original = str(field_data.get("valor_original_llm", ""))
-                    valor_atual = str(field_data.get("valor_atual_ui", ""))
-                    
-                    # calcula também similaridade para campos de lista representados como textfield 
-                    # if tipo_campo not in ["textfield_lista"]:
-                    similaridade = calcular_similaridade_rouge_l(valor_original, valor_atual)
-                    status_text = f"(Editado - Aproveitamento: {similaridade:.0%})" # Similaridade ROUGE-L
+                    similaridade = field_data.get("similaridade_pos_edicao")
+                    if similaridade is not None:
+                        status_text = f"(Editado - Aproveitamento: {similaridade:.0%})"
+                    else: # Fallback se similaridade não foi calculada/aplicável
+                        status_text = "(Editado)"
                     #if similaridade > 0.85: # Exemplo de limite para "quase igual"
                     #    icon_name = ft.icons.EDIT_ROUNDED # Um pouco menos "alerta"
                     #    status_color = ft.colors.with_opacity(0.8, theme.COLOR_WARNING)
@@ -3223,7 +3172,7 @@ class FeedbackDialog(ft.AlertDialog):
 
         self.content = ft.Container(
             content=ft.Column(sections, spacing=10, scroll=ft.ScrollMode.ADAPTIVE),
-            width=450, # Largura do diálogo
+            width=480, # Largura do diálogo
             height=620, # Altura máxima, com scroll
             padding=ft.padding.symmetric(vertical=10)
         )
@@ -3233,19 +3182,19 @@ class FeedbackDialog(ft.AlertDialog):
         
         actions.append(
             ft.ElevatedButton(
-                f"Confirmar Avaliação", width=150, bgcolor=ft.Colors.GREEN_100, color=ft.Colors.BLACK,
+                f"Confirmar Avaliação", width=160, bgcolor=ft.Colors.GREEN_100, color=ft.Colors.BLACK,
                 on_click=lambda _: self._handle_action_click(FeedbackDialogAction.CONFIRM_AND_CONTINUE),
             )
         )
         actions.append(
             ft.ElevatedButton(
-                "Retornar para Edição", width=150, bgcolor=ft.Colors.AMBER_100, color=ft.Colors.BLACK,
+                "Retornar para Edição", width=160, bgcolor=ft.Colors.AMBER_100, color=ft.Colors.BLACK,
                 on_click=lambda _: self._handle_action_click(FeedbackDialogAction.RETURN_TO_EDIT)
             )
         )
         actions.append(
             ft.ElevatedButton(
-                f"Ignorar avaliação", width=150, bgcolor=ft.Colors.DEEP_ORANGE_100, color=ft.Colors.BLACK,
+                f"Ignorar avaliação", width=160, bgcolor=ft.Colors.DEEP_ORANGE_100, color=ft.Colors.BLACK,
                 on_click=lambda _: self._handle_action_click(FeedbackDialogAction.SKIP_AND_CONTINUE)
             )
         )
@@ -3379,36 +3328,21 @@ class FeedbackWorkflowManager:
                     str(original_value or ""), str(current_value_ui or "")
                 )
             
-            # Remoção dos campos valor_original_llm e valor_atual_ui para os tipos especificados
-            # Esta remoção agora acontece em `save_feedback_data_now` antes de enviar ao Firestore,
-            # pois o `FeedbackDialog` ainda pode precisar deles para exibir algo.
-            # Mas para o que vai ao Firestore, eles serão removidos lá.
-
             feedback_field_data_prepared.append(field_data_entry)
             
         return feedback_field_data_prepared 
 
     def _prepare_and_show_feedback_dialog(
         self,
-        action_context_name: str,
-        # Este é o callback final que lida com a lógica de negócios após o feedback
-        on_feedback_flow_completed: Callable[[FeedbackDialogAction, Optional[List[Dict[str, Any]]]], None],
-        allow_return_to_edit: bool = True
+        feedback_fields_list_prepared: List[Dict[str, Any]],
+        # Este é o callback final que lida com a lógica de negócios após o feedback:
+        on_feedback_flow_completed: Callable[[FeedbackDialogAction, Optional[List[Dict[str, Any]]]], None]
     ):
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
         if not isinstance(llm_display_component, LLMStructuredResultDisplay):
             _logger.error("_prepare_and_show_feedback_dialog: LLMStructuredResultDisplay não encontrado.")
             on_feedback_flow_completed(FeedbackDialogAction.CANCELLED_OR_ERROR, None)
             return
-
-        current_form_data_or_errors = llm_display_component.get_current_form_data(validate_for_export=False)
-        if not isinstance(current_form_data_or_errors, FormatAnaliseInicial):
-            _logger.warning("_prepare_and_show_feedback_dialog: Dados do formulário inválidos ou não disponíveis para feedback.")
-            on_feedback_flow_completed(FeedbackDialogAction.CANCELLED_OR_ERROR, None)
-            return
-
-        # `feedback_fields_list_prepared` é o que potencialmente será salvo.
-        feedback_fields_list_prepared = self._get_prepared_feedback_data() # Este método agora é do WorkflowManager
 
         if not feedback_fields_list_prepared:
             _logger.warning("_prepare_and_show_feedback_dialog: Nenhum dado de campo preparado para o diálogo de feedback.")
@@ -3427,7 +3361,6 @@ class FeedbackWorkflowManager:
             fields_feedback_data=feedback_fields_list_prepared, # Passa os dados para o diálogo construir sua UI
             on_close_callback=internal_on_close_wrapper_for_dialog, # Este é o callback que o diálogo chamará
             #action_context_name=action_context_name,
-            allow_return_to_edit=allow_return_to_edit
         )
         feedback_dialog.show()
 
@@ -3435,69 +3368,54 @@ class FeedbackWorkflowManager:
         self,
         action_context_name: str,
         primary_action_callable: Callable[[], None], # Ação a ser executada (upload, restart, etc.)
-        allow_return_to_edit: bool = False, # Geralmente False, exceto para exportação
-        # Callback opcional para executar após o feedback ser salvo (se confirmado)
-        # mas ANTES da primary_action_callable. Útil para limpar dados.
-        on_feedback_confirmed_before_action: Optional[Callable[[], None]] = None
+        # Callback opcional para executar após o feedback ser salvo (se confirmado
     ):
         """
         Verifica se o feedback deve ser solicitado. Se sim, mostra o diálogo.
         Executa a `primary_action_callable` com base na resposta do diálogo.
         """
+
+        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+        if not isinstance(llm_display_component, LLMStructuredResultDisplay):
+            _logger.error(f"FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado para '{action_context_name}'. Prosseguindo sem feedback.")
+            primary_action_callable()
+            return
+
+        # 1. Garante que os dados da UI estejam carregados no componente de display
+        current_form_data_or_errors = llm_display_component.get_current_form_data(validate_for_export=False)
+        if not isinstance(current_form_data_or_errors, FormatAnaliseInicial):
+            _logger.warning(f"FeedbackWorkflowManager: Dados do formulário inválidos ou não disponíveis para '{action_context_name}'. Prosseguindo sem feedback.")
+            primary_action_callable()
+            return
+
+        # 2. Prepara os dados para o diálogo de feedback
+        feedback_fields_data = self._get_prepared_feedback_data()
+        if not feedback_fields_data:
+            _logger.warning(f"FeedbackWorkflowManager: Não foi possível preparar dados para feedback para '{action_context_name}'. Prosseguindo sem feedback.")
+            primary_action_callable()
+            return
+
         if self.page.session.get(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS):
             _logger.info(f"FeedbackWorkflowManager: Feedback já coletado para '{action_context_name}'. Prosseguindo com ação primária.")
-            if on_feedback_confirmed_before_action: # Mesmo se pulou, se precisava limpar algo
-                on_feedback_confirmed_before_action()
             primary_action_callable()
             return
 
         # Só pede feedback se houver uma análise LLM anterior
         if not self.page.session.contains_key(KEY_SESSION_PDF_LLM_RESPONSE):
             _logger.info(f"FeedbackWorkflowManager: Nenhuma análise LLM anterior para '{action_context_name}'. Prosseguindo com ação primária.")
-            if on_feedback_confirmed_before_action: # Mesmo se pulou, se precisava limpar algo
-                on_feedback_confirmed_before_action()
             primary_action_callable()
             return
 
-        # Chamada a get_current_form_data ANTES de _get_prepared_feedback_data
-        # para garantir que llm_display_component.data está atualizado com a UI.
-        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
-        if isinstance(llm_display_component, LLMStructuredResultDisplay):
-            current_form_data_or_errors = llm_display_component.get_current_form_data(validate_for_export=False)
-            if not isinstance(current_form_data_or_errors, FormatAnaliseInicial):
-                _logger.warning("FeedbackWorkflowManager: Dados do formulário inválidos ou não disponíveis ao tentar preparar feedback. Prosseguindo com ação primária.")
-                if on_feedback_confirmed_before_action: on_feedback_confirmed_before_action()
-                primary_action_callable()
-                return
-        else:
-            _logger.error("FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado para get_current_form_data. Prosseguindo com ação primária.")
-            if on_feedback_confirmed_before_action: on_feedback_confirmed_before_action()
-            primary_action_callable()
-            return
-
-        # Agora _get_prepared_feedback_data pode usar o llm_display_component.data atualizado
-        feedback_fields_data = self._get_prepared_feedback_data()
-
-        if not feedback_fields_data:
-            _logger.warning(f"FeedbackWorkflowManager: Não foi possível preparar dados para feedback para '{action_context_name}'. Prosseguindo com ação primária.")
-            if on_feedback_confirmed_before_action:
-                on_feedback_confirmed_before_action()
-            primary_action_callable()
-            return
-
+        # 3. Chama o diálogo de feedback
         def on_feedback_dialog_closed_final_logic(action_taken: FeedbackDialogAction, collected_feedback_data: Optional[List[Dict[str, Any]]]):
             _logger.info(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado com ação: {action_taken.value}")
             
             if action_taken == FeedbackDialogAction.CONFIRM_AND_CONTINUE:
                 if collected_feedback_data:
                     self.parent_view.analysis_controller.save_feedback_data_now(collected_feedback_data)
-                if on_feedback_confirmed_before_action:
-                    on_feedback_confirmed_before_action()
                 primary_action_callable()
             
             elif action_taken == FeedbackDialogAction.SKIP_AND_CONTINUE:
-                if on_feedback_confirmed_before_action:
-                    on_feedback_confirmed_before_action()
                 primary_action_callable()
             
             elif action_taken == FeedbackDialogAction.RETURN_TO_EDIT:
@@ -3508,9 +3426,8 @@ class FeedbackWorkflowManager:
 
         # Chama _prepare_and_show_feedback_dialog, passando o callback final
         self._prepare_and_show_feedback_dialog(
-            action_context_name=action_context_name,
-            on_feedback_flow_completed=on_feedback_dialog_closed_final_logic,
-            allow_return_to_edit=allow_return_to_edit
+            feedback_fields_data,
+            on_feedback_flow_completed=on_feedback_dialog_closed_final_logic
         )
 
 # Função principal da view (chamada pelo router)
@@ -3525,7 +3442,6 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         Uma instância de AnalyzePDFViewContent.
     """
     _logger.info("View Análise de PDF: Iniciando criação (nova estrutura).")
-    # Esta view agora é um ft.Column que contém todos os elementos.
-    # O router irá inseri-la no layout principal da página.
     return AnalyzePDFViewContent(page)
 
+# TODO: Btn "Ignorar para tentar Re-análise"

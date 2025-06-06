@@ -81,39 +81,50 @@ if __name__ == "__main__":
 
 
 '''
+======================================================================================
+TODO: Próximas Tarefas:
+
+> Reorganizar prompt_único em agrupamentos;
+> Atualização ai_orchestrator para lidar com prompts agrupados e aproveitamento de cached_tokens;
+> Exibir prompt_estruturado;
+
+> Acrescentar casos prometheus e refazer prompts e testes; acrescentar listas de assuntos das outras delegacias?
+
+> Testes de Score sobre multiplas formas de prompt: modelos, prompts, temperaturas.
+
+-------
+> Linkar alertas e msgs informativas de responsabilidade no uso de IA
+
+-------
+> revisar sistemática do logging em nuvem;
+
+> pyinstaller e testes na rede;
+
+======================================================================================
+
+> Tests pdf_processor.py, ai_orchestrator.py, doc_generator.py
+> Test  View: analyze_pdf1
+
+# TODO: Posteriormente: 
+
+> Fix: CreateUser: Tratar erro "message": "EMAIL_EXISTS"
+
+> Melhorias na apresentação dos metadados: coluna em vez de lista única?
+> Melhorias na responsividade do LLMStructuredResultDisplay;
+> Reorganização referente aos métodos de limpeza e atualização da nc_analyze_view
+    - Prompt inicial: "Considere a versão atual do módulo nc_analyze_view.py. Identifique oportunidades de refatoração relacionadas aos métodos de limpeza e atualização da interface gráfica (GUI), que atualmente são invocados em múltiplos pontos do código. Proponha uma refatoração pontual que centralize essa lógica de atualização, simplifique a manutenção e garanta o correto tratamento das flags relacionadas a dados salvos dinamicamente."
+> Reorganização de InternalAnalysisController: passar para outro módulo?
+> Reorganização de FeedbackWorkflowManager: incorporar à FeedbackDialog?
+
+======================================================================================
+
+LEMBRAR:
+
 Quanto à FLET_SECRET_KEY, na compilação com pyinstaller:
     Tentar ler do ambiente (os.getenv) primeiro (para casos onde um administrador de TI ou usuário avançado queira definir).
     Se não encontrar, tentar ler do Keyring (para persistência na máquina local).
     Se não encontrar no Keyring, gerar uma nova chave aleatória, usá-la E salvá-la no Keyring para futuras sessões naquela máquina.
 
-
-TODO:
-> Fix: CreateUser: Tratar erro "message": "EMAIL_EXISTS"
-
-------------------------------
-> Upload de acertos
-> formas de feedback
--------
-> Acrescentar casos prometheus
-> Testes de Score sobre multiplas formas de prompt 
-
-> Exibir prompt_estruturado
-
--------
-> Analisar normativo PF de uso da IA
-> Linkar alertas e msgs informativas de responsabilidade no uso de IA
-
--------
-> revisar sistemática do logging em nuvem
-> pyinstaller e testes na rede
-
--------
-
-> Tests pdf_processor.py, ai_orchestrator.py, doc_generator.py
-> Test  View: analyze_pdf1
-
-# Posteriormente:
-> Melhorias na apresentação dos metadados;
-> Melhorias na responsividade do layout;
+======================================================================================
 
 '''
