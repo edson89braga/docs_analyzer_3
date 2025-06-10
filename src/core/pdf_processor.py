@@ -445,7 +445,6 @@ class PDFDocumentAnalyzer:
         Retorna uma tupla: (processed_files_metadata, all_indices_in_batch, 
                             all_texts_for_storage_combined, all_texts_for_analysis_combined)
         """
-        start_time = time.perf_counter()
         if not pdf_paths_ordered:
             logger.warning("Nenhum caminho de PDF fornecido para análise em lote.")
             return [], [], [], [], 0
@@ -486,15 +485,13 @@ class PDFDocumentAnalyzer:
         else:
             logger.info(f"Extração e pré-processamento em lote concluídos. Total de páginas com texto para análise: {len(all_texts_for_analysis_combined)}")
         
-        end_time = time.perf_counter()
-        return processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined, end_time - start_time
+        return processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined
 
     def _build_combined_page_data(self, 
                                         processed_files_metadata: List[Tuple[int, str]], 
                                         all_indices_in_batch: List[List[int]],
                                         all_texts_for_storage_combined: List[Dict[int, str]]
                                        ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
-        start_time = time.perf_counter()
 
         combined_processed_page_data: Dict[str, Dict[str, Any]] = {}
         all_global_page_keys_ordered: List[str] = [] 
@@ -521,8 +518,8 @@ class PDFDocumentAnalyzer:
                     'page_index_in_file': page_idx_in_file,
                     'original_pdf_path': pdf_path
                 }
-        end_time = time.perf_counter()
-        return combined_processed_page_data, all_global_page_keys_ordered, end_time - start_time
+
+        return combined_processed_page_data, all_global_page_keys_ordered
 
     @timing_decorator()
     def analyze_similarity_and_relevance_files(self, combined_processed_page_data: Dict[str, Dict[str, Any]], all_global_page_keys_ordered: List[str], 
@@ -533,7 +530,6 @@ class PDFDocumentAnalyzer:
         Atualiza o dicionário `combined_processed_page_data` com os scores de TF-IDF e 
         listas de páginas semelhantes.
         """
-        start_time = time.perf_counter()
         # --- 2. Análise de Similaridade e TF-IDF (COMBINADA para todos os arquivos) ---
         logger.info(f"Realizando análise de similaridade e TF-IDF para {len(all_texts_for_analysis_combined)} páginas combinadas.")
         try:
@@ -556,9 +552,7 @@ class PDFDocumentAnalyzer:
             # Por ora, os scores/semelhantes podem ficar zerados/vazios.
 
         logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(combined_processed_page_data)}")
-        end_time = time.perf_counter()
-        execution_time = end_time - start_time
-        return combined_processed_page_data, execution_time
+        return combined_processed_page_data
 
     @timing_decorator()
     def analyze_pdf_documents(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:

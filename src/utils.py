@@ -397,6 +397,11 @@ def load_dict_municipios_local():
 MUNICIPIOS_POR_UF = load_dict_municipios_local()
 LISTA_UFS = sorted(list(MUNICIPIOS_POR_UF.keys()))
 
+def convert_to_list_of_strings(value:str):
+    if not value:
+        return []
+    return [line.strip() for line in value.split('\n') if line.strip()]
+
 def clean_and_convert_to_float(value_str: Union[str, float, int, None], default_if_empty_or_error: float = 0.0) -> float:
     """
     Tenta limpar uma string que representa um valor monetário ou numérico
@@ -513,7 +518,7 @@ def convert_float_to_milhar(numero):
     """
     return f"{numero:,}".replace(",", ".")
 
-def obter_string_normalizada(string_atual, lista_opções):
+def obter_string_normalizada_em_lista(string_atual, lista_opções):
     """
     Normaliza uma string e a compara com uma lista de opções.
     

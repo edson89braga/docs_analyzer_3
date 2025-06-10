@@ -2,7 +2,7 @@
 import flet as ft
 import threading, json, os, shutil
 from typing import Optional, Dict, Any, List, Union, Tuple, Callable
-from time import time, sleep
+from time import time, sleep, perf_counter
 from datetime import datetime
 from enum import Enum
 
@@ -26,17 +26,17 @@ from src.settings import (APP_VERSION , UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEM
                           FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_LOADED_LLM_PROVIDERS,
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST)
 
-from src.utils import (format_seconds_to_min_sec, obter_string_normalizada, clean_and_convert_to_float, get_sigla_uf, 
-                        LISTA_UFS, MUNICIPIOS_POR_UF, calcular_similaridade_rouge_l, unidecode)
+from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
+                        LISTA_UFS, MUNICIPIOS_POR_UF, calcular_similaridade_rouge_l)
 
 from src.core.prompts import (
-    FormatAnaliseInicial,
+    formatted_initial_analysis,
     tipos_doc, origens_doc, tipos_locais,
-    areas_de_atribuição, tipo_a_autuar, assuntos_re,
-    lista_delegacias_especializadas,
-    lista_delegacias_interior, lista_corregedorias,
-    tipos_envolvidos
+    areas_de_atribuição, tipos_a_autuar, assuntos_re,
+    lista_delegacias_especializadas, materias_prometheus, 
+    lista_delegacias_interior, lista_corregedorias
 )
+from src.core import prompts as core_prompts
 
 destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
 
@@ -44,52 +44,6 @@ from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLA
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
-
-def get_api_key_in_firestore(page, provider):
-    """
-    Busca a chave de API criptografada para um provedor específico no Firestore
-    e a descriptografa.
-
-    Args:
-        page: A página Flet, usada para acessar a sessão do usuário.
-        provider: O nome do provedor (ex: "openai").
-
-    Returns:
-        A chave de API descriptografada como string, ou None se não for encontrada
-        ou houver erro na descriptografia.
-    """
-    from src.services import credentials_manager
-
-    user_token = page.session.get("auth_id_token")
-    user_id = page.session.get("auth_user_id")
-
-    firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
-    # O nome do serviço no Firestore precisa corresponder ao que foi salvo na Task 1.3
-    # Assumindo que foi salvo como "openai_api_key" para o provedor "openai"
-    
-    service_name_firestore = f"{provider}" # Ou uma lógica de mapeamento mais robusta
-    _logger.debug(f"Buscando chave API criptografada para serviço: {service_name_firestore}")
-    encrypted_key_bytes = firestore_client.get_user_api_key_client(
-        user_token, user_id, service_name_firestore
-    )
-
-    if not encrypted_key_bytes:
-        _logger.error(f"Chave API criptografada para '{service_name_firestore}' não encontrada no Firestore para o usuário {user_id}.")
-        # A UI deve informar o usuário para configurar a chave.
-        return None
-
-    _logger.debug("Descriptografando chave API...")
-    decrypted_api_key = credentials_manager.decrypt(encrypted_key_bytes)
-
-    if not decrypted_api_key:
-        _logger.error(f"Falha ao descriptografar a chave API para '{service_name_firestore}' do usuário {user_id}.")
-        # Pode indicar chave de criptografia local ausente ou corrompida.
-        return None
-
-    _logger.info(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
-    
-    page.session.set(f"decrypted_api_key_{provider}", decrypted_api_key)
-    return decrypted_api_key
 
 # Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
 KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
@@ -103,6 +57,7 @@ KEY_SESSION_PROCESSING_METADATA = "apv_processing_metadata"
 KEY_SESSION_LLM_METADATA = "apv_llm_metadata"
 KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS = "apv_feedback_collected"
 KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK = "apv_llm_response_snapshot_for_feedback"
+KEY_SESSION_LLM_REANALYSIS = "apv_llm_reanalysis_flag"
 
 # Constantes para nomes de controles (facilita acesso) CTL = Control
 CTL_UPLOAD_BTN = "upload_button"
@@ -172,6 +127,11 @@ class AnalyzePDFViewContent(ft.Column):
         self._is_drawer_open = False
         self._files_processed = False # Indica se o conteúdo dos PDFs foi processado
         self._analysis_requested = False # Indica se a análise LLM foi solicitada/concluída
+
+        # --- Adicionado para visualização do prompt ---
+        self._is_prompt_view_active = False
+        self._original_main_layout_container: Optional[ft.Row] = None   # Para armazenar main_content_with_drawer_row
+        self._prompt_display_layout: Optional[ft.Container] = None      # Para o layout de exibição do prompt
 
         self.feedback_workflow_manager: Optional[FeedbackWorkflowManager] = None
 
@@ -343,7 +303,7 @@ class AnalyzePDFViewContent(ft.Column):
         drawer_content = self.settings_drawer_manager.build_content() # Obtém o conteúdo do drawer
         self.settings_drawer_container = ft.Container(content=drawer_content, padding=10, width=0)
 
-        main_content_with_drawer_row = ft.Row(
+        self._original_main_layout_container = ft.Row(
             [ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=8)), 
              self.settings_drawer_container],
             expand=True, vertical_alignment=ft.CrossAxisAlignment.START
@@ -354,7 +314,7 @@ class AnalyzePDFViewContent(ft.Column):
             title_bar,
             action_buttons_bar,
             ft.Divider(height=1),
-            main_content_with_drawer_row # Esta linha contém o conteúdo e o drawer
+            self._original_main_layout_container # Esta linha contém o conteúdo e o drawer
         ])
 
         # Adaptação do FileListManager (será uma classe interna ou métodos diretos)
@@ -365,6 +325,69 @@ class AnalyzePDFViewContent(ft.Column):
 
         # self.export_manager é inicializado em _initialize_pickers após global_file_picker estar pronto
 
+    def _create_prompt_display_layout(self) -> ft.Container:
+        """Cria o layout para exibir os prompts estruturados."""
+        _logger.info("Criando layout de visualização do prompt.")
+
+        prompt_variables_to_display = [                       
+            ("System_prompt", core_prompts.system_prompt_A0),
+            #("Instruction_prompt", core_prompts.general_instruction_B1_1),
+            ("Instruction_prompt", core_prompts.general_instruction_B1_2),
+            ("Start_prompt", core_prompts.start_action_B2),
+            ("Prompt_C0", core_prompts.prompt_C0),
+            #("Prompt_C2", core_prompts.prompt_C2),
+            #("Prompt_C3", core_prompts.prompt_C3),
+            #("Prompt_C4", core_prompts.prompt_C4),
+            ("Prompt_D0", core_prompts.prompt_D0),
+            #("Prompt_D2", core_prompts.prompt_D2),
+            #("Prompt_D3", core_prompts.prompt_D3),
+            #("Prompt_D4", core_prompts.prompt_D4),
+            ("Prompt_F0", core_prompts.prompt_F0),
+            #("Prompt_F2", core_prompts.prompt_F2),
+            #("Prompt_F3", core_prompts.prompt_F3),
+            #("Prompt_F4", core_prompts.prompt_F4),
+            ("Prompt_G1", core_prompts.prompt_G1),
+            ("Prompt_G2", core_prompts.prompt_G2),
+            ("Prompt_H1", core_prompts.prompt_H1),
+            ("Prompt_I1", core_prompts.prompt_I1),
+            ("Prompt_I2", core_prompts.prompt_I2),
+            ("Prompt_J0", core_prompts.prompt_J0),
+            #("Prompt_J2", core_prompts.prompt_J2),
+            ("Prompt_K0", core_prompts.prompt_K0),
+            #("Prompt_K2", core_prompts.prompt_K2),
+            #("Prompt_K3", core_prompts.prompt_K3),
+            #("Prompt_K4", core_prompts.prompt_K4),
+            #("Final_prompt", core_prompts.final_action_L0),
+        ]
+
+        prompt_text_fields = [ft.Container(height=1)]
+        for name_str, prompt_dict_obj in prompt_variables_to_display:
+            content_value = prompt_dict_obj.get("content", "Conteúdo não encontrado")
+            # Limpar {input_text} se presente, para clareza na visualização
+            content_value_cleaned = content_value.replace("\n{input_text}\n", "[CONTEÚDO_DO_PDF_é_INSERIDO_AQUI]")
+
+            prompt_text_fields.append(
+                ft.TextField(
+                    label=name_str,
+                    value=content_value_cleaned,
+                    multiline=True, read_only=True,
+                    min_lines=2, max_lines=10, 
+                    border=ft.InputBorder.OUTLINE,
+                    text_size=12, # Tamanho de texto menor para acomodar mais
+                    # dense=True  # Torna o campo um pouco mais compacto
+                )
+            )
+        
+        return ft.Container(
+            content=ft.Column(
+                prompt_text_fields,
+                scroll=ft.ScrollMode.ALWAYS, expand=True,
+                spacing=9, # Espaçamento menor entre os TextFields
+            ),
+            expand=True, padding=15, # Padding geral para o container dos prompts
+            # border=ft.border.all(1, ft.colors.TEAL_ACCENT_700) # Para debug
+        )
+    
     # --- setup file_picker ---
     def _initialize_pickers(self):
         """
@@ -482,10 +505,10 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_UPLOAD_BTN].on_click = self._handle_upload_click
         self.gui_controls[CTL_PROCESS_BTN].on_click = self._handle_process_content_click
         self.gui_controls[CTL_ANALYZE_BTN].on_click = self._handle_analyze_click
-        self.gui_controls[CTL_PROMPT_STRUCT_BTN].on_click = self._handle_prompt_structured_click
         self.gui_controls[CTL_RESTART_BTN].on_click = self._handle_restart_click
         #self.gui_controls[CTL_EXPORT_BTN].on_item_selected = self.export_manager.handle_export_selected # Para PopupMenuButton
         self.gui_controls[CTL_SETTINGS_BTN].on_click = self._handle_toggle_settings_drawer
+        self.gui_controls[CTL_PROMPT_STRUCT_BTN].on_click = self._toggle_prompt_view
 
     def _handle_upload_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Carregar Arquivo(s)'."""
@@ -704,15 +727,79 @@ class AnalyzePDFViewContent(ft.Column):
         self.settings_drawer_container.update()
         _logger.info(f"Drawer de configurações {'aberto' if self._is_drawer_open else 'fechado'}.")
 
-    def _handle_prompt_structured_click(self, e: ft.ControlEvent):
+    def _toggle_prompt_view(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Prompt Estruturado'."""
-        _logger.info("Botão 'Prompt Estruturado' clicado.")
-        show_snackbar(self.page, "Visualização do 'Prompt Estruturado' ainda não implementado.", theme.COLOR_WARNING)
-        # TODO: Navegar para a view de prompt estruturado (page.go("/analyze_pdf/prompt_editor")?)
+        #_logger.info("Botão 'Prompt Estruturado' clicado.")
+        #show_snackbar(self.page, "Visualização do 'Prompt Estruturado' ainda não implementado.", theme.COLOR_WARNING)
+        self._is_prompt_view_active = not self._is_prompt_view_active
+        prompt_button = self.gui_controls.get(CTL_PROMPT_STRUCT_BTN)
+
+        if self._is_prompt_view_active:
+            _logger.info("Ativando visualização do prompt estruturado.")
+            # Salva o layout original se ainda não foi salvo (já feito ao inicializar _original_main_layout_container)
+            
+            # Cria ou obtém o layout de exibição do prompt
+            if not self._prompt_display_layout:
+                self._prompt_display_layout = self._create_prompt_display_layout()
+
+            # Substitui o conteúdo principal
+            if self.controls and self.controls[3] == self._original_main_layout_container: # Verifica se o controle esperado está lá
+                self.controls[3] = self._prompt_display_layout
+            else:
+                _logger.error("Estrutura de controle inesperada ao tentar mostrar a visualização do prompt.")
+                # Reverter e não fazer nada
+                self._is_prompt_view_active = False 
+                if prompt_button and prompt_button.page: 
+                    prompt_button.update()
+                self.update()
+                return
+
+            # Altera o botão "Prompt Estruturado"
+            if isinstance(prompt_button, ft.ElevatedButton):
+                prompt_button.icon = ft.Icons.ARROW_BACK_IOS_NEW_ROUNDED
+                prompt_button.bgcolor = ft.Colors.with_opacity(0.25, theme.COLOR_INFO)
+        
+        else: # Voltando para a visualização normal
+            _logger.info("Desativando visualização do prompt, voltando para análise.")
+            # Restaura layout original
+            if self._original_main_layout_container and self._prompt_display_layout:
+                if self.controls and self.controls[3] == self._prompt_display_layout:
+                     self.controls[3] = self._original_main_layout_container
+                else:
+                    _logger.error("Estrutura de controle inesperada ao tentar restaurar a visualização principal.")
+                    if prompt_button and prompt_button.page: 
+                        prompt_button.update()
+                    self.update()
+                    return
+            
+            # Reverte botão "Prompt Estruturado"
+            if isinstance(prompt_button, ft.ElevatedButton):
+                prompt_button.icon = ft.Icons.EDIT_NOTE_ROUNDED
+                prompt_button.bgcolor = None # prompt_button.color = None
+
+        # Atualiza o estado dos botões e a UI
+        self._update_button_states() 
+        self.update()       
 
     # --- Lógica de Atualização da UI (Métodos Internos) ---
     def _update_button_states(self):
         """Atualiza o estado (habilitado/desabilitado) dos botões da UI."""
+        barra_main_btns = [CTL_UPLOAD_BTN, CTL_PROCESS_BTN, CTL_ANALYZE_BTN, CTL_PROMPT_STRUCT_BTN, CTL_RESTART_BTN, CTL_EXPORT_BTN, CTL_SETTINGS_BTN]
+        llm_btns = [CTL_LLM_RESULT_INFO_TITLE, CTL_LLM_STATUS_INFO, CTL_LLM_STRUCTURED_RESULT_DISPLAY]
+
+        if self._is_prompt_view_active:
+            for key in barra_main_btns:
+                if key in self.gui_controls and key != CTL_PROMPT_STRUCT_BTN:
+                    self.gui_controls[key].disabled = True
+                elif key in self.gui_controls and key == CTL_PROMPT_STRUCT_BTN:
+                    self.gui_controls[key].disabled = False
+                    
+                if self.gui_controls[key].page and self.gui_controls[key].uid:
+                    self.gui_controls[key].update()
+            
+            _logger.info("[DEBUG] Estados dos botões atualizados (Prompt View Ativa).")
+            return # Termina aqui se a visualização do prompt estiver ativa
+
         files_exist = bool(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED))
         llm_response_exists = bool(self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE))
 
@@ -741,8 +828,7 @@ class AnalyzePDFViewContent(ft.Column):
                 self.gui_controls[CTL_LLM_STATUS_INFO].value = "Clique em 'Solicitar Análise' para prosseguir "
 
         # Força atualização dos botões
-        for btn_key in [CTL_UPLOAD_BTN, CTL_PROCESS_BTN, CTL_ANALYZE_BTN, CTL_LLM_RESULT_INFO_TITLE, CTL_LLM_STRUCTURED_RESULT_DISPLAY,
-                        CTL_PROMPT_STRUCT_BTN, CTL_RESTART_BTN, CTL_EXPORT_BTN, CTL_SETTINGS_BTN, CTL_LLM_STATUS_INFO]:
+        for btn_key in barra_main_btns+llm_btns:
             if btn_key in self.gui_controls and self.gui_controls[btn_key].page and self.gui_controls[btn_key].uid:
                 self.gui_controls[btn_key].update()
         _logger.info("[DEBUG] Estados dos botões atualizados.")
@@ -866,12 +952,7 @@ class AnalyzePDFViewContent(ft.Column):
         if not metadata_to_display:
             #content_area.controls.append(ft.Text("Nenhum metadado da LLM disponível.", italic=True))
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = False
-        else:
-            if not metadata_to_display.get("total_cost_usd"):
-                loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
-                calculated_cost_usd = self.analysis_controller._calc_costs_llm_analysis(metadata_to_display, loaded_llm_providers)
-                metadata_to_display["total_cost_usd"] = calculated_cost_usd
-           
+        else:           
             self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = False
             self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = False
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
@@ -923,7 +1004,7 @@ class AnalyzePDFViewContent(ft.Column):
                 if content_area.page and content_area.uid:
                     content_area.update()
 
-    def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, FormatAnaliseInicial]] = None, 
+    def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, formatted_initial_analysis]] = None, 
                                      is_initial_llm_response: bool = False):
         """
         Controla a visibilidade entre o balão informativo, o resultado LLM em texto puro
@@ -940,14 +1021,17 @@ class AnalyzePDFViewContent(ft.Column):
             self.llm_result_container.content.controls = [self.gui_controls[control]]
             for ctl in [CTL_LLM_RESULT_INFO_BALLOON, CTL_LLM_RESULT_TEXT, CTL_LLM_STRUCTURED_RESULT_DISPLAY]:
                 if ctl != control:
-                    self.gui_controls[ctl].visible = False            
+                    self.gui_controls[ctl].visible = False    
+            if self.llm_result_container.page and self.llm_result_container.uid:
+                self.llm_result_container.update()        
+        
         if show_balloon:
             only_one_visible(CTL_LLM_RESULT_INFO_BALLOON)
-        elif isinstance(result_data, FormatAnaliseInicial):
+        elif isinstance(result_data, formatted_initial_analysis):
             structured_display = self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY]
             if isinstance(structured_display, LLMStructuredResultDisplay): # Verifica o tipo
+                only_one_visible(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
                 structured_display.update_data(result_data, is_new_llm_response=is_initial_llm_response)
-                #only_one_visible(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
                 structured_display.visible = True
                 scrollable_row_for_structured_display = ft.Row(
                     [structured_display], scroll=ft.ScrollMode.ADAPTIVE, expand=True 
@@ -966,9 +1050,6 @@ class AnalyzePDFViewContent(ft.Column):
             only_one_visible(CTL_LLM_RESULT_INFO_BALLOON)
             _logger.warning(f"Tipo de result_data inesperado para _show_info_balloon_or_result: {type(result_data)}")
         
-        if self.llm_result_container.page and self.llm_result_container.uid:
-            self.page.update(self.llm_result_container)
-
         for ctl in [CTL_LLM_STRUCTURED_RESULT_DISPLAY, CTL_LLM_RESULT_TEXT, CTL_LLM_RESULT_INFO_BALLOON]:
             if ctl in self.gui_controls and self.gui_controls[ctl].page and self.gui_controls[ctl].uid:
                 #self.gui_controls[ctl].update()
@@ -1008,7 +1089,6 @@ class AnalyzePDFViewContent(ft.Column):
             self.settings_drawer_manager._load_settings_into_drawer_controls(FALLBACK_ANALYSIS_SETTINGS)
 
         # --- Lógica de restauração do resultado da LLM e snapshot ---
-        data_to_display_in_ui: Optional[FormatAnaliseInicial] = None
         is_this_the_initial_llm_response_for_snapshot = False
 
         # Prioridade 1: Tentar carregar o snapshot dedicado, se existir. Ele é o "original" se foi salvo.
@@ -1039,24 +1119,11 @@ class AnalyzePDFViewContent(ft.Column):
             source_for_ui_data = llm_response_original
             is_this_the_initial_llm_response_for_snapshot = True # Este é o melhor candidato para "inicial"
             _logger.info("_restore_state_from_session: Usando KEY_SESSION_PDF_LLM_RESPONSE para popular a UI e como 'initial'.")
-
-        if isinstance(source_for_ui_data, str):
-            try:
-                json_data = json.loads(source_for_ui_data)
-                if 'valor_apuracao' in json_data: # Normalização
-                    raw_valor = json_data['valor_apuracao']
-                    json_data['valor_apuracao'] = clean_and_convert_to_float(raw_valor)
-                data_to_display_in_ui = FormatAnaliseInicial(**json_data)
-            except (json.JSONDecodeError, TypeError, Exception) as e:
-                _logger.warning(f"Erro ao parsear dados da sessão para UI em _restore_state_from_session: {e}. Fonte: '{str(source_for_ui_data)[:100]}...'")
-                data_to_display_in_ui = source_for_ui_data # Mantém como string
-        elif isinstance(source_for_ui_data, FormatAnaliseInicial):
-            data_to_display_in_ui = source_for_ui_data
         
-        if data_to_display_in_ui:
+        if source_for_ui_data:
             self._show_info_balloon_or_result(
                 show_balloon=False, 
-                result_data=data_to_display_in_ui, 
+                result_data=source_for_ui_data, 
                 is_initial_llm_response=is_this_the_initial_llm_response_for_snapshot
             )
         else:
@@ -1286,152 +1353,6 @@ class InternalAnalysisController:
         self.pdf_analyzer = parent_view.pdf_analyzer # Usa o da view
         self.firestore_client_for_metrics = FirebaseClientFirestore() # Instância para métricas
 
-    def _calc_costs_embedding_process(self) -> Optional[float]:
-        """
-        Calcula o custo do processo de embedding com base nos tokens e no modelo utilizado.
-
-        Args:
-            tokens_and_model_id_session: Uma tupla contendo a contagem de tokens (int)
-                                            e o ID do modelo de embedding (str) usado na sessão.
-                                            Ou None se não houver dados de token/modelo.
-            model_embeddings_list_session: Lista de dicionários, onde cada dicionário
-                                            contém informações de configuração do modelo
-                                            de embedding, incluindo 'name' (str) e
-                                            'cost_per_million' (float/int).
-                                            Ou None se a lista de custos não estiver disponível.
-
-        Returns:
-            O custo calculado em USD como float, ou None se o cálculo não puder ser realizado
-            devido a dados ausentes, inválidos ou configuração não encontrada.
-        """
-        # Assume-se que _logger está definido e acessível no escopo da classe ou módulo.
-        
-        tokens_and_model_id_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
-        model_embeddings_list_session = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
-        
-        if not tokens_and_model_id_session:
-            _logger.info("Dados de tokens e ID do modelo não fornecidos para cálculo de custo de embedding.")
-            return None
-        
-        if not model_embeddings_list_session:
-            _logger.info("Lista de custos de modelos de embedding não fornecida.")
-            return None
-
-        tokens_count, embedding_model_id = tokens_and_model_id_session
-
-        # Validação dos dados desempacotados
-        if not isinstance(tokens_count, int) or tokens_count < 0:
-            _logger.warning(
-                f"Contagem de tokens inválida fornecida: {tokens_count}. "
-                "Deve ser um inteiro não negativo."
-            )
-            return None
-
-        if not embedding_model_id or not isinstance(embedding_model_id, str):
-            _logger.warning(
-                f"ID do modelo de embedding inválido ou ausente: '{embedding_model_id}'. "
-                "Deve ser uma string não vazia."
-            )
-            return None
-
-        # Busca a configuração do modelo de embedding (case-insensitive para o nome do modelo)
-        embedding_config = next(
-            (
-                emb for emb in model_embeddings_list_session
-                if emb.get("name", "").lower() == embedding_model_id.lower()
-            ),
-            None
-        )
-
-        if not embedding_config:
-            _logger.warning(
-                f"Configuração de custo não encontrada para o modelo de embedding: '{embedding_model_id}'."
-            )
-            return None
-
-        # Obtenção e validação do custo por milhão de tokens
-        # Corrigido erro de digitação: "cost_per_million" em vez de "coust_per_million"
-        cost_per_million = embedding_config.get("coust_per_million")
-
-        if cost_per_million is None:
-            _logger.warning(
-                f"Atributo 'cost_per_million' não definido ou é None para o modelo "
-                f"'{embedding_model_id}' na lista de configurações de custo."
-            )
-            return None
-        
-        if not isinstance(cost_per_million, (int, float)) or cost_per_million < 0:
-            _logger.warning(
-                f"Valor de 'cost_per_million' inválido ({cost_per_million}) para o modelo "
-                f"'{embedding_model_id}'. Deve ser um valor numérico não negativo."
-            )
-            return None
-
-        # Se não houver tokens, o custo é zero.
-        if tokens_count == 0:
-            _logger.info(
-                f"Nenhum token processado para o modelo '{embedding_model_id}'. "
-                "Custo de embedding: U$ 0.00"
-            )
-            return 0.0
-
-        # Cálculo do custo
-        calculated_embedding_cost_usd = (tokens_count / 1_000_000) * cost_per_million
-
-        _logger.info(
-            f"Custo de embeddings calculado: {tokens_count} tokens para o modelo "
-            f"'{embedding_model_id}' -> U$ {calculated_embedding_cost_usd:.6f}"
-        )
-        return calculated_embedding_cost_usd
-
-    def _calc_costs_llm_analysis(self, metadata_llm_analysis, loaded_llm_providers):
-        """
-        Calcula o custo estimado da análise LLM com base nos tokens e na configuração do modelo.
-
-        Args:
-            metadata_llm_analysis: Dicionário com metadados da análise LLM (uso de tokens, modelo, etc.).
-            loaded_llm_providers: Lista de dicionários com as configurações dos provedores LLM carregados.
-
-        Returns:
-            O custo calculado em USD como float, ou 0.0 se o cálculo não puder ser realizado.
-        """
-        calculated_cost_usd = 0.0
-        provider_used_raw = metadata_llm_analysis.get("llm_provider_used", "").lower()
-        model_used_raw = metadata_llm_analysis.get("llm_model_used", "").lower()
-        
-        input_tokens = metadata_llm_analysis.get("input_tokens", 0)
-        cached_tokens = metadata_llm_analysis.get("cached_tokens", 0) 
-        output_tokens = metadata_llm_analysis.get("output_tokens", 0)
-
-        #loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
-        if loaded_llm_providers and provider_used_raw and model_used_raw:
-            provider_config = next((
-                p for p in loaded_llm_providers
-                if p.get("system_name", "").lower() == provider_used_raw # Compara com system_name
-            ), None)
-            
-            if provider_config:
-                model_config = next((
-                    m for m in provider_config.get("models", [])
-                    if m.get('id', "").lower() == model_used_raw
-                ), None)
-                
-                if model_config:
-                    cost_input = (input_tokens / 1_000_000) * model_config.get("input_coust_million", 0.0)
-                    cost_cache = (cached_tokens / 1_000_000) * model_config.get("cache_coust_million", 0.0)
-                    cost_output = (output_tokens / 1_000_000) * model_config.get("output_coust_million", 0.0)
-                    calculated_cost_usd = cost_input + cost_cache + cost_output
-                    _logger.info(f"Custo calculado: Input=${cost_input:.6f}, Cache=${cost_cache:.6f}, Output=${cost_output:.6f} -> Total=${calculated_cost_usd:.6f}")
-                else:
-                    _logger.warning(f"Configuração do modelo '{model_used_raw}' não encontrada para o provedor '{provider_used_raw}' para cálculo de custo.")
-            else:
-                _logger.warning(f"Configuração do provedor '{provider_used_raw}' não encontrada para cálculo de custo.")
-        else:
-            _logger.warning("Dados insuficientes (provedores carregados, provedor/modelo usado) para calcular o custo.")
-        
-        #metadata_to_display["total_cost_usd"] = calculated_cost_usd 
-        return calculated_cost_usd
-
     def _log_analysis_metrics(self):
         """
         Coleta os metadados da análise e os envia para registro no Firestore.
@@ -1460,10 +1381,11 @@ class InternalAnalysisController:
                 "processing_time": proc_meta_session.get("processing_time")
             }
 
-            calculated_embedding_cost_usd = self._calc_costs_embedding_process()
             tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
+            calculated_embedding_cost_usd = proc_meta_session.get("calculated_embedding_cost_usd")
             if calculated_embedding_cost_usd:
-                processing_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0] # Não está sendo salvo o modelo_embedding, por ser único.
+                processing_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0]
+                processing_metadata_to_log["embeddings_model"] = tokens_embeddings_session[1]      
                 processing_metadata_to_log["calculated_embedding_cost_usd"] = calculated_embedding_cost_usd
 
             processing_metadata_to_log = {k: v for k, v in processing_metadata_to_log.items() if v is not None}
@@ -1494,11 +1416,12 @@ class InternalAnalysisController:
             # 4. LLM Parsed Response Fields
             llm_response_obj = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
             llm_parsed_response_fields = {}
-            if isinstance(llm_response_obj, FormatAnaliseInicial):
+            if isinstance(llm_response_obj, formatted_initial_analysis):
                 fields_to_log = [
                     "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
                     "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
-                    "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", "destinacao"
+                    "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", 
+                    "materia_especial", "destinacao"
                 ]
                 for field_name in fields_to_log:
                     if hasattr(llm_response_obj, field_name):
@@ -1606,6 +1529,9 @@ class InternalAnalysisController:
                     "feedback_fields": feedback_document_payload["feedback_fields_details"]
                 }
             }
+           
+            if self.page.session.get(KEY_SESSION_LLM_REANALYSIS):
+                metric_like_feedback_payload["reanalysis_occurrence"] = 1
 
             if self.firestore_client_for_metrics.save_metrics_client(user_token, user_id, metric_like_feedback_payload):
                 _logger.info("Dados de feedback detalhado salvos com sucesso no Firestore.")
@@ -1688,34 +1614,41 @@ class InternalAnalysisController:
             _logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
 
         try:
+            start_time = perf_counter()
+
             _logger.info(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
             self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
 
-            processed_files_metadata, all_indices, all_storage, all_analysis_texts, processing_time_1 = \
+            processed_files_metadata, all_indices, all_storage, all_analysis_texts = \
                                 self.pdf_analyzer.extract_texts_and_preprocess_files(pdf_paths)
 
+            processed_page_data_combined, all_global_page_keys_ordered = \
+                                self.pdf_analyzer._build_combined_page_data(processed_files_metadata, all_indices, all_storage)
+
+            self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
+
             ready_embeddings, tokens_embeddings = None, None
+            calculated_embedding_cost_usd = 0
             if model_embedding == "text-embedding-3-small":
                 if not decrypted_api_key: 
                     decrypted_api_key = get_api_key_in_firestore(self.page, provider)
                     assert decrypted_api_key
 
-                ready_embeddings, tokens_embeddings = ai_orchestrator.get_embeddings_from_api(all_analysis_texts, model_embedding, api_key=decrypted_api_key)
+                loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
+                ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
+                                                                                     all_analysis_texts, model_embedding, decrypted_api_key, loaded_embeddings_providers)
 
-            processed_page_data_combined, all_global_page_keys_ordered, processing_time_2 = \
-                                self.pdf_analyzer._build_combined_page_data(processed_files_metadata, all_indices, all_storage)
-
-            self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
-            processed_page_data_combined, processing_time_3 = self.pdf_analyzer.analyze_similarity_and_relevance_files(
+            processed_page_data_combined = self.pdf_analyzer.analyze_similarity_and_relevance_files(
                                 processed_page_data_combined, all_global_page_keys_ordered, all_analysis_texts, 
                                 model_embedding=model_embedding, ready_embeddings=ready_embeddings)
+            
+            point_time = perf_counter()
+            self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
 
             if tokens_embeddings:
                 self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, model_embedding))
                 _logger.info(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
-                calculated_embedding_cost_usd = self._calc_costs_embedding_process()
             else:
-                calculated_embedding_cost_usd = 0
                 if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
                     self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
                     _logger.info("Tokens de embedding removidos da sessão (não retornados pela análise).")
@@ -1724,10 +1657,7 @@ class InternalAnalysisController:
                 raise ValueError("Nenhum dado processável encontrado nos PDFs.")
             
             #print('\n[DEBUG]:\n', processed_page_data_combined, '\n\n')
-            self.page.session.set(KEY_SESSION_PDF_ANALYZER_DATA, processed_page_data_combined)
-            
-            point_time = time()
-            self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
+            self.page.session.set(KEY_SESSION_PDF_ANALYZER_DATA, processed_page_data_combined)           
 
             classified_data = self.pdf_analyzer.filter_and_classify_pages(processed_page_data_combined)
             self.page.session.set(KEY_SESSION_PDF_CLASSIFIED_INDICES_DATA, classified_data)
@@ -1738,9 +1668,9 @@ class InternalAnalysisController:
             if not relevant_indices:
                 raise ValueError("Nenhuma página relevante encontrada após classificação.")
 
-            if time() - point_time < 1: sleep(1) # Apenas Garante visibilidade do text_progressing
+            if perf_counter() - point_time < 1: sleep(1) # Apenas Garante visibilidade do text_progressing
 
-            point_time = time()
+            point_time = perf_counter()
             self.page.run_thread(self._update_status_callback, "Etapa 4/5: Filtrando páginas...")
 
             aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(
@@ -1755,7 +1685,7 @@ class InternalAnalysisController:
             supressed_tokens = tokens_antes_agg - tokens_final_agg
             perc_supressed = (supressed_tokens / tokens_antes_agg * 100) if tokens_antes_agg > 0 else 0
 
-            total_processing_time = processing_time_1+processing_time_2+processing_time_3
+            total_processing_time = perf_counter() - start_time
             
             proc_meta_for_ui = {
                 "total_pages_processed": len(processed_page_data_combined),
@@ -1778,8 +1708,7 @@ class InternalAnalysisController:
             self.parent_view._files_processed = True
             _logger.info(f"Thread: Processamento de PDF para '{batch_name}' concluído.")
 
-            if time() - point_time < 1: sleep(1) 
-
+            if perf_counter() - point_time < 1: sleep(1) 
             self.page.run_thread(self._update_status_callback, "Aguardando para exibir os resultados...", False, True)
 
             if analyze_llm_after:
@@ -1824,29 +1753,19 @@ class InternalAnalysisController:
                 decrypted_api_key = get_api_key_in_firestore(self.page, provider)
                 assert decrypted_api_key
 
-            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(self.page, "UNIQUE_ANALYSIS_V1", 
-                                                                                                aggregated_text, provider, model_name, temperature, api_key=decrypted_api_key)
+            loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
+
+            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm("PROMPT_UNICO_for_INITIAL_ANALYSIS", aggregated_text,
+                                                                                                provider, model_name, temperature, 
+                                                                                                decrypted_api_key, loaded_llm_providers)
 
             if llm_response_data:
-                # llm_response_data PODE ser um objeto FormatAnaliseInicial ou uma string
-                # Se for string e parece JSON, tenta parsear para FormatAnaliseInicial
-                if isinstance(llm_response_data, str):
-                    try:
-                        json_data_from_llm  = json.loads(llm_response_data)
-                        
-                        if 'valor_apuracao' in json_data_from_llm:
-                            raw_valor = json_data_from_llm['valor_apuracao']
-                            json_data_from_llm['valor_apuracao'] = clean_and_convert_to_float(raw_valor)
-                            _logger.info(f"Valor apuracao original da LLM: '{raw_valor}', convertido para: {json_data_from_llm['valor_apuracao']}")
-
-                        llm_response_data = FormatAnaliseInicial(**json_data_from_llm )
-                        _logger.info("Resposta LLM (string) parseada com sucesso para FormatAnaliseInicial.")
-                    except (json.JSONDecodeError, TypeError, Exception) as parse_error: # Exception para Pydantic ValidationError
-                        _logger.warning(f"Resposta LLM é string, mas falhou ao parsear/validar como FormatAnaliseInicial: {parse_error}. Usando como texto puro.")
-                        # Mantém llm_response_data como string para o fallback
-                elif isinstance(llm_response_data, FormatAnaliseInicial):
-                    _logger.info("Resposta LLM já é um objeto FormatAnaliseInicial.")
-
+                self.page.session.set(KEY_SESSION_LLM_REANALYSIS, False)
+                if self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE):
+                    # Se já existe uma llm_response na sessão é porque é caso de reanálise (usuário clicou em 'Solicitar Análise' novamente).
+                    # Registrar essa informação para o feedback_metric
+                    self.page.session.set(KEY_SESSION_LLM_REANALYSIS, True)
+                
                 self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, llm_response_data)
                 self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, llm_response_data, True)
                 
@@ -1960,10 +1879,10 @@ class InternalExportManager:
         """
         self.desktop_picker_operation: ExportOperation = ExportOperation.NONE
         self.desktop_picker_template_path: Optional[str] = None
-        self.current_data_for_export_obj: Optional[FormatAnaliseInicial] = None
+        self.current_data_for_export_obj: Optional[formatted_initial_analysis] = None
         pass # descontinuado
 
-    def start_export(self, operation_type: ExportOperation, data_to_export: FormatAnaliseInicial, template_path: Optional[str] = None):
+    def start_export(self, operation_type: ExportOperation, data_to_export: formatted_initial_analysis, template_path: Optional[str] = None):
         """
         Inicia o processo de exportação para DOCX.
 
@@ -2632,8 +2551,8 @@ class LLMStructuredResultDisplay(ft.Column):
             #horizontal_alignment=ft.CrossAxisAlignment.CENTER # Centraliza os cards
         )
         self.page = page
-        self.data: Optional[FormatAnaliseInicial] = None
-        self.original_llm_data_snapshot: Optional[FormatAnaliseInicial] = None
+        self.data: Optional[formatted_initial_analysis] = None
+        self.original_llm_data_snapshot: Optional[formatted_initial_analysis] = None
         self.gui_fields: Dict[str, ft.Control] = {}
 
         # Referências para controles que precisam ser atualizados dinamicamente (ex: municípios)
@@ -2709,7 +2628,7 @@ class LLMStructuredResultDisplay(ft.Column):
             if e is not None and self.page and self.dropdown_municipio_fato.uid: # 'e' indica chamada por evento de usuário
                 self.dropdown_municipio_fato.update()
 
-    def update_data(self, data_to_display_in_gui: FormatAnaliseInicial, is_new_llm_response: bool = False):
+    def update_data(self, data_to_display_in_gui: formatted_initial_analysis, is_new_llm_response: bool = False):
         """
         Atualiza o display com novos dados de análise estruturada.
         Popula os campos da UI e gerencia o snapshot original para feedback.
@@ -2748,7 +2667,7 @@ class LLMStructuredResultDisplay(ft.Column):
             # Não é uma nova resposta LLM (ex: restauração de sessão, ou após edição do usuário).
             # Tentamos carregar o snapshot da sessão dedicada.
             snapshot_from_session = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
-            if snapshot_from_session and isinstance(snapshot_from_session, FormatAnaliseInicial):
+            if snapshot_from_session and isinstance(snapshot_from_session, formatted_initial_analysis):
                 self.original_llm_data_snapshot = snapshot_from_session
                 _logger.info("Snapshot original da LLM restaurado da sessão dedicada.")
             else:
@@ -2765,31 +2684,26 @@ class LLMStructuredResultDisplay(ft.Column):
         self.controls.clear()
         self.gui_fields.clear()
 
-        # Normaliza UFs nos dados recebidos antes de popular a UI
-        # Isso garante que os valores iniciais dos dropdowns de UF sejam válidos.
-        self.data.uf_origem = get_sigla_uf(self.data.uf_origem)
-        self.data.uf_fato = get_sigla_uf(self.data.uf_fato)
-
         # --- Seção 1: Identificação do Documento ---
         self.gui_fields["descricao_geral"] = ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, width=1600)
         self.gui_fields["tipo_documento_origem"] = ft.Dropdown(label="Tipo Documento Origem", 
                                                                options=[ft.dropdown.Option(td) for td in tipos_doc], 
                                                                value=self.data.tipo_documento_origem if self.data.tipo_documento_origem in tipos_doc else "", 
-                                                               width=400, dense=True)
+                                                               width=475, dense=True)
         self.gui_fields["orgao_origem"] = ft.Dropdown(label="Órgão de Origem", 
                                                       options=[ft.dropdown.Option(oo) for oo in origens_doc], 
                                                       value=self.data.orgao_origem if self.data.orgao_origem in origens_doc else "", 
-                                                      width=530, dense=True) # Removido expand=True
+                                                      width=480, dense=True) # Removido expand=True
 
         self.dropdown_uf_origem = ft.Dropdown(
             label="UF de Origem", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
             value=self.data.uf_origem if self.data.uf_origem in self.ufs_list else "",
-            on_change=self._atualizar_municipios_origem, width=170, dense=True
+            on_change=self._atualizar_municipios_origem, width=145, dense=True
         )
         self.gui_fields["uf_origem"] = self.dropdown_uf_origem # Adiciona ao ui_fields
 
-        municipios_origem_init = MUNICIPIOS_POR_UF.get(self.data.uf_origem, []) if self.data.uf_origem else []
-        municipio_origem = obter_string_normalizada(self.data.municipio_origem, municipios_origem_init)
+        municipios_origem_init = MUNICIPIOS_POR_UF[self.data.uf_origem] if self.data.uf_origem else []
+        municipio_origem = self.data.municipio_origem
         self.dropdown_municipio_origem = ft.Dropdown(
             label="Município de Origem",
             options=[ft.dropdown.Option(m) for m in municipios_origem_init],
@@ -2816,19 +2730,18 @@ class LLMStructuredResultDisplay(ft.Column):
         id_doc_card = CardWithHeader(title="Identificação do Documento", content=id_doc_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), width=1640)
         self.controls.append(id_doc_card)
 
-
         # --- Seção 2: Detalhes do Fato ---
         self.gui_fields["resumo_fato"] = ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, width=1600)
         
         self.dropdown_uf_fato = ft.Dropdown(
             label="UF do Fato", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
             value=self.data.uf_fato if self.data.uf_fato in self.ufs_list else "",
-            on_change=self._atualizar_municipios_fato, width=170, dense=True
+            on_change=self._atualizar_municipios_fato, width=145, dense=True
         )
         self.gui_fields["uf_fato"] = self.dropdown_uf_fato
 
-        municipios_fato_init = MUNICIPIOS_POR_UF.get(self.data.uf_fato, []) if self.data.uf_fato else []
-        municipio_fato = obter_string_normalizada(self.data.municipio_fato, municipios_fato_init)
+        municipios_fato_init = MUNICIPIOS_POR_UF[self.data.uf_fato] if self.data.uf_fato else []
+        municipio_fato = self.data.municipio_fato
         self.dropdown_municipio_fato = ft.Dropdown(
             label="Município do Fato",
             options=[ft.dropdown.Option(m) for m in municipios_fato_init],
@@ -2844,7 +2757,8 @@ class LLMStructuredResultDisplay(ft.Column):
                                                     width=480, dense=True) # expand=True
         
         valor_apuracao_str = f"{self.data.valor_apuracao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(self.data.valor_apuracao, float) else str(self.data.valor_apuracao)
-        self.gui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER, width=450, prefix_text="R$ ", dense=True)
+        self.gui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER, 
+                                                         width=475, prefix_text="R$ ", dense=True)
         
         self.gui_fields["pessoas_envolvidas"] = ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, width=1600)
         self.gui_fields["linha_do_tempo"] = ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, width=1600)
@@ -2863,53 +2777,61 @@ class LLMStructuredResultDisplay(ft.Column):
             self.gui_fields["pessoas_envolvidas"],
             self.gui_fields["linha_do_tempo"],
         ], spacing=12) 
+
         det_fato_card = CardWithHeader(title="Detalhes do Fato", content=det_fato_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), width=1640)
         self.controls.append(det_fato_card)
 
         # --- Seção 3: Classificação e Encaminhamento ---
         self.gui_fields["area_atribuicao"] = ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição], 
                                                          value=self.data.area_atribuicao if self.data.area_atribuicao in areas_de_atribuição else "", 
-                                                         width=660, dense=True)
-        self.gui_fields["tipificacao_penal"] = ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=840, dense=True)
+                                                         width=475, dense=True)
         self.gui_fields["destinacao"] = ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas], 
                                                     value=self.data.destinacao if self.data.destinacao in destinacoes_completas else "", 
-                                                    width=250, dense=True)
-        self.gui_fields["tipo_a_autuar"] = ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipo_a_autuar], 
-                                                       value=self.data.tipo_a_autuar if self.data.tipo_a_autuar in tipo_a_autuar else "", 
-                                                       width=350, dense=True)
+                                                    width=480, dense=True)
+        self.gui_fields["tipo_a_autuar"] = ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipos_a_autuar], 
+                                                       value=self.data.tipo_a_autuar if self.data.tipo_a_autuar in tipos_a_autuar else "", 
+                                                       width=475, dense=True)
+        self.gui_fields["tipificacao_penal"] = ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=475, dense=True)
+        self.gui_fields["materia_especial"] = ft.Dropdown(label="Tratamento especial", options=[ft.dropdown.Option(mp) for mp in materias_prometheus], 
+                                                    value=self.data.materia_especial if self.data.materia_especial in materias_prometheus else "", 
+                                                    width=480, dense=True)
         self.gui_fields["assunto_re"] = ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re], 
                                                     value=self.data.assunto_re if self.data.assunto_re in assuntos_re else "", 
-                                                    width=840, dense=True)
+                                                    width=475, dense=True)
 
         class_enc_card_content = ft.Column([
             ft.Row([
                 self.gui_fields["area_atribuicao"],
                 self._create_justificativa_icon(self.data.justificativa_area_atribuicao),
-                self.gui_fields["tipificacao_penal"],
-                self._create_justificativa_icon(self.data.justificativa_tipificacao_penal)
-            ], spacing=10), # Ajuste
-            ft.Row([
                 self.gui_fields["destinacao"],
                 self._create_justificativa_icon(self.data.justificativa_destinacao),
                 self.gui_fields["tipo_a_autuar"],
-                self._create_justificativa_icon(self.data.justificativa_tipo_a_autuar),
+                self._create_justificativa_icon(self.data.justificativa_tipo_a_autuar)
+            ], spacing=10), # Ajuste
+            ft.Row([
+                self.gui_fields["tipificacao_penal"],
+                self._create_justificativa_icon(self.data.justificativa_tipificacao_penal),
+                self.gui_fields["materia_especial"],
+                self._create_justificativa_icon(self.data.justificativa_materia_especial),
                 self.gui_fields["assunto_re"],
                 self._create_justificativa_icon(self.data.justificativa_assunto_re)
             ], spacing=10), # Ajuste
         ], spacing=12)
+
         class_enc_card = CardWithHeader(title="Classificação e Encaminhamento", content=class_enc_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), width=1640)
         self.controls.append(class_enc_card)
 
         # --- Seção 4: Observações ---
         self.gui_fields["observacoes"] = ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, width=1600)
         obs_card_content = ft.Column([self.gui_fields["observacoes"]], spacing=10)
+
         obs_card = CardWithHeader(title="Observações Adicionais", content=obs_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), width=1640) # header_bgcolor=ft.Colors.GREY_300
         self.controls.append(obs_card)
 
         if self.page and self.uid:
             self.update()
 
-    def get_current_form_data(self, validate_for_export: bool = False) -> Union[Optional[FormatAnaliseInicial], List[str]]:
+    def get_current_form_data(self, validate_for_export: bool = False) -> Union[Optional[formatted_initial_analysis], List[str]]:
         """
         Coleta os dados atuais dos campos da UI, atualiza self.data.
         Se validate_for_export for True, valida campos obrigatórios para exportação.
@@ -2969,7 +2891,7 @@ class LLMStructuredResultDisplay(ft.Column):
             if field_name == "valor_apuracao":
                 value = clean_and_convert_to_float(value)
             elif field_name in ["pessoas_envolvidas", "linha_do_tempo"] and isinstance(value, str):
-                value = [line.strip() for line in value.split('\n') if line.strip()] if value else []
+                value = convert_to_list_of_strings(value)
             
             collected_values_from_ui[field_name] = value
 
@@ -2991,7 +2913,7 @@ class LLMStructuredResultDisplay(ft.Column):
 
         final_data_for_pydantic.update(collected_values_from_ui)
 
-        for pydantic_field_name in FormatAnaliseInicial.model_fields.keys():
+        for pydantic_field_name in formatted_initial_analysis.model_fields.keys():
             # Se não foi coletado da UI e não estava no snapshot original (improvável para campos principais),
             # pegue o valor default do modelo Pydantic se existir, ou defina como None.
             # O model_dump() do snapshot já cuida disso.
@@ -3001,15 +2923,14 @@ class LLMStructuredResultDisplay(ft.Column):
                 #    final_data_for_pydantic[pydantic_field_name] = getattr(self.data, pydantic_field_name)
                 if hasattr(self.original_llm_data_snapshot, pydantic_field_name) and self.original_llm_data_snapshot:
                      final_data_for_pydantic[pydantic_field_name] = getattr(self.original_llm_data_snapshot, pydantic_field_name)
-                elif FormatAnaliseInicial.model_fields[pydantic_field_name].default is not Ellipsis: # type: ignore
-                     final_data_for_pydantic[pydantic_field_name] = FormatAnaliseInicial.model_fields[pydantic_field_name].default
+                elif formatted_initial_analysis.model_fields[pydantic_field_name].default is not Ellipsis: # type: ignore
+                     final_data_for_pydantic[pydantic_field_name] = formatted_initial_analysis.model_fields[pydantic_field_name].default
                 else:
                      final_data_for_pydantic[pydantic_field_name] = None
         try:
             _logger.debug(f"Dados para instanciar FormatAnaliseInicial: {final_data_for_pydantic}")
-            current_ui_data_as_pydantic  = FormatAnaliseInicial(**final_data_for_pydantic)
 
-            self.data = current_ui_data_as_pydantic  # Atualiza o self.data da instância com os dados atuais da UI, já validados por Pydantic
+            self.data = formatted_initial_analysis(**final_data_for_pydantic)  # Atualiza o self.data da instância com os dados atuais da UI, já validados por Pydantic
             _logger.info("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
 
             # Atualiza também a sessão com a representação mais recente (objeto Pydantic)
@@ -3229,7 +3150,8 @@ class FeedbackDialog(ft.AlertDialog):
         if self not in self.page_ref.overlay:
             self.page_ref.overlay.append(self)
         self.open = True
-        self.page_ref.update()
+        if self.page_ref and self.page_ref.uid:
+            self.page_ref.update()
 
 class FeedbackWorkflowManager:
     """
@@ -3269,7 +3191,8 @@ class FeedbackWorkflowManager:
         fields_for_feedback = [
             "descricao_geral", "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
             "resumo_fato", "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
-            "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", "destinacao",
+            "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", 
+            "destinacao", "materia_especial"
             "pessoas_envolvidas", "linha_do_tempo", "observacoes"
         ]
 
@@ -3280,14 +3203,9 @@ class FeedbackWorkflowManager:
 
             # Lógica de comparação para 'foi_editado' (permanece a mesma)
             foi_editado = False
-            if field_name in ["uf_origem", "uf_fato"]:
-                original_uf_sigla = get_sigla_uf(str(original_value)) if original_value else None
-                foi_editado = (original_uf_sigla != current_value_ui)
-            elif field_name in ["municipio_origem", "municipio_fato"]:
-                foi_editado = (unidecode(original_value.lower()) != unidecode(current_value_ui.lower()))
-            elif field_name == "valor_apuracao":
-                # Supondo que original_value e current_value_ui são floats ou None
-                # (get_current_form_data deve garantir isso para current_value_ui)
+            
+            # Demais normalizações tratadas na origem.
+            if field_name == "valor_apuracao":
                 original_float = original_value if isinstance(original_value, float) else 0.0
                 current_float_ui = current_value_ui if isinstance(current_value_ui, float) else 0.0
                 # Use math.isclose para comparar floats com tolerância, se necessário
@@ -3383,7 +3301,7 @@ class FeedbackWorkflowManager:
 
         # 1. Garante que os dados da UI estejam carregados no componente de display
         current_form_data_or_errors = llm_display_component.get_current_form_data(validate_for_export=False)
-        if not isinstance(current_form_data_or_errors, FormatAnaliseInicial):
+        if not isinstance(current_form_data_or_errors, formatted_initial_analysis):
             _logger.warning(f"FeedbackWorkflowManager: Dados do formulário inválidos ou não disponíveis para '{action_context_name}'. Prosseguindo sem feedback.")
             primary_action_callable()
             return
@@ -3444,4 +3362,51 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     _logger.info("View Análise de PDF: Iniciando criação (nova estrutura).")
     return AnalyzePDFViewContent(page)
 
-# TODO: Btn "Ignorar para tentar Re-análise"
+# Funções acessórias:
+
+def get_api_key_in_firestore(page, provider):
+    """
+    Busca a chave de API criptografada para um provedor específico no Firestore
+    e a descriptografa.
+
+    Args:
+        page: A página Flet, usada para acessar a sessão do usuário.
+        provider: O nome do provedor (ex: "openai").
+
+    Returns:
+        A chave de API descriptografada como string, ou None se não for encontrada
+        ou houver erro na descriptografia.
+    """
+    from src.services import credentials_manager
+
+    user_token = page.session.get("auth_id_token")
+    user_id = page.session.get("auth_user_id")
+
+    firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
+    # O nome do serviço no Firestore precisa corresponder ao que foi salvo na Task 1.3
+    # Assumindo que foi salvo como "openai_api_key" para o provedor "openai"
+    
+    service_name_firestore = f"{provider}" # Ou uma lógica de mapeamento mais robusta
+    _logger.debug(f"Buscando chave API criptografada para serviço: {service_name_firestore}")
+    encrypted_key_bytes = firestore_client.get_user_api_key_client(
+        user_token, user_id, service_name_firestore
+    )
+
+    if not encrypted_key_bytes:
+        _logger.error(f"Chave API criptografada para '{service_name_firestore}' não encontrada no Firestore para o usuário {user_id}.")
+        # A UI deve informar o usuário para configurar a chave.
+        return None
+
+    _logger.debug("Descriptografando chave API...")
+    decrypted_api_key = credentials_manager.decrypt(encrypted_key_bytes)
+
+    if not decrypted_api_key:
+        _logger.error(f"Falha ao descriptografar a chave API para '{service_name_firestore}' do usuário {user_id}.")
+        # Pode indicar chave de criptografia local ausente ou corrompida.
+        return None
+
+    _logger.info(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
+    
+    page.session.set(f"decrypted_api_key_{provider}", decrypted_api_key)
+    return decrypted_api_key
+

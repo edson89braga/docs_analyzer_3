@@ -6,7 +6,7 @@ from docx.shared import Inches, Pt
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 import shutil # Para copiar templates
 
-from src.core.prompts import FormatAnaliseInicial # Para type hinting e acesso aos campos
+from src.core.prompts import formatted_initial_analysis # Para type hinting e acesso aos campos
 from src.settings import ASSETS_DIR_ABS # Para acessar a pasta de assets
 
 from src.logger.logger import LoggerSetup
@@ -44,7 +44,7 @@ class DocxExporter:
         }
         return name_map.get(field_name, field_name.replace("_", " ").title())
 
-    def export_simple_docx(self, data: FormatAnaliseInicial, output_path: str) -> bool:
+    def export_simple_docx(self, data: formatted_initial_analysis, output_path: str) -> bool:
         """
         Exporta os dados da análise (objeto FormatAnaliseInicial) para uma tabela em um arquivo DOCX.
 
@@ -144,7 +144,7 @@ class DocxExporter:
         _logger.info(f"Encontrados {len(templates)} templates em '{self.templates_dir}'.")
         return templates
 
-    def export_from_template_docx(self, data: FormatAnaliseInicial, template_path: str, output_path: str) -> Tuple[bool, List[str]]:
+    def export_from_template_docx(self, data: formatted_initial_analysis, template_path: str, output_path: str) -> Tuple[bool, List[str]]:
         """
         Cria um novo DOCX a partir de um template, substituindo placeholders pelos dados da análise.
 
