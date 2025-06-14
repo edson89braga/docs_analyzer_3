@@ -15,7 +15,7 @@ cotacao_dolar_to_real = 6
 
 # --- Configurações Gerais da Aplicação ---
 APP_NAME = "DocsAnalyzerPF"
-APP_VERSION = "0.1.0" # Versão inicial do MVP
+APP_VERSION = "0.2" # Versão inicial do MVP
 APP_TITLE = "IA Assistente - COR/SR/PF/SP" # Análise de Documentos
 FLET_SECRET_KEY = "minha_chave_secreta_de_teste_temporaria_123"
 PATH_IMAGE_LOGO_DEPARTAMENTO = "logo_pf_orgao.png" # Caminho para a imagem (ajuste conforme necessário, pode estar em 'assets')

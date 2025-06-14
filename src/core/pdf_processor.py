@@ -250,6 +250,7 @@ def count_tokens(text: str, model_name: str) -> int:
 
 ### text_analysis_utils: #########################################################################################
 from numpy import array as np_array
+from numpy import ndarray as np_ndarray
 from nltk.corpus import stopwords
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -275,8 +276,17 @@ def analyze_text_similarity(pages_texts: List[str], model_embedding: str = 'all-
     if not ready_embeddings:
         print('\n', '[DEBUG]: Modelo embeddings: all-MiniLM-L6-v2', '\n')
         model = get_sentence_transformer_model(model_embedding)
-        ready_embeddings = sk_normalize(model.encode(pages_texts))
+        ready_embeddings = model.encode(pages_texts)
     
+    if not isinstance(ready_embeddings, np_ndarray):
+        ready_embeddings = np_array(ready_embeddings)
+    
+    # Verifica se o array não está vazio
+    if ready_embeddings.size == 0:
+        logger.warning(f"Array 'ready_embeddings' fornecido está vazio para o modelo '{model_embedding}'. Retornando matriz de similaridade vazia.")
+        return np_array([])
+        
+    ready_embeddings = sk_normalize(ready_embeddings)
     similarity_matrix = cosine_similarity(ready_embeddings)
     return similarity_matrix
 
@@ -557,19 +567,19 @@ class PDFDocumentAnalyzer:
     @timing_decorator()
     def analyze_pdf_documents(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
 
-        processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined, _ = self.extract_texts_and_preprocess_files(pdf_paths_ordered)
+        processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined = self.extract_texts_and_preprocess_files(pdf_paths_ordered)
         if not processed_files_metadata:
             logger.warning("Nenhum arquivo PDF produziu dados na fase de extração.")
             return {}
     
-        combined_processed_page_data, all_global_page_keys_ordered, _ = self._build_combined_page_data(processed_files_metadata, 
+        combined_processed_page_data, all_global_page_keys_ordered = self._build_combined_page_data(processed_files_metadata, 
                                                                             all_indices_in_batch, all_texts_for_storage_combined)
 
         if not all_texts_for_analysis_combined:
             logger.warning("Nenhum texto para análise combinado de todos os arquivos. Pulando análise de similaridade e relevância.")
             return combined_processed_page_data
         
-        combined_processed_page_data, _ = self.analyze_similarity_and_relevance_files(combined_processed_page_data, all_global_page_keys_ordered, all_texts_for_analysis_combined)
+        combined_processed_page_data = self.analyze_similarity_and_relevance_files(combined_processed_page_data, all_global_page_keys_ordered, all_texts_for_analysis_combined)
 
         return combined_processed_page_data
    
@@ -659,8 +669,9 @@ class PDFDocumentAnalyzer:
             
             if most_relevant_in_group in processed_page_data:
                  processed_page_data[most_relevant_in_group]['tf_idf_score'] *= 2
-            
-            processed_indices.update(group_to_evaluate)
+
+            # CORREÇÃO: Atualiza com o grupo original, não o filtrado group_to_evaluate
+            processed_indices.update(current_group_indices_from_data)
 
         final_relevant_indices_list = list(relevant_indices_candidates) # Renomeado para clareza
         final_relevant_indices_list.sort(
@@ -1169,10 +1180,21 @@ def test_examples_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 
         import traceback
         traceback.print_exc()
 
+def teste_ult():
+    pdf_paths = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.013511_2025-29.pdf']
+    analyzer = PDFDocumentAnalyzer()
+    processed_page_data_combined = analyzer.analyze_pdf_documents(pdf_paths)
+    classified_data = analyzer.filter_and_classify_pages(processed_page_data_combined)
+    relevant_indices, *_ = classified_data
+    aggregated_info = analyzer.group_texts_by_relevance_and_token_limit(processed_page_data_combined, relevant_indices, 180000)
+    _, processed_text, *_ = aggregated_info
+    return processed_text
+
 r'''
 python -i teste_interativo.py
 
 pdf_paths_1 = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf']
+
 pdf_paths_2 = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\01_08500.014072_2025-71.pdf',
                r'C:\Users\edson.eab\Downloads\PDFs-Testes\11_08500.014072_2025-71.pdf']
 
@@ -1180,6 +1202,7 @@ analyzer = PDFDocumentAnalyzer()
 
 processed_data_batch_1 = analyzer.analyze_pdf_document_batch(pdf_paths_1)
 tupla_processed_data_batch_1 = analyzer.filter_and_classify_pages(processed_data_batch_1)
+
 processed_data_batch_2 = analyzer.analyze_pdf_document_batch(pdf_paths_2)
 tupla_processed_data_batch_2 = analyzer.filter_and_classify_pages(processed_data_batch_2)
 
@@ -1190,6 +1213,10 @@ for k1, k2 in zip(list(processed_data_batch_1.keys()), list(processed_data_batch
         assert processed_data_batch_1[k1][k3] == processed_data_batch_2[k2][k3]
 
 assert tupla_processed_data_batch_1[2:] == tupla_processed_data_batch_2[2:]
+
+--------------------------------------------------------------------------------------------
+
+processed_text = teste_ult()
 
 '''
 

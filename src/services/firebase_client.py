@@ -129,9 +129,19 @@ class FirebaseClientStorage:
                 error_details = http_err.response.json()
                 error_message = error_details.get("error", {}).get("message", "Erro desconhecido do Storage")
                 self.logger.error(f"Erro HTTP {status_code} do Storage para {object_path}: {error_message} | Detalhes: {error_details}")
+                error_details_msg = f"Detalhes: {error_details}"
             except json.JSONDecodeError:
                 self.logger.error(f"Erro HTTP {status_code} do Storage para {object_path}. Resposta não JSON: {http_err.response.text}")
-            raise # Re-levanta a exceção original para ser tratada pelo chamador
+                error_details_msg = f"Resposta não JSON: {error_message}"
+
+            if status_code == 403:
+                self.logger.error(
+                    f"Erro de Permissão (403) do Storage para {method} {object_path}: {error_message}. "
+                    f"Verifique as Regras de Segurança do Firebase Storage e o status do token do usuário. {error_details_msg}"
+                )
+            else:
+                self.logger.error(f"Erro HTTP {status_code} do Storage para {method} {object_path}: {error_message}. {error_details_msg}")
+            raise
         except requests.exceptions.RequestException as req_err:
             self.logger.error(f"Erro de requisição para Storage em {object_path}: {req_err}", exc_info=True)
             raise
@@ -272,8 +282,18 @@ class FirebaseClientFirestore:
                 error_details = http_err.response.json()
                 error_message = error_details.get("error", {}).get("message", "Erro desconhecido do Firestore")
                 self.logger.error(f"Erro HTTP {status_code} do Firestore para {document_path}: {error_message} | Detalhes: {error_details}")
+                error_details_msg = f"Detalhes: {error_details}"
             except json.JSONDecodeError:
                 self.logger.error(f"Erro HTTP {status_code} do Firestore para {document_path}. Resposta não JSON: {http_err.response.text}")
+                error_details_msg = f"Resposta não JSON: {error_message}"
+                        
+            if status_code == 403:
+                self.logger.error(
+                    f"Erro de Permissão (403) do Firestore para {method} {document_path}: {error_message}. "
+                    f"Verifique as Regras de Segurança do Firestore e o status do token do usuário. {error_details_msg}"
+                )
+            else:
+                self.logger.error(f"Erro HTTP {status_code} do Firestore para {method} {document_path}: {error_message}. {error_details_msg}")
             raise
         except requests.exceptions.RequestException as req_err:
             self.logger.error(f"Erro de requisição para Firestore em {document_path}: {req_err}", exc_info=True)

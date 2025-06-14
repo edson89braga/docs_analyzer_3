@@ -3,9 +3,10 @@
 Módulo responsável por orquestrar a interação com os modelos de linguagem (LLMs)
 usando LangChain.
 """
-import os
-from time import perf_counter
+import os, json
+from time import time, sleep, perf_counter
 from typing import Optional, Dict, Any, List, Tuple
+from huggingface_hub import get_token
 from openai import OpenAI, AuthenticationError, APIError # Para tratamento específico de erros OpenAI
 
 # LangChain Imports
@@ -20,7 +21,8 @@ from langchain_community.callbacks.manager import get_openai_callback
 from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 
 from src.utils import timing_decorator
-from src.core.prompts import prompts, output_formats, review_function, normalizing_function, formatted_initial_analysis, try_convert_to_pydantic_format, merge_parts_into_model
+from src.core.prompts import (prompts, output_formats, review_function, normalizing_function, prompt_inicial_para_cache,
+                                formatted_initial_analysis, try_convert_to_pydantic_format, merge_parts_into_model, return_parse_prompt)
 
 # Configuração do Logger
 # (Assume que LoggerSetup já foi inicializado em run.py)
@@ -140,7 +142,7 @@ def calc_costs_llm_analysis(input_tokens, cached_tokens, output_tokens, provider
             ), None)
             
             if model_config:
-                cost_input = (input_tokens / 1_000_000) * model_config.get("input_coust_million", 0.0)
+                cost_input = ((input_tokens-cached_tokens) / 1_000_000) * model_config.get("input_coust_million", 0.0)
                 cost_cache = (cached_tokens / 1_000_000) * model_config.get("cache_coust_million", 0.0)
                 cost_output = (output_tokens / 1_000_000) * model_config.get("output_coust_million", 0.0)
                 calculated_cost_usd = cost_input + cost_cache + cost_output
@@ -159,6 +161,7 @@ import tiktoken
 
 def contar_tokens(texto, model_name):
     codificador = tiktoken.encoding_for_model(model_name)
+    texto = str(texto) if not isinstance(texto, str) else texto
     return len(codificador.encode(texto))
     
 def criar_batches(textos, limite_tokens, model_name):
@@ -217,6 +220,75 @@ def get_embeddings_from_api(pages_texts: List[str], model_embedding: str, api_ke
         raise ValueError(f"Modelo embeddings '{model_embedding}' desconhecido.")
     
     return embeddings, total_tokens, cost_usd
+
+def convert_pydantic_to_json_schema(formatted_initial_pydantic):
+    #Conversão para modelo em esquema JSON, se necessário:
+    schema = formatted_initial_pydantic.model_json_schema()
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "formatted_initial_pydantic",
+            "schema": schema,
+            "strict": False
+        }
+    }
+    return response_format
+
+def _get_prompt_to_cache(key_prompt, placeholder_str, input_processed_text):
+    prompt_inicial_para_cache = prompts[key_prompt]
+    prompt_inicial_para_cache = [{key: value.replace(placeholder_str, input_processed_text) for key, value in msg_dict.items()} for msg_dict in prompt_inicial_para_cache]
+    main_tokens_count = contar_tokens(prompt_inicial_para_cache, MODEL_FOR_COUNT_TOKENS)
+    if main_tokens_count:
+        logger.info(f"Total_tokens contabilizado na parte principal: {main_tokens_count}")
+    else:
+        logger.warning("Placeholder [input_text] não encontrado ou não contabilizado na apuração do cache mínimo previsto!")
+    return prompt_inicial_para_cache, main_tokens_count
+
+def _get_final_response(dados_segmentados, output_format):
+    # print(f"\n[DEBUG] Response: {response}")
+    # for response in dados_segmentados:
+    #    final_response = response.output_text
+    final_response = dados_segmentados[-1].output_text
+    if not isinstance(final_response, output_format):
+        final_response = try_convert_to_pydantic_format(final_response, output_format)
+    return final_response
+                
+def _get_token_usage_info(dados_segmentados, waited_cached_tokens=0):
+    # Obter informações sobre o uso de tokens
+    token_usage_info = {
+        "input_tokens":  0,
+        "cached_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens":  0,
+    } 
+    
+    for response in dados_segmentados:
+        cb = response.usage # callback
+        tokens_info = {
+            "input_tokens":  cb.input_tokens,
+            "cached_tokens": cb.input_tokens_details.cached_tokens,
+            "output_tokens": cb.output_tokens,
+            "total_tokens":  cb.total_tokens,
+        }
+        token_usage_info["input_tokens"]  += tokens_info["input_tokens"]
+        token_usage_info["cached_tokens"] += tokens_info["cached_tokens"]
+        token_usage_info["output_tokens"] += tokens_info["output_tokens"]
+        token_usage_info["total_tokens"]  += tokens_info["total_tokens"]
+
+    # Analisar proporção de cached_tokens em prompts:
+    if waited_cached_tokens:
+        if token_usage_info["cached_tokens"] >= (waited_cached_tokens*0.96):
+            logger.info(f"A apuração do cache mínimo previsto foi atingida: {token_usage_info['cached_tokens']} >= {waited_cached_tokens}")
+        else:
+            logger.warning(f"O cache mínimo previsto NÃO foi registrado! {token_usage_info['cached_tokens']} < {waited_cached_tokens}")
+    else: # fallback para tentar confirmar uma proporção mínima
+        if not token_usage_info["cached_tokens"]:
+            logger.warning("Não houve aproveitamento de cache!")
+        else:
+            aproveitamento = round(token_usage_info["cached_tokens"]/token_usage_info["input_tokens"] , 2)
+            logger.info(f"Proporção de aproveitamento de cache: {aproveitamento}")
+
+    return token_usage_info
 
 # --- Função Principal de Análise ---
 @timing_decorator()
@@ -282,15 +354,7 @@ def analyze_text_with_llm(
                     model=model_name,
                     input=modified_prompt_list, # Lista única
                     temperature=temperature,
-                    text_format = output_formats[prompt_name] # formatted_initial_analysis
-                    #text={
-                    #    "format": {
-                    #        "type": "json_schema",
-                    #        "name": "FormatAnaliseInicial",
-                    #        "strict": False,
-                    #        "schema": FormatAnaliseInicial.model_json_schema()
-                    #    }
-                    #},
+                    text_format = output_formats[prompt_name]
                 )
                 #print(f"\n[DEBUG] Response: {response}")
                 final_response = response.output_text
@@ -308,83 +372,42 @@ def analyze_text_with_llm(
                                                                              provider, model_name, loaded_llm_providers)
             elif prompt_name == "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS":
                 logger.info(f"Prompt_name recebido: {prompt_name}")
+
+                prompt_inicial_para_cache, main_tokens_count = _get_prompt_to_cache("prompt_inicial_para_cache", "{input_text}", processed_text)
+
                 dados_segmentados = []
-                main_tokens_count = 0
-                for msg_dict in prompts[prompt_name]:
-                    if "{input_text}" in msg_dict["content"]:
-                        relevant_part = msg_dict["content"].replace("{input_text}", processed_text)
-                        main_tokens_count = contar_tokens(relevant_part, MODEL_FOR_COUNT_TOKENS)
-                        logger.info(f"Total_tokens contabilizado na parte principal: {main_tokens_count}")
-                        break
-                if not main_tokens_count:
-                    logger.warning("Placeholder [input_text] não encontrado ou não contabilizado na apuração do cache mínimo previsto!")
-
-                for prompt_group, output_format in zip(prompts[prompt_name], output_formats):
+                for prompt_group in prompts[prompt_name]:
                     
-                    modified_prompt_list = []
-                    for msg_dict in prompt_group:
-                        modified_msg_dict = {key: value.replace("{input_text}", processed_text) for key, value in msg_dict.items()}
-                        modified_prompt_list.append(modified_msg_dict)
-
-                    response = client_openai.responses.parse(
+                    response = client_openai.responses.create(
                         model=model_name,
-                        input=modified_prompt_list, 
+                        input=prompt_inicial_para_cache+prompt_group, 
                         temperature=temperature,
-                        text_format = output_format 
+                        user="Assistant_NC_Analytics" 
                     )
-                    
-                    #print(f"\n[DEBUG] Response: {response}")
-                    final_response = response.output_text
+                    dados_segmentados.append(response)
+                    print(f"[DEBUG] Final response for segment: {response.output_text}")
+                    print(f"[DEBUG] Token usage info for segment: {response.usage}\n\n")
+                
+                parser_prompt_final = return_parse_prompt([response.output_text for response in dados_segmentados])
+                
+                response = client_openai.responses.parse(
+                    model=model_name,
+                    input=parser_prompt_final, 
+                    temperature=temperature,
+                    text_format=formatted_initial_analysis
+                )
+                dados_segmentados.append(response)
+                
+                print(f"[DEBUG] Final response for segment: {response.output_text}")
+                print(f"[DEBUG] Token usage info for segment: {response.usage}\n\n")
+                
+                final_response = _get_final_response(dados_segmentados, formatted_initial_analysis)
+                
+                waited_cached_tokens=main_tokens_count*(len(dados_segmentados)-2) # O prompt inicial e final não aproveita cache
+                token_usage_info = _get_token_usage_info(dados_segmentados, waited_cached_tokens)
 
-                    # Obter informações sobre o uso de tokens
-                    cb = response.usage # callback
-                    token_usage_info = {
-                            "input_tokens":  cb.input_tokens,
-                            "cached_tokens": cb.input_tokens_details.cached_tokens,
-                            "output_tokens": cb.output_tokens,
-                            "total_tokens":  cb.total_tokens,
-                        }   
-                    dados_segmentados.append((final_response, token_usage_info))  
-                
-                token_usage_info = {
-                    "input_tokens":  0,
-                    "cached_tokens": 0,
-                    "output_tokens": 0,
-                    "total_tokens":  0,
-                } 
-                all_finals_responses = []
-                for dados, output_format in zip(dados_segmentados, output_formats):
-                    final_response, tokens_info = dados
-                    
-                    if not isinstance(final_response, output_format):
-                        final_response = try_convert_to_pydantic_format(final_response, output_format)
-                        all_finals_responses.append(final_response)
-                    
-                    token_usage_info["input_tokens"]  += tokens_info["input_tokens"]
-                    token_usage_info["cached_tokens"] += tokens_info["cached_tokens"]
-                    token_usage_info["output_tokens"] += tokens_info["output_tokens"]
-                    token_usage_info["total_tokens"]  += tokens_info["total_tokens"]
-                
-                # Unificar output_formats:
-                final_response = merge_parts_into_model(parts=all_finals_responses, target_model=formatted_initial_analysis)
-                print(f"\n[DEBUG] final_response by merge: {final_response}")
-
-                # Analisar proporção de cached_tokens em prompts:
-                tokens_minimo_in_cache = main_tokens_count * (len(dados_segmentados)-1) # O prompt inicial não aproveita cache
-                if tokens_minimo_in_cache:
-                    if token_usage_info["cached_tokens"] >= tokens_minimo_in_cache:
-                        logger.info(f"A apuração do cache mínimo previsto foi atingida: {token_usage_info['cached_tokens']} >= {tokens_minimo_in_cache}")
-                    else:
-                        logger.warning(f"O cache mínimo previsto NÃO foi registrado! {token_usage_info['cached_tokens']} < {tokens_minimo_in_cache}")
-                else: # fallback para tentar confirmar uma proporção mínima
-                    if not token_usage_info["cached_tokens"]:
-                        logger.warning("Não houve aproveitamento de cache!")
-                    else:
-                        aproveitamento = round(token_usage_info["cached_tokens"]/token_usage_info["input_tokens"] , 2)
-                        logger.info(f"Proporção de aproveitamento de cache: {aproveitamento}")
-                
                 token_usage_info["total_cost_usd"] = calc_costs_llm_analysis(token_usage_info["input_tokens"], token_usage_info["cached_tokens"], token_usage_info["output_tokens"], 
-                                                                             provider, model_name, loaded_llm_providers)
+                                                                    provider, model_name, loaded_llm_providers)
                 # "successful_requests": 1,
 
         elif provider == "lang_chain_openai":
@@ -477,57 +500,267 @@ def analyze_text_with_llm(
     return final_response, token_usage_info, processing_time
 
 
-# --- (Opcional) Exemplo de uso (somente para teste direto do módulo) ---
-if __name__ == '__main__':
-    print("Executando teste local do ai_orchestrator (requer configuração manual e credenciais)")
 
-    # Para testar, você precisaria:
-    # 1. Simular um objeto 'page' com 'session' contendo token/id válidos.
-    # 2. Ter uma chave API válida salva no Firestore e a chave Fernet no Keyring.
-    # 3. Fornecer um texto de exemplo.
+### Testes interativos:
 
-    # Exemplo (NÃO FUNCIONAL SEM SETUP COMPLETO):
-    # class MockPage:
-    #     def __init__(self):
-    #         self.session = {
-    #             "auth_id_token": "SEU_TOKEN_ID_AQUI",
-    #             "auth_user_id": "SEU_USER_ID_AQUI"
-    #         }
-    #     def get(self, key): return self.session.get(key)
-    #     def contains_key(self, key): return key in self.session
-    #     def set(self, key, value): self.session[key] = value
-    #     def remove(self, key): self.session.pop(key, None)
+def teste_ult2(processed_text, prompt_name, model_name):
+    from src.settings import api_key_test
+    os.environ["OPENAI_API_KEY"] = api_key_test
+    client_openai = OpenAI()
+    temperature = 0.2
 
-    # mock_page = MockPage()
-    # sample_text = "Este é um documento de exemplo sobre Python e Flet..."
+    dados_segmentados = []
+    for prompt_group, output_format in zip(prompts[prompt_name], output_formats[prompt_name]):
+        modified_prompt_list = []
+        for msg_dict in prompt_group:
+            modified_msg_dict = {key: value.replace("{input_text}", processed_text) for key, value in msg_dict.items()}
+            modified_prompt_list.append(modified_msg_dict)
+        
+        response = client_openai.responses.create(
+            model=model_name,
+            input=modified_prompt_list,
+            temperature=temperature,
+            user="Assistant_NC_Analytics"
+        )
+        final_response = response.output_text
+        print(f"[DEBUG] Final response for segment: {final_response}")
 
-    # try:
-    #     # Certifique-se que o Firebase Admin está inicializado se for rodar fora do Flet
-    #     from src.services.firebase_manager import inicializar_firebase
-    #     inicializar_firebase() # Pode precisar de tratamento de erro
+        cb = response.usage  # callback
+        token_usage_info = {
+            "input_tokens": cb.input_tokens,
+            "cached_tokens": cb.input_tokens_details.cached_tokens,
+            "output_tokens": cb.output_tokens,
+            "total_tokens": cb.total_tokens,
+        }
+        print(f"[DEBUG] Token usage info for segment: {token_usage_info}")
 
-    #     analysis_result = analyze_text_with_llm(mock_page, sample_text)
+        dados_segmentados.append((final_response, token_usage_info))
 
-    #     if analysis_result:
-    #         print("\n--- Resultado da Análise ---")
-    #         print(analysis_result)
-    #     else:
-    #         print("\n--- Análise falhou ---")
+    schema_para_llm = json.dumps(formatted_initial_analysis.model_json_schema(), indent=2)
+    parser_prompt = [{
+        "role": "user",
+        "content":
+            "Você receberá uma lista de respostas em texto livre, cada uma representando a análise de um segmento diferente de um documento. "
+            "Sua tarefa é consolidar as informações dessas respostas em um único objeto JSON que siga estritamente o schema JSON fornecido abaixo:\n\n"
+            f"```json\n{schema_para_llm}\n```\n\n"
+            "Aqui estão as respostas segmentadas:\n\n"
+            "===\n" +
+            '\n'.join(f"Segmento {i+1}: {resp[0]}" for i, resp in enumerate(dados_segmentados)) +
+            "\n===\n\n"
+            "Analise o conteúdo de todos os segmentos e preencha os campos do JSON consolidado com as informações apropriadas extraídas deles. "
+            "Gere a resposta exatamente no formato JSON solicitado, sem comentários ou explicações adicionais."
+    }]
 
-    # except Exception as main_e:
-    #      print(f"Erro ao executar teste principal: {main_e}")
-    pass
+    response = client_openai.responses.parse(
+        model=model_name,
+        input=parser_prompt,
+        temperature=temperature,
+        text_format=formatted_initial_analysis
+    )
+    final_response = response.output_text
+    print(f"[DEBUG] Final consolidated response: {final_response}")
 
+    cb = response.usage  # callback
+    token_usage_info = {
+        "input_tokens": cb.input_tokens,
+        "cached_tokens": cb.input_tokens_details.cached_tokens,
+        "output_tokens": cb.output_tokens,
+        "total_tokens": cb.total_tokens,
+    }
+    print(f"[DEBUG] Token usage info for consolidated response: {token_usage_info}")
+
+    dados_segmentados.append((final_response, token_usage_info))
+
+    return dados_segmentados
+    
+    #final_response, token_usage_info = teste_ult3(dados_segmentados, prompt_name)
+
+def teste_ult3(dados_segmentados, prompt_name, processed_text):
+    all_finals_responses = []
+    token_usage_info = {
+                    "input_tokens":  0,
+                    "cached_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens":  0,
+                } 
+    for dados, output_format in zip(dados_segmentados, output_formats[prompt_name]):
+        final_response, tokens_info = dados
+
+        if not isinstance(final_response, output_format):
+            final_response = try_convert_to_pydantic_format(final_response, output_format)
+            all_finals_responses.append(final_response)
+        
+        token_usage_info["input_tokens"]  += tokens_info["input_tokens"]
+        token_usage_info["cached_tokens"] += tokens_info["cached_tokens"]
+        token_usage_info["output_tokens"] += tokens_info["output_tokens"]
+        token_usage_info["total_tokens"]  += tokens_info["total_tokens"]
+    
+    final_response = merge_parts_into_model(parts=all_finals_responses, target_model=formatted_initial_analysis)
+
+    main_tokens_count = 0
+    breaked=False
+    for prompt_group in prompts[prompt_name]:
+        for msg_dict in prompt_group:
+            if "{input_text}" in msg_dict["content"]:
+                relevant_part = msg_dict["content"].replace("{input_text}", processed_text)
+                main_tokens_count = contar_tokens(relevant_part, MODEL_FOR_COUNT_TOKENS)
+                logger.info(f"Total_tokens contabilizado na parte principal: {main_tokens_count}")
+                breaked=True
+                break
+        if breaked:
+            break
+    if not main_tokens_count:
+        logger.warning("Placeholder [input_text] não encontrado ou não contabilizado na apuração do cache mínimo previsto!")
+
+    # Analisar proporção de cached_tokens em prompts:
+    tokens_minimo_in_cache = main_tokens_count * (len(dados_segmentados)-1) # O prompt inicial não aproveita cache
+    if tokens_minimo_in_cache:
+        if token_usage_info["cached_tokens"] >= tokens_minimo_in_cache:
+            logger.info(f"A apuração do cache mínimo previsto foi atingida: {token_usage_info['cached_tokens']} >= {tokens_minimo_in_cache}")
+        else:
+            logger.warning(f"O cache mínimo previsto NÃO foi registrado! {token_usage_info['cached_tokens']} < {tokens_minimo_in_cache}")
+    else: # fallback para tentar confirmar uma proporção mínima
+        if not token_usage_info["cached_tokens"]:
+            logger.warning("Não houve aproveitamento de cache!")
+        else:
+            aproveitamento = round(token_usage_info["cached_tokens"]/token_usage_info["input_tokens"] , 2)
+            logger.info(f"Proporção de aproveitamento de cache: {aproveitamento}")
+    
+    #token_usage_info["total_cost_usd"] = calc_costs_llm_analysis(token_usage_info["input_tokens"], token_usage_info["cached_tokens"], token_usage_info["output_tokens"], 
+    #                                                                provider, model_name, loaded_llm_providers)
+    
+    return final_response, token_usage_info
+    
+def teste_ult4(client, assistant, processed_text, prompt_name, model_name):
+    temperature= 0.2
+    new_thread = client.beta.threads.create()
+    print(f"Novo thread criado: {new_thread.id}")
+    dados_segmentados = []
+
+    for msg_dict in prompt_inicial_para_cache:
+        msg = {key: value.replace("{input_text}", processed_text) for key, value in msg_dict.items()}
+        client.beta.threads.messages.create(
+            thread_id=new_thread.id,
+            role="user",
+            content=msg["content"]
+        )
+
+    for prompt_group in prompts[prompt_name]:
+        
+        prompts_especificos = prompt_group[len(prompt_inicial_para_cache):]
+
+        for msg_dict in prompts_especificos:
+            client.beta.threads.messages.create(
+                thread_id=new_thread.id,
+                role="user", # msg_dict["role"],
+                content=msg_dict["content"]
+            )
+        print(f"Prompts enviados para o thread {new_thread.id}")
+        
+        new_run = client.beta.threads.runs.create(
+            assistant_id=assistant.id,
+            thread_id=new_thread.id,
+            model=model_name,
+            temperature=temperature,
+            #response_format=convert_pydantic_to_json_schema(output_format)
+        )
+        print(f"Nova execução do modelo {model_name} criada: {new_run.id}")
+
+        start = time()
+        timeout = 30  # segundos
+        while True:
+            run = client.beta.threads.runs.retrieve(thread_id=new_thread.id, run_id=new_run.id)
+            if run.status in ("completed", "failed", "cancelled", "expired"):
+                print(f"Status da execução: {run.status}")
+                break
+            if time() - start > timeout:
+                raise TimeoutError("TimeoutError: A execução demorou mais de 30s!")
+            sleep(0.33)
+
+        messages = client.beta.threads.messages.list(thread_id=new_thread.id)
+        final_response = messages.data[0].content[0].text.value
+
+        print(f"Resposta final: {final_response}")
+
+        token_usage_info = {
+                "input_tokens":  run.usage.prompt_tokens,
+                "cached_tokens": run.usage.prompt_token_details['cached_tokens'],
+                "output_tokens": run.usage.completion_tokens,
+                "total_tokens":  run.usage.total_tokens,
+            }   
+        print(f"Token usage info: {token_usage_info}")
+        dados_segmentados.append((final_response, token_usage_info))
+    
+    schema_para_llm = json.dumps(formatted_initial_analysis.model_json_schema(), indent=2)
+    parser_prompt = {
+        "role": "user",
+        "content": (
+            "Você receberá uma lista de respostas em texto livre, cada uma representando a análise de um segmento diferente de um documento. "
+            "Sua tarefa é consolidar as informações dessas respostas em um único objeto JSON que siga estritamente o schema JSON fornecido abaixo:\n\n"
+            f"```json\n{schema_para_llm}\n```\n\n"
+            "Aqui estão as respostas segmentadas:\n\n"
+            "===\n" +
+            '\n'.join(f"Segmento {i+1}: {resp[0]}" for i, resp in enumerate(dados_segmentados)) +
+            "\n===\n\n"
+            "Analise o conteúdo de todos os segmentos e preencha os campos do JSON consolidado com as informações apropriadas extraídas deles. "
+            "Gere a resposta exatamente no formato JSON solicitado, sem comentários ou explicações adicionais."
+        )
+    }
+    final_run = client.beta.threads.create_and_run(
+        assistant_id=assistant.id,
+        thread={"messages": [parser_prompt]},
+        model=model_name,
+        temperature=temperature,
+        response_format=convert_pydantic_to_json_schema(formatted_initial_analysis)
+    )
+
+    start = time()
+    timeout = 30  # segundos
+    while final_run.status not in ("completed", "failed", "cancelled", "expired"):
+        if time() - start > timeout:
+            raise TimeoutError("TimeoutError: A execução demorou mais de 30s!")
+        sleep(0.33)
+        final_run = client.beta.threads.runs.retrieve(thread_id=final_run.thread_id, run_id=final_run.id)
+
+    messages = client.beta.threads.messages.list(thread_id=final_run.thread_id)
+    final_response = messages.data[0].content[0].text.value
+
+    print(f"Resposta final: {final_response}")
+
+    token_usage_info = {
+            "input_tokens":  final_run.usage.prompt_tokens,
+            "cached_tokens": final_run.usage.prompt_token_details['cached_tokens'],
+            "output_tokens": final_run.usage.completion_tokens,
+            "total_tokens":  final_run.usage.total_tokens,
+        }   
+    print(f"Token usage info: {token_usage_info}")
+    dados_segmentados.append((final_response, token_usage_info))
+
+    return dados_segmentados
 
 '''
 Testes interativos:
 
-from src.settings import api_key_test
 from src.core.ai_orchestrator import *
 
+from src.settings import api_key_test
 os.environ["OPENAI_API_KEY"] = api_key_test
-
 client_openai = OpenAI()
+client=client_openai
+provider= "openai"
+model_name= "gpt-4.1-nano"
+temperature= 0.2
+prompt_name = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
+processed_text = 
+
+from pydantic import BaseModel 
+class FormatTeste(BaseModel):
+    resposta: str
+
+processed_text = teste_ult()
+
+final_response, token_usage_info, processing_time = analyze_text_with_llm(
+        prompt_name, processed_text, provider, model_name, temperature, api_key_test)
 
 =====================================================
 
@@ -545,10 +778,6 @@ token_usage_info = response.usage
 
 =====================================================
 
-from pydantic import BaseModel 
-class FormatTeste(BaseModel):
-    resposta: str
-
 response = client_openai.responses.create(
     model="gpt-4.1-nano",
     input=[{"role": "user", "content": "Diga-me em que você pode me ajudar."}],
@@ -562,6 +791,8 @@ response = client_openai.responses.create(
     }
 )
 
+=====================================================
+
 response = client_openai.responses.parse(
     model="gpt-4.1-nano",
     input=[{"role": "user", "content": "Diga-me em que você pode me ajudar."}],
@@ -571,14 +802,16 @@ response = client_openai.responses.parse(
 final_response = response.output_text
 token_usage_info = response.usage
 
-================================================================================================
+=====================================================
 
-from src.settings import api_key_test
-from src.core.ai_orchestrator import *
+processed_text = teste_ult()
 
-provider= "openai"
+prompt_name = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
 model_name= "gpt-4.1-nano"
-temperature= 0.2
+
+dados_segmentados, final_response, token_usage_info = teste_ult2(processed_text, prompt_name, model_name)
+
+=====================================================
 
 llm = ChatOpenAI(
     model_name=model_name,
@@ -608,40 +841,29 @@ with get_openai_callback() as cb:
 
 chain_result.get("text")
 
-
 =================================================================================================
 
-client = client_openai
+assistant = None
+all_assistants = client.beta.assistants.list()
 
-assistant = client.beta.assistants.create(
-    model="gpt-4.1-nano",
-    name = "Assistant NC Analytics", 
-    instructions = "Você é um analista técnico especializado em triagem documental e análise preliminar de peças oficiais. Sua principal função é processar documentos recebidos por canais institucionais, extrair informações estruturadas relevantes, classificar os dados conforme listas de referência e elaborar resumos objetivos sobre o conteúdo analisado. "
-                    "Atua com base em normas administrativas, jurídicas e operacionais, com foco em precisão, rastreabilidade e fundamentação."
-)
+for assistant_data in all_assistants.data:
+    if assistant_data.name == "Assistant NC Analytics":
+        assistant = client.beta.assistants.retrieve(assistant_data.id)
+        break
 
-new_thread = client.beta.threads.create()
-
-for msg in lista_de_mensagens:
-    client.beta.threads.messages.create(
-        thread_id=new_thread.id,
-        role=msg["role"],
-        content=msg["content"]
+if not assistant:
+    assistant = client.beta.assistants.create(
+        model="gpt-4.1-nano",
+        name = "Assistant NC Analytics", 
+        instructions = "Você é um analista técnico especializado em triagem documental e análise preliminar de peças oficiais. Sua principal função é processar documentos recebidos por canais institucionais, extrair informações estruturadas relevantes, classificar os dados conforme listas de referência e elaborar resumos objetivos sobre o conteúdo analisado. "
+                        "Atua com base em normas administrativas, jurídicas e operacionais, com foco em precisão, rastreabilidade e fundamentação."
     )
 
-run = client.beta.threads.runs.create(
-  assistant_id=assistant.id,
-  thread_id=new_thread.id,
-  model="gpt-4.1-nano",
-    response_format={
-        "type": "json_schema",
-        "json_schema": {  
-            "name": "FormatTeste",
-            "strict": False,
-            "schema": FormatTeste.model_json_schema()  # Schema válido
-        }
-    }
-)
+    
+dados_segmentados = teste_ult4(client, assistant, processed_text, prompt_name, model_name)
+
+final_response, token_usage_info = teste_ult3(dados_segmentados, prompt_name, processed_text)
+
 ------------------------------------------------
 run = client.beta.threads.create_and_run(
     assistant_id=assistant.id,
@@ -662,7 +884,7 @@ run = client.beta.threads.create_and_run(
 )
 
 messages = client.beta.threads.messages.list(thread_id=run.thread_id)
-resposta = messages.data[0].content[0].text.value
+resposta = messages.data[-1].content[-1].text.value
 
 run = client.beta.threads.runs.retrieve(
   thread_id=run.thread_id,

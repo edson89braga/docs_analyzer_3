@@ -370,7 +370,7 @@ class AnalyzePDFViewContent(ft.Column):
                 ft.TextField(
                     label=name_str,
                     value=content_value_cleaned,
-                    multiline=True, read_only=True,
+                    multiline=True, read_only=False,
                     min_lines=2, max_lines=10, 
                     border=ft.InputBorder.OUTLINE,
                     text_size=12, # Tamanho de texto menor para acomodar mais
@@ -590,7 +590,7 @@ class AnalyzePDFViewContent(ft.Column):
                 aggregated_text = aggregated_text_info[1]
                 
                 self._analysis_requested = False 
-                # self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) 
+                self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) 
                 # self._clear_llm_metadata_display()
                 # Coomentado porque a limpeza está sendo feito no batch_upload_complete_cb
                 self._show_info_balloon_or_result(show_balloon=True)
@@ -1036,7 +1036,7 @@ class AnalyzePDFViewContent(ft.Column):
                 scrollable_row_for_structured_display = ft.Row(
                     [structured_display], scroll=ft.ScrollMode.ADAPTIVE, expand=True 
                 )
-                self.llm_result_container.content.controls.append(scrollable_row_for_structured_display)
+                self.llm_result_container.content.controls = [scrollable_row_for_structured_display]
                 self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON].visible = False 
                 self.gui_controls[CTL_LLM_RESULT_TEXT].visible = False 
             else: # Fallback se o controle não for o esperado
@@ -1381,9 +1381,9 @@ class InternalAnalysisController:
                 "processing_time": proc_meta_session.get("processing_time")
             }
 
-            tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
             calculated_embedding_cost_usd = proc_meta_session.get("calculated_embedding_cost_usd")
-            if calculated_embedding_cost_usd:
+            tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
+            if tokens_embeddings_session:
                 processing_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0]
                 processing_metadata_to_log["embeddings_model"] = tokens_embeddings_session[1]      
                 processing_metadata_to_log["calculated_embedding_cost_usd"] = calculated_embedding_cost_usd
@@ -1742,6 +1742,12 @@ class InternalAnalysisController:
         provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
         model_name = current_analysis_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
         temperature = current_analysis_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
+        mode_prompt = current_analysis_settings.get("prompt_structure", FALLBACK_ANALYSIS_SETTINGS["prompt_structure"])
+        _logger.info(f"[DEBUG] mode_prompt: {mode_prompt}")  
+        if mode_prompt == "sequential_prompts":
+            selected_prompts = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
+        else: # if mode_prompt == "prompt_unico":
+            selected_prompts = "PROMPT_UNICO_for_INITIAL_ANALYSIS"
         try:
             _logger.info(f"Thread: Iniciando análise LLM para '{batch_name}'...")
             self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
@@ -1755,7 +1761,7 @@ class InternalAnalysisController:
 
             loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
 
-            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm("PROMPT_UNICO_for_INITIAL_ANALYSIS", aggregated_text,
+            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(selected_prompts, aggregated_text,
                                                                                                 provider, model_name, temperature, 
                                                                                                 decrypted_api_key, loaded_llm_providers)
 
@@ -2269,7 +2275,7 @@ class SettingsDrawerManager:
         self.gui_controls_drawer["prompt_structure_rg"] = ft.RadioGroup(
             content=ft.Column([
                 ft.Radio(value="prompt_unico", label="Prompt Único"),
-                ft.Radio(value="sequential_chunks", label="Prompt Agrupado", disabled=True),
+                ft.Radio(value="sequential_prompts", label="Prompt Agrupado", disabled=False),
             ], spacing=1), value=current_analysis_settings.get("prompt_structure")
         )
 
@@ -2322,7 +2328,8 @@ class SettingsDrawerManager:
         _logger.info("SettingsDrawerManager: Configurando handlers de eventos.")
         controls_to_watch = [
             "proc_extractor_dd" ,"proc_embeddings_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider", 
-            # "llm_output_format_dd", "llm_max_output_length_tf", "prompt_structure_rg"
+            "prompt_structure_rg"
+            # "llm_output_format_dd", "llm_max_output_length_tf", 
         ]
         for key in controls_to_watch:
             if key in self.gui_controls_drawer:

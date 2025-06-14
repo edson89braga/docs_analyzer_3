@@ -4,9 +4,9 @@
 # from src.services.firebase_client import *
 # from src.services.firebase_manager import *
 
-# from src.core.pdf_processor import *
-
-# from src.core.ai_orchestrator import *
-
 # from src.utils import *
+
+from src.core.pdf_processor import *
+from src.core.ai_orchestrator import *
+
 

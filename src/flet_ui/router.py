@@ -12,7 +12,7 @@ from .components import show_snackbar
 
 from .views.login_view import create_login_view
 from .views.signup_view import create_signup_view 
-from .views.home_view import create_home_view 
+from .views.home_view import create_home_view2
 from .views.profile_view import create_profile_view
 from .views.proxy_settings_view import create_proxy_settings_content
 from .views.llm_settings_view import create_llm_settings_view
@@ -60,7 +60,7 @@ def create_roteiro_investigacoes_content(page: ft.Page) -> ft.Control:
 _content_creators = {
     "/login": create_login_view,
     "/signup": create_signup_view, 
-    "/home": create_home_view,
+    "/home": create_home_view2,
     "/profile": create_profile_view,
     "/settings/proxy": create_proxy_settings_content,
     "/settings/llm": create_llm_settings_view,

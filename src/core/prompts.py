@@ -4,6 +4,88 @@ Módulo para gerenciar e fornecer os prompts utilizados nas interações com LLM
 """
 from typing import Optional, Dict, List, Type
 
+# FORMATOS das saídas estruturadas:
+from pydantic import BaseModel, Field 
+class formatted_initial_analysis(BaseModel):
+    descricao_geral: str 
+    tipo_documento_origem: str 
+    orgao_origem: str 
+    uf_origem: str 
+    municipio_origem: str 
+    resumo_fato: str 
+    uf_fato: str 
+    municipio_fato: str 
+    tipo_local: str 
+    valor_apuracao: float # Consta resposta padrão 0 se não aplicável
+    tipificacao_penal: str
+    materia_especial: str  # Consta resposta padrão se não aplicável
+    area_atribuicao: str 
+    destinacao: str 
+    tipo_a_autuar: str 
+    assunto_re: str                # Consta resposta padrão se não aplicável
+    pessoas_envolvidas: Optional[List[str]]
+    linha_do_tempo: Optional[List[str]] 
+    observacoes: str = Field(default="") 
+
+    justificativa_tipo_documento_origem:str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_orgao_origem:         str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_municipio_uf_origem:  str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_municipio_uf_fato:    str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_tipo_local:           str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_valor_apuracao:       str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_tipificacao_penal:    str = Field(default="Justificativa não fornecida pela IA.") 
+    justificativa_materia_especial:     str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
+    justificativa_area_atribuicao:      str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_destinacao:           str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_tipo_a_autuar:        str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_assunto_re:           str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
+
+class formatted_part_1(BaseModel):
+    tipo_documento_origem: str 
+    orgao_origem: str 
+    uf_origem: str 
+    municipio_origem: str 
+    observacoes: str = Field(default="") 
+
+    justificativa_tipo_documento_origem:str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_orgao_origem:         str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_municipio_uf_origem:  str = Field(default="Justificativa não fornecida pela IA.")
+    
+class formatted_part_2(BaseModel):
+    descricao_geral: str 
+    resumo_fato: str 
+    uf_fato: str 
+    municipio_fato: str 
+    tipo_local: str 
+    valor_apuracao: float # Consta resposta padrão 0 se não aplicável
+    pessoas_envolvidas: Optional[List[str]]
+    linha_do_tempo: Optional[List[str]] 
+    observacoes: str = Field(default="") 
+
+    justificativa_municipio_uf_fato:    str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_tipo_local:           str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_valor_apuracao:       str = Field(default="Justificativa não fornecida pela IA.")
+
+class formatted_part_3(BaseModel):
+    tipificacao_penal: str
+    materia_especial: str  # Consta resposta padrão se não aplicável
+    area_atribuicao: str 
+    destinacao: str 
+    observacoes: str = Field(default="") 
+
+    justificativa_tipificacao_penal:    str = Field(default="Justificativa não fornecida pela IA.") 
+    justificativa_materia_especial:     str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
+    justificativa_area_atribuicao:      str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_destinacao:           str = Field(default="Justificativa não fornecida pela IA.")
+
+class formatted_part_4(BaseModel):
+    tipo_a_autuar: str 
+    assunto_re: str                # Consta resposta padrão se não aplicável
+    observacoes: str = Field(default="") 
+
+    justificativa_tipo_a_autuar:        str = Field(default="Justificativa não fornecida pela IA.")
+    justificativa_assunto_re:           str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
+
 # Dicts e Listas de referência p/ placeholders:
 
 tipos_doc = ['Boletim de Ocorrência (externo)', 'E-mail', 'Inquérito Policial - Polícia Civil', 'IPJ - Informação de Polícia Judiciária', 'Ofício', 'Relatório', 'Requisição - Judicial', 'Requisição - Ministério Público', 'RIF - Relatório de Inteligência Financeira', 'Outro']
@@ -360,67 +442,79 @@ prompt_C4 = {
 prompt_D0 = {
     "role": "user", "content":
         "### CAMPOS A SEREM EXTRAÍDOS PARA CADA DOCUMENTO\n\n"
-        "1. DESCRIÇÃO GERAL: Frase sucinta que resuma o objeto do documento, sem se confundir com o RESUMO DO FATO, que é mais detalhado.\n"
-        "2. TIPO DE DOCUMENTO DE ORIGEM: Classifique o documento conforme as opções literais da lista tipos_doc.\n"
-        "3. ÓRGÃO DE ORIGEM: Selecione a entidade que enviou o documento, conforme as opções literais da lista origens_doc.\n"
-        "4.1 UF DE ORIGEM: Indique o estado do órgão de origem no formato 'UF', ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
-        "4.2 MUNICÍPIO DE ORIGEM: Indique o respectivo município do órgão de origem, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
-        "5. RESUMO DO FATO: Resuma o fato principal que originou o documento.\n"
-        "6.1 UF DO FATO: Indique o Estado onde ocorreu o fato, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
-        "6.2 MUNICÍPIO DO FATO: Indique o respectivo município onde ocorreu o fato, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
-        "7. TIPO DE LOCAL: Classifique o local do fato conforme as opções literais da lista tipos_locais.\n"
-        "8. VALOR DE APURAÇÃO: Informe o valor do prejuízo se houver, ou aponte numeral 0 (zero) se o texto não contiver essa informação.\n"
-        "9. TIPIFICAÇÃO PENAL: Classifique conforme o código penal aplicável, ou aponte 'Dado ausente' se não encontrar esse informação no texto.\n"
-        "10. ÁREA DE ATRIBUIÇÃO: Selecione a área temática de atribuição da investigação conforme intruções complementares e lista areas_de_atribuição.\n"
-        "11. TIPO A AUTUAR: Indique o tipo de autuação que prosseguirá após análise inicial, conforme intruções complementares e lista tipos_a_autuar.\n"
-        "12. ASSUNTO DO RE: Se o tipo de autuação for 'RE - Registro Especial', selecione o assunto conforme as opções literais da lista assuntos_re, senão indique como 'Não aplicável'.\n"
-        "13. MATÉRIA DE TRATAMENTO ESPECIAL: Analise o caso com base na 'lista_normativa_prometheus' e nas tipificações penais. Em seguida, mapeie para uma categoria da 'materias_prometheus' conforme as regras de correspondência detalhadas no BLOCO F. Indique a categoria 'Prometheus' correspondente ou 'Não aplicável'.\n"
-        "14. DESTINAÇÃO: Conforme opções literais da lista lista_delegacias_especializadas\n"
-        "15. PESSOAS ENVOLVIDAS: Relacione os envolvidos (Nomes completos, CPFs/CNPJs e papel no caso conforme as opções literais da lista tipos_envolvidos).\n"
-        "16. LINHA DO TEMPO: Arrole uma linha cronológica dos fatos relevantes documentados, quando possível.\n"
-        "17. OBSERVAÇÕES: Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
+        "1. DESCRIÇÃO GERAL (chave JSON: 'descricao_geral'): Frase sucinta que resuma o objeto do documento, sem se confundir com o RESUMO DO FATO, que é mais detalhado.\n"
+        "2. TIPO DE DOCUMENTO DE ORIGEM (chave JSON: 'tipo_documento_origem'): Classifique o documento conforme as opções literais da lista tipos_doc.\n"
+        "3. ÓRGÃO DE ORIGEM (chave JSON: 'orgao_origem'): Selecione a entidade que enviou o documento, conforme as opções literais da lista origens_doc.\n"
+        "4.1 UF DE ORIGEM (chave JSON: 'uf_origem'): Indique o estado do órgão de origem no formato 'UF', ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
+        "4.2 MUNICÍPIO DE ORIGEM (chave JSON: 'municipio_origem'): Indique o respectivo município do órgão de origem, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
+        "5. RESUMO DO FATO (chave JSON: 'resumo_fato'): Resuma o fato principal que originou o documento.\n"
+        "6.1 UF DO FATO (chave JSON: 'uf_fato'): Indique o Estado onde ocorreu o fato, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
+        "6.2 MUNICÍPIO DO FATO (chave JSON: 'municipio_fato'): Indique o respectivo município onde ocorreu o fato, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
+        "7. TIPO DE LOCAL (chave JSON: 'tipo_local'): Classifique o local do fato conforme as opções literais da lista tipos_locais.\n"
+        "8. VALOR DE APURAÇÃO (chave JSON: 'valor_apuracao'): Informe o valor do prejuízo se houver, ou aponte numeral 0 (zero) se o texto não contiver essa informação.\n"
+        "9. TIPIFICAÇÃO PENAL (chave JSON: 'tipificacao_penal'): Classifique conforme o código penal aplicável, ou aponte 'Dado ausente' se não encontrar esse informação no texto.\n"
+        "10. ÁREA DE ATRIBUIÇÃO (chave JSON: 'area_atribuicao'): Selecione a área temática de atribuição da investigação conforme intruções complementares e lista areas_de_atribuição.\n"
+        "11. TIPO A AUTUAR (chave JSON: 'tipo_a_autuar'): Indique o tipo de autuação que prosseguirá após análise inicial, conforme intruções complementares e lista tipos_a_autuar.\n"
+        "12. ASSUNTO DO RE (chave JSON: 'assunto_re'): Se o tipo de autuação for 'RE - Registro Especial', selecione o assunto conforme as opções literais da lista assuntos_re, senão indique como 'Não aplicável'.\n"
+        "13. MATÉRIA DE TRATAMENTO ESPECIAL (chave JSON: 'materia_especial'): Analise o caso com base na 'lista_normativa_prometheus' e nas tipificações penais. Em seguida, mapeie para uma categoria da 'materias_prometheus' conforme as regras de correspondência detalhadas no BLOCO F. Indique a categoria 'Prometheus' correspondente ou 'Não aplicável'.\n"
+        "14. DESTINAÇÃO (chave JSON: 'destinacao'): Conforme opções literais da lista lista_delegacias_especializadas\n"
+        "15. PESSOAS ENVOLVIDAS (chave JSON: 'pessoas_envolvidas'): Relacione os envolvidos (Nomes completos, CPFs/CNPJs e papel no caso conforme as opções literais da lista tipos_envolvidos).\n"
+        "16. LINHA DO TEMPO (chave JSON: 'linha_do_tempo'): Arrole uma linha cronológica dos fatos relevantes documentados, quando possível.\n"
+        "17. OBSERVAÇÕES (chave JSON: 'observacoes'): Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
 }
 # Grupo 1:
 prompt_D1 = {
     "role": "user", "content":
         "### CAMPOS A SEREM EXTRAÍDOS PARA CADA DOCUMENTO\n\n"
-        "- TIPO DE DOCUMENTO DE ORIGEM: Classifique o documento conforme as opções literais da lista tipos_doc.\n"
-        "- ÓRGÃO DE ORIGEM: Selecione a entidade que enviou o documento, conforme as opções literais da lista origens_doc.\n"
-        "- UF DE ORIGEM: Indique o estado do órgão de origem no formato 'UF', ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
-        "- MUNICÍPIO DE ORIGEM: Indique o respectivo município do órgão de origem, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
-        "- OBSERVAÇÕES: Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
+        "- TIPO DE DOCUMENTO DE ORIGEM (chave JSON: 'tipo_documento_origem'): Classifique o documento conforme as opções literais da lista tipos_doc.\n"
+        "- ÓRGÃO DE ORIGEM (chave JSON: 'orgao_origem'): Selecione a entidade que enviou o documento, conforme as opções literais da lista origens_doc.\n"
+        "- UF DE ORIGEM (chave JSON: 'uf_origem'): Indique o estado do órgão de origem no formato 'UF', ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
+        "- MUNICÍPIO DE ORIGEM (chave JSON: 'municipio_origem'): Indique o respectivo município do órgão de origem, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
+        "- OBSERVAÇÕES (chave JSON: 'observacoes'): Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
 }
 # Grupo :
 prompt_D2 = {
     "role": "user", "content":
         "### CAMPOS A SEREM EXTRAÍDOS PARA CADA DOCUMENTO\n\n"
-        "- DESCRIÇÃO GERAL: Frase sucinta que resuma o objeto do documento, sem se confundir com o RESUMO DO FATO, que é mais detalhado.\n"
-        "- RESUMO DO FATO: Resuma o fato principal que originou o documento.\n"
-        "- UF DO FATO: Indique o Estado onde ocorreu o fato, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
-        "- MUNICÍPIO DO FATO: Indique o respectivo município onde ocorreu o fato, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
-        "- TIPO DE LOCAL: Classifique o local do fato conforme as opções literais da lista tipos_locais.\n"
-        "- VALOR DE APURAÇÃO: Informe o valor do prejuízo se houver, ou aponte numeral 0 (zero) se o texto não contiver essa informação.\n"
-        "- PESSOAS ENVOLVIDAS: Relacione os envolvidos (Nomes completos, CPFs/CNPJs e papel no caso conforme as opções literais da lista tipos_envolvidos).\n"
-        "- LINHA DO TEMPO: Arrole uma linha cronológica dos fatos relevantes documentados, quando possível.\n"
-        "- OBSERVAÇÕES: Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
+        "- DESCRIÇÃO GERAL (chave JSON: 'descricao_geral'): Frase sucinta que resuma o objeto do documento, sem se confundir com o RESUMO DO FATO, que é mais detalhado.\n"
+        "- RESUMO DO FATO (chave JSON: 'resumo_fato'): Resuma o fato principal que originou o documento.\n"
+        "- UF DO FATO (chave JSON: 'uf_fato'): Indique o Estado onde ocorreu o fato, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
+        "- MUNICÍPIO DO FATO (chave JSON: 'municipio_fato'): Indique o respectivo município onde ocorreu o fato, ou responda com string vazia no respectivo campo se não encontrar esse informação no texto.\n"
+        "- TIPO DE LOCAL (chave JSON: 'tipo_local'): Classifique o local do fato conforme as opções literais da lista tipos_locais.\n"
+        "- VALOR DE APURAÇÃO (chave JSON: 'valor_apuracao'): Informe o valor do prejuízo se houver, ou aponte numeral 0 (zero) se o texto não contiver essa informação.\n"
+        "- PESSOAS ENVOLVIDAS (chave JSON: 'pessoas_envolvidas'): Relacione os envolvidos (Nomes completos, CPFs/CNPJs e papel no caso conforme as opções literais da lista tipos_envolvidos).\n"
+        "- LINHA DO TEMPO (chave JSON: 'linha_do_tempo'): Arrole uma linha cronológica dos fatos relevantes documentados, quando possível.\n"
+        "- OBSERVAÇÕES (chave JSON: 'observacoes'): Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
 }
 # Grupo 3:
 prompt_D3 = {
     "role": "user", "content":
         "### CAMPOS A SEREM EXTRAÍDOS PARA CADA DOCUMENTO\n\n"
-        "- TIPIFICAÇÃO PENAL: Classifique conforme o código penal aplicável, ou aponte 'Dado ausente' se não encontrar esse informação no texto.\n"
-        "- ÁREA DE ATRIBUIÇÃO: Selecione a área temática de atribuição da investigação conforme intruções complementares e lista areas_de_atribuição.\n"
-        "- MATÉRIA DE TRATAMENTO ESPECIAL: Analise o caso com base na 'lista_normativa_prometheus' e nas tipificações penais. Em seguida, mapeie para uma categoria da 'materias_prometheus' conforme as regras de correspondência detalhadas no BLOCO F. Indique a categoria 'Prometheus' correspondente ou 'Não aplicável'.\n"
-        "- DESTINAÇÃO: Conforme opções literais da lista lista_delegacias_especializadas\n"
-        "- OBSERVAÇÕES: Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
+        "- TIPIFICAÇÃO PENAL (chave JSON: 'tipificacao_penal'): Classifique conforme o código penal aplicável, ou aponte 'Dado ausente' se não encontrar esse informação no texto.\n"
+        "- ÁREA DE ATRIBUIÇÃO (chave JSON: 'area_atribuicao'): Selecione a área temática de atribuição da investigação conforme intruções complementares e lista areas_de_atribuição.\n"
+        "- MATÉRIA DE TRATAMENTO ESPECIAL (chave JSON: 'materia_especial'): Analise o caso com base na 'lista_normativa_prometheus' e nas tipificações penais. Em seguida, mapeie para uma categoria da 'materias_prometheus' conforme as regras de correspondência detalhadas no BLOCO F. Indique a categoria 'Prometheus' correspondente ou 'Não aplicável'.\n"
+        "- DESTINAÇÃO (chave JSON: 'destinacao') Conforme opções literais da lista lista_delegacias_especializadas\n"
+        "- OBSERVAÇÕES (chave JSON: 'observacoes'): Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
 }
 # Grupo 4:
 prompt_D4 = {
     "role": "user", "content":
         "### CAMPOS A SEREM EXTRAÍDOS PARA CADA DOCUMENTO\n\n"
-        "- TIPO A AUTUAR: Indique o tipo de autuação que prosseguirá após análise inicial, conforme intruções complementares e lista tipos_a_autuar.\n"
-        "- ASSUNTO DO RE: Se o tipo de autuação for 'RE', selecione o assunto conforme as opções literais da lista assuntos_re, senão indique como 'Não aplicável'.\n"
-        "- OBSERVAÇÕES: Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
+        "- TIPO A AUTUAR (chave JSON: 'tipo_a_autuar'): Indique o tipo de autuação que prosseguirá após análise inicial, conforme intruções complementares e lista tipos_a_autuar.\n"
+        "- ASSUNTO DO RE (chave JSON: 'assunto_re'): Se o tipo de autuação for 'RE', selecione o assunto conforme as opções literais da lista assuntos_re, senão indique como 'Não aplicável'.\n"
+        "- OBSERVAÇÕES (chave JSON: 'observacoes'): Campo opcional para registro de outras informações relevantes ou de observações complementares; se for desnecessário deve ser preenchido com string vazia."
+}
+
+# BLOCO E – FORMATO DE RESPOSTA ESPERADO
+prompt_format_output_instruction = {
+    "role": "user", "content":
+        "### FORMATO OBRIGATÓRIO DA RESPOSTA:\n"
+        "A sua resposta DEVE ser um objeto JSON que siga rigorosamente a estrutura e os tipos de dados dos campos definidos na seção anterior 'CAMPOS A SEREM EXTRAÍDOS PARA CADA DOCUMENTO'.\n"
+        "A aderência estrita ao nome do campo e ao tipo de dado esperado para cada campo é crucial para a correta interpretação programática da sua resposta. "
+        "Para campos que são listas (como 'PESSOAS ENVOLVIDAS' ou 'LINHA DO TEMPO'), retorne uma lista de strings, mesmo que vazia, ou `null` se a informação não for aplicável e o esquema permitir. "
+        "Para campos numéricos (como 'VALOR DE APURAÇÃO'), utilize o formato numérico adequado (ex: `1234.56` ou `0`). "
+        "Para campos opcionais ou aqueles para os quais a informação não esteja presente no texto-documento, siga as diretrizes específicas de preenchimento de cada campo "
+        "(por exemplo, utilizando a string 'Dado ausente', o numeral 0, uma string vazia, ou omitindo o campo se o esquema assim permitir e for apropriado)."
 }
 
 # BLOCO F – CRITÉRIOS DE CLASSIFICAÇÃO E USO DAS LISTAS
@@ -735,8 +829,8 @@ final_action_L0 = {
 
 # PROMPTS no Formato List[Dict]:
 PROMPT_UNICO_for_INITIAL_ANALYSIS = [system_prompt_A0, general_instruction_B1_1,
-                                     prompt_C0, prompt_D0, prompt_F0, 
-                                     prompt_G1, prompt_G2, prompt_H1, 
+                                     prompt_C0, prompt_D0, prompt_format_output_instruction,
+                                     prompt_F0, prompt_G1, prompt_G2, prompt_H1, 
                                      prompt_I1, prompt_I2,
                                      prompt_J0, prompt_K0,
                                      final_action_L0]
@@ -744,114 +838,36 @@ PROMPT_UNICO_for_INITIAL_ANALYSIS = [system_prompt_A0, general_instruction_B1_1,
 prompt_inicial_para_cache = [system_prompt_A0, general_instruction_B1_2, start_action_B2]
 
 PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS = [
-    prompt_inicial_para_cache + [prompt_C1, prompt_D1, prompt_F1, prompt_K1],
-    prompt_inicial_para_cache + [prompt_C2, prompt_D2, prompt_F2, 
+    [prompt_C1, prompt_D1, prompt_format_output_instruction, prompt_F1, prompt_K1],
+    [prompt_C2, prompt_D2, prompt_format_output_instruction, prompt_F2, 
                                  prompt_G1, prompt_G2, prompt_H1,
                                  prompt_K2],
-    prompt_inicial_para_cache + [prompt_C3, prompt_D3, prompt_F3,
+    [prompt_C3, prompt_D3, prompt_format_output_instruction, prompt_F3,
                                  prompt_I1, prompt_J1,
                                  prompt_K3],
-    prompt_inicial_para_cache + [prompt_C4, prompt_D4, prompt_F4,
+    [prompt_C4, prompt_D4, prompt_format_output_instruction, prompt_F4,
                                  prompt_I2, prompt_J2, 
                                  prompt_K4]
 ]
 
-
-# FORMATOS das saídas estruturadas:
-from pydantic import BaseModel, Field 
-class formatted_initial_analysis(BaseModel):
-    descricao_geral: str 
-    tipo_documento_origem: str 
-    orgao_origem: str 
-    uf_origem: str 
-    municipio_origem: str 
-    resumo_fato: str 
-    uf_fato: str 
-    municipio_fato: str 
-    tipo_local: str 
-    valor_apuracao: float # Consta resposta padrão 0 se não aplicável
-    tipificacao_penal: str
-    materia_especial: str  # Consta resposta padrão se não aplicável
-    area_atribuicao: str 
-    destinacao: str 
-    tipo_a_autuar: str 
-    assunto_re: str                # Consta resposta padrão se não aplicável
-    pessoas_envolvidas: Optional[List[str]]
-    linha_do_tempo: Optional[List[str]] 
-    observacoes: Optional[str] 
-
-    justificativa_tipo_documento_origem:str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_orgao_origem:         str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_municipio_uf_origem:  str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_municipio_uf_fato:    str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_tipo_local:           str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_valor_apuracao:       str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_tipificacao_penal:    str = Field(default="Justificativa não fornecida pela IA.") 
-    justificativa_materia_especial:     str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
-    justificativa_area_atribuicao:      str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_destinacao:           str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_tipo_a_autuar:        str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_assunto_re:           str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
-
-class formatted_part_1(BaseModel):
-    tipo_documento_origem: str 
-    orgao_origem: str 
-    uf_origem: str 
-    municipio_origem: str 
-    observacoes: Optional[str] 
-
-    justificativa_tipo_documento_origem:str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_orgao_origem:         str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_municipio_uf_origem:  str = Field(default="Justificativa não fornecida pela IA.")
-    
-class formatted_part_2(BaseModel):
-    descricao_geral: str 
-    resumo_fato: str 
-    uf_fato: str 
-    municipio_fato: str 
-    tipo_local: str 
-    valor_apuracao: float # Consta resposta padrão 0 se não aplicável
-    pessoas_envolvidas: Optional[List[str]]
-    linha_do_tempo: Optional[List[str]] 
-    observacoes: Optional[str] 
-
-    justificativa_municipio_uf_fato:    str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_tipo_local:           str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_valor_apuracao:       str = Field(default="Justificativa não fornecida pela IA.")
-
-class formatted_part_3(BaseModel):
-    tipificacao_penal: str
-    materia_especial: str  # Consta resposta padrão se não aplicável
-    area_atribuicao: str 
-    destinacao: str 
-    observacoes: Optional[str] 
-
-    justificativa_tipificacao_penal:    str = Field(default="Justificativa não fornecida pela IA.") 
-    justificativa_materia_especial:     str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
-    justificativa_area_atribuicao:      str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_destinacao:           str = Field(default="Justificativa não fornecida pela IA.")
-
-class formatted_part_4(BaseModel):
-    tipo_a_autuar: str 
-    assunto_re: str                # Consta resposta padrão se não aplicável
-    observacoes: Optional[str] 
-
-    justificativa_tipo_a_autuar:        str = Field(default="Justificativa não fornecida pela IA.")
-    justificativa_assunto_re:           str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
-
-# Conversão para modelo em esquema JSON, se necessário:
-# schema = formatted_initial_analysis.model_json_schema()
-# response_format = {
-#     "type": "json_schema",
-#     "json_schema": {
-#         "name": "FormatAnaliseInicial",
-#         "schema": schema,
-#         "strict": False
-#     }
-# }
+def return_parse_prompt(dados_respostas):
+    return [{
+        "role": "user",
+        "content":
+            "Você receberá uma lista de respostas em texto, cada uma representando a análise de um segmento diferente de um documento. "
+            "Sua tarefa é consolidar as informações dessas respostas em um único objeto JSON que siga as chaves correspondentes abaixo:\n\n"
+            f"{list(formatted_initial_analysis.__pydantic_fields__.keys())}\n\n"
+            "Aqui estão as respostas segmentadas:\n\n"
+            "===\n" +
+            '\n'.join(f"Segmento {i+1}: {resp}" for i, resp in enumerate(dados_respostas)) +
+            "\n===\n\n"
+            "Analise o conteúdo de todos os segmentos e preencha os campos do JSON consolidado com as informações apropriadas extraídas deles. "
+            "Gere a resposta exatamente no formato JSON solicitado, sem comentários ou explicações adicionais."
+    }]
 
 prompts = {
     'PROMPT_UNICO_for_INITIAL_ANALYSIS': PROMPT_UNICO_for_INITIAL_ANALYSIS,
+    'prompt_inicial_para_cache': prompt_inicial_para_cache,
     'PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS': PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS
 }
 
@@ -974,7 +990,6 @@ def review_function(resposta_formatada: formatted_initial_analysis):
         resposta_formatada.justificativa_tipo_a_autuar += "\nTipo a autuar 'RDF' apontado na função revisora, em razão da autonomia de análise pela unidade destinatária."
             
     return resposta_formatada
-
 
 '''
 Grupos de prompt:

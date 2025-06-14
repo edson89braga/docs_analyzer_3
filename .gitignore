@@ -71,6 +71,8 @@ logs/
 *.db
 *.tmp
 
+*.ipynb
+
 docs/
 *.docx
 
