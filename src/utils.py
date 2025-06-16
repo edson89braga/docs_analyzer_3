@@ -649,16 +649,6 @@ def format_seconds_to_min_sec(total_segundos):
 
 from rouge_score import rouge_scorer
 def calcular_similaridade_rouge_l(texto_original: str, texto_editado: str) -> float:
-    if not texto_original.strip() and not texto_editado.strip():
-        return 1.0 # Ambos vazios, considerados 100% similares
-    if not texto_original.strip() or not texto_editado.strip():
-        return 0.0 # Um vazio e outro não, 0% similares
-
-    scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True)
-    scores = scorer.score(texto_original, texto_editado)
-    return scores['rougeL'].fmeasure # Usamos o F-score, que é uma média harmônica de precisão e recall
-
-def calcular_similaridade_rouge_l(texto_original: str, texto_editado: str) -> float:
     """
     Calcula a similaridade ROUGE-L F-score entre dois textos.
 

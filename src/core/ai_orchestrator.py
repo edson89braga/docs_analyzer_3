@@ -86,8 +86,7 @@ def calc_costs_embedding_process(tokens_count, embedding_model_id, loaded_embedd
         return None
 
     # Obtenção e validação do custo por milhão de tokens
-    # Corrigido erro de digitação: "cost_per_million" em vez de "coust_per_million"
-    cost_per_million = embedding_config.get("coust_per_million")
+    cost_per_million = embedding_config.get("cost_per_million")
 
     if cost_per_million is None:
         logger.warning(

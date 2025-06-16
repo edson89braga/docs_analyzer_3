@@ -516,7 +516,6 @@ class FirebaseClientFirestore:
             self.logger.error(f"Falha ao salvar métrica (cliente) para Firestore ({full_document_path}): {e}")
             return False
 
-
     def save_analysis_metrics(self, user_id, user_token, filenames_uploaded, proc_meta_session, tokens_embeddings_session, llm_meta_session,
             current_settings, default_settings, llm_response_obj, fields_to_log=[]):
         """

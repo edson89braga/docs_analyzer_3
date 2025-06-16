@@ -68,7 +68,7 @@ Não é Aconselhamento Jurídico: As tipificações penais e classificações su
 ============================================================================================================================
 
 > Reorganização referente aos métodos de limpeza e atualização da nc_analyze_view
-    - Prompt inicial: "Considere a versão atual do módulo nc_analyze_view.py. Identifique oportunidades de refatoração relacionadas aos métodos de limpeza e atualização da interface gráfica (GUI), que atualmente são invocados em múltiplos pontos do código. Proponha uma refatoração pontual que centralize essa lógica de atualização, simplifique a manutenção e garanta o correto tratamento das flags relacionadas a dados salvos dinamicamente."
+- Prompt inicial: "Considere a versão atual do módulo nc_analyze_view.py. Identifique oportunidades de refatoração relacionadas aos métodos de limpeza e atualização da interface gráfica (GUI), que atualmente são invocados em múltiplos pontos do código. Proponha uma refatoração pontual que centralize essa lógica de atualização, simplifique a manutenção e garanta o correto tratamento das flags relacionadas a dados salvos dinamicamente."
 
 
 

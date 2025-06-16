@@ -45,6 +45,8 @@ from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLA
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
 
+firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
+
 # Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
 KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
 KEY_SESSION_PDF_FILES_ORDERED = "apv_pdf_files_ordered"
@@ -1351,7 +1353,6 @@ class InternalAnalysisController:
         self.gui_controls = gui_controls
         self.parent_view = parent_view # Referência à view principal
         self.pdf_analyzer = parent_view.pdf_analyzer # Usa o da view
-        self.firestore_client_for_metrics = FirebaseClientFirestore() # Instância para métricas
 
     def _get_current_analysis_settings(self) -> Dict[str, Any]:
         """Busca as configurações de análise atuais da sessão."""
@@ -1643,7 +1644,7 @@ class InternalAnalysisController:
                 self.page.run_thread(self._update_status_callback,  "", False, True)
 
                 data_to_log = self._get_data_to_log()
-                if self.save_analysis_metrics(*data_to_log):
+                if firestore_client.save_analysis_metrics(*data_to_log):
                     #Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
                     self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
 
@@ -3143,7 +3144,7 @@ class FeedbackWorkflowManager:
                         reanalysis_occurrence = False
                     related_batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "N/A"
 
-                    if self.parent_view.analysis_controller.save_feedback_data(user_id, user_token, collected_feedback_data, llm_metadata_session, reanalysis_occurrence, related_batch_name):
+                    if firestore_client.save_feedback_data(user_id, user_token, collected_feedback_data, llm_metadata_session, reanalysis_occurrence, related_batch_name):
                         self.page.session.set(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, True)
 
                 primary_action_callable()
@@ -3196,10 +3197,6 @@ def get_api_key_in_firestore(page, provider):
 
     user_token = page.session.get("auth_id_token")
     user_id = page.session.get("auth_user_id")
-
-    firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
-    # O nome do serviço no Firestore precisa corresponder ao que foi salvo na Task 1.3
-    # Assumindo que foi salvo como "openai_api_key" para o provedor "openai"
     
     service_name_firestore = f"{provider}" # Ou uma lógica de mapeamento mais robusta
     _logger.debug(f"Buscando chave API criptografada para serviço: {service_name_firestore}")
