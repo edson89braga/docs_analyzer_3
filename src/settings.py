@@ -96,7 +96,8 @@ DEFAULT_TEMPERATURE = 0.3 # Baixa temperatura para respostas mais factuais/consi
 # Fallback Default Analysis Settings (se Firestore falhar)
 FALLBACK_ANALYSIS_SETTINGS = {
     "pdf_extractor": "PyMuPdf-fitz",
-    "embeddings_model": "all-MiniLM-L6-v2",
+    "vectorization_model": "all-MiniLM-L6-v2",
+    "similarity_threshold": 0.87,
     "language_detector": "langdetect",
     "token_counter": "tiktoken",
     "tfidf_analyzer": "sklearn",

@@ -1,3 +1,5 @@
+DEBUG_MODE = False
+
 from rich import print
 from src.utils import timing_decorator
 
@@ -171,22 +173,25 @@ from src.utils import count_tokens as util_count_tokens
 
 model_name_for_tokens: str = "gpt-3.5-turbo" # Adicionado para consistência com count_tokens e reduce_text
 
-def preprocess_text_basic(text: str) -> str:
+def function_preprocess_text_basic(text: str, clean_spaces=True, lowercase=False) -> str:
     """
     Realiza pré-processamento básico: remove espaços extras e converte para minúsculas.
     Resultado usado para as funções count_tokens, count_words, e is_text_intelligible.
     """
-    text = re.sub(r'\s+', ' ', text)
-    return text.lower()
+    if clean_spaces:
+        text = re.sub(r'\s+', ' ', text)
+    if lowercase:
+        text = text.lower()
+    return text
 
-def preprocess_text_advanced(text: str) -> str:
+def function_preprocess_text_advanced(text: str) -> str:
     """
     Realiza pré-processamento avançado: remove caracteres especiais e pontuação,
     exceto os necessários para datas/horários, após o pré-processamento básico.
 
     Resultado usado apenas para as funções analyze_text_similarity e calculate_text_relevance_tfidf.
     """
-    text = preprocess_text_basic(text)
+    text = function_preprocess_text_basic(text)
     text = re.sub(r'[^\w\sÀ-ÿ.,!?;:()\'\"-]', '', text)
     return text
 
@@ -251,6 +256,8 @@ def count_tokens(text: str, model_name: str) -> int:
 ### text_analysis_utils: #########################################################################################
 from numpy import array as np_array
 from numpy import ndarray as np_ndarray
+from numpy import any as np_any
+
 from nltk.corpus import stopwords
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -267,34 +274,33 @@ def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
     return _sentence_model
 
 @timing_decorator()
-def analyze_text_similarity(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: Optional[np_array] = None) -> np_array:
-    """
-    Analisa similaridades entre textos (páginas) usando embeddings de sentenças.
-    Retorna uma matriz de similaridade.
-    """
-    #if model_embedding == 'all-MiniLM-L6-v2':
-    if not ready_embeddings:
-        print('\n', '[DEBUG]: Modelo embeddings: all-MiniLM-L6-v2', '\n')
-        model = get_sentence_transformer_model(model_embedding)
-        ready_embeddings = model.encode(pages_texts)
-    
-    if not isinstance(ready_embeddings, np_ndarray):
-        ready_embeddings = np_array(ready_embeddings)
+def get_vectors(pages_texts, model_embedding: str = 'all-MiniLM-L6-v2'):
+    print('\n', f'[DEBUG]: Modelo embeddings: {model_embedding}', '\n')
+    model = get_sentence_transformer_model(model_embedding)
+    vectors_combined = model.encode(pages_texts)
+
+    if not isinstance(vectors_combined, np_ndarray):
+        vectors_combined = np_array(vectors_combined)
     
     # Verifica se o array não está vazio
-    if ready_embeddings.size == 0:
+    if vectors_combined.size == 0:
         logger.warning(f"Array 'ready_embeddings' fornecido está vazio para o modelo '{model_embedding}'. Retornando matriz de similaridade vazia.")
         return np_array([])
-        
-    ready_embeddings = sk_normalize(ready_embeddings)
-    similarity_matrix = cosine_similarity(ready_embeddings)
+
+    assert len(vectors_combined) == len(pages_texts), f"Quantidade de vetores ({len(vectors_combined)}) difere da quantidade de textos ({len(pages_texts)})."
+    return vectors_combined
+
+def get_similarity_matrix(vectors_combined, normalizer: bool = True):
+    if normalizer: # vetores provenientes do tfidf são arrays de 1D e não podem ser normalizados
+        vectors_combined = sk_normalize(vectors_combined)
+    similarity_matrix = cosine_similarity(vectors_combined)
     return similarity_matrix
 
 @timing_decorator()
-def calculate_text_relevance_tfidf(pages_texts: List[str], language: str = 'portuguese') -> np_array:
+def get_tfidf_scores(pages_texts: List[str], language: str = 'portuguese') -> np_array:
     """
     Calcula a relevância de cada texto (página) usando TF-IDF.
-    Retorna um array com os scores TF-IDF para cada texto.
+    Retorna um array com os scores TF-IDF para cada texto, e os vetores.
     """
     # Garante que stopwords para o idioma especificado estejam disponíveis
     try:
@@ -310,10 +316,12 @@ def calculate_text_relevance_tfidf(pages_texts: List[str], language: str = 'port
             
     vectorizer = TfidfVectorizer(stop_words=current_stopwords)
     tf_idf_matrix = vectorizer.fit_transform(pages_texts)
-    tf_idf_scores = tf_idf_matrix.sum(axis=1).A1  # .A1 converte para array 1D
-    return tf_idf_scores
+    
+    tf_idf_scores = np_array(tf_idf_matrix.sum(axis=1)).flatten()  # converte para array 1D
+    
+    return tf_idf_scores, tf_idf_matrix
 
-def get_similar_items_indices(item_index: int, similarity_matrix: np_array, threshold: float = 0.87) -> List[int]:
+def get_similar_items_indices(item_index: int, similarity_matrix: np_array, similarity_threshold: float = 0.87, exclude_idx=[]) -> List[int]:
     """
     Identifica itens semelhantes a um item específico com base na matriz de similaridade.
     """
@@ -322,11 +330,39 @@ def get_similar_items_indices(item_index: int, similarity_matrix: np_array, thre
         
     similar_indices = []
     for j in range(similarity_matrix.shape[0]):
-        if item_index == j:
+        if j==item_index or j in exclude_idx:
             continue
-        if similarity_matrix[item_index, j] > threshold:
+        if similarity_matrix[item_index, j] > similarity_threshold:
             similar_indices.append(j)
     return similar_indices
+
+from scipy.sparse import vstack
+from scipy.sparse.base import spmatrix
+
+def check_if_has_similar_items(
+    current_page_vector: Union[np_ndarray, spmatrix], # Ou seu tipo np_array
+    selected_matrix: Union[np_ndarray, spmatrix],     # Ou seu tipo np_array
+    similarity_threshold: float = 0.87
+) -> bool:
+    """
+    Verifica se current_page_vector é similar a algum vetor na selected_matrix.
+    current_page_vector deve ser 2D (1, N_features).
+    selected_matrix deve ser 2D (K_selecionados, N_features).
+    """
+    # Validações (importantes se esta função for mais genérica):
+    if not hasattr(selected_matrix, 'shape') or selected_matrix.shape[0] == 0:
+        # Se selected_matrix estiver vazia (nenhuma página selecionada ainda), não há similaridade.
+        # No seu fluxo atual, isso é coberto por `if not relevant_indices_candidates:`,
+        # então selected_matrix nunca deveria estar vazia quando esta função é chamada.
+        return False
+    if current_page_vector.ndim == 1: # Garante que o vetor atual seja 2D
+        current_page_vector = current_page_vector.reshape(1, -1)
+
+
+    similarities = cosine_similarity(current_page_vector, selected_matrix)
+    if np_any(similarities >= similarity_threshold):
+        return True
+    return False
 
 ### pdf_document_analyzer: #########################################################################################
 import os
@@ -361,6 +397,8 @@ def print_text_intelligibility(texts_normalized: list[tuple[int, str]]):
             except LangDetectException:
                 logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
     print('\n')
+
+import networkx as nx
 
 class PDFDocumentAnalyzer:
     """
@@ -442,18 +480,20 @@ class PDFDocumentAnalyzer:
             if all(part.startswith('Arq1 ') for part in output_parts): 
                 output_parts = [part.replace('Arq1 ', '') for part in output_parts]
 
+        #assert len(output_parts) == len(global_keys), f"Quantidade de partes formatadas diferente da quantidade de global_keys: \n\n{output_parts}\n\n{global_keys}\n)"
         return ", ".join(output_parts) if output_parts else "Nenhuma"
 
     ### ======================================================================================
 
     @timing_decorator()
-    def extract_texts_and_preprocess_files(self, pdf_paths_ordered: List[str]) -> Tuple[List[Tuple[int, str]], List[List[int]], List[Dict[int, str]], List[str]]:
+    def extract_texts_and_preprocess_files(self, pdf_paths_ordered: List[str], clean_spaces=True, lowercase=False
+                                           ) -> Tuple[List[Tuple[int, str]], List[List[int]], List[Dict[int, str]], List[str]]:
         """
         Extrai textos de um lote de PDFs ordenados e os pré-processa.
         Retorna uma tupla contendo metadados dos arquivos processados, listas de índices de páginas,
         textos pré-processados para armazenamento e textos pré-processados para análise.
         Retorna uma tupla: (processed_files_metadata, all_indices_in_batch, 
-                            all_texts_for_storage_combined, all_texts_for_analysis_combined)
+                            all_texts_for_storage_combined)
         """
         if not pdf_paths_ordered:
             logger.warning("Nenhum caminho de PDF fornecido para análise em lote.")
@@ -461,8 +501,8 @@ class PDFDocumentAnalyzer:
 
         processed_files_metadata: List[Tuple[int, str]] = [] # ARMAZENA (original_file_idx, pdf_path)
         all_indices_in_batch: List[List[int]] = []
-        all_texts_for_storage_combined: List[Dict[int, str]] = []
-        all_texts_for_analysis_combined: List[str] = []
+        all_texts_for_storage_dict: List[Dict[int, str]] = []
+        all_texts_for_analysis_list: List[str] = []
 
         for file_idx, pdf_path in enumerate(pdf_paths_ordered):
             if not os.path.exists(pdf_path):
@@ -478,30 +518,30 @@ class PDFDocumentAnalyzer:
                     continue
 
                 actual_indices_in_file = [idx for idx, _ in extracted_pages_content_single_file]
-                texts_for_storage_single_file = {idx: preprocess_text_basic(text) for idx, text in extracted_pages_content_single_file}
-                texts_for_analysis_single_file = [preprocess_text_advanced(text) for _, text in extracted_pages_content_single_file]
+                texts_for_storage_single_file = {idx: function_preprocess_text_basic(text, clean_spaces, lowercase) for idx, text in extracted_pages_content_single_file}
+                texts_for_analysis_single_file = [function_preprocess_text_basic(text, clean_spaces, lowercase) for _, text in extracted_pages_content_single_file]
 
                 processed_files_metadata.append((file_idx, pdf_path)) 
                 all_indices_in_batch.append(actual_indices_in_file)
-                all_texts_for_storage_combined.append(texts_for_storage_single_file)
-                all_texts_for_analysis_combined.extend(texts_for_analysis_single_file)
+                all_texts_for_storage_dict.append(texts_for_storage_single_file)
+                all_texts_for_analysis_list.extend(texts_for_analysis_single_file)
                 
             except Exception as e:
                 logger.error(f"Erro ao processar (extração/pré-proc) arquivo {os.path.basename(pdf_path)}: {e}", exc_info=True)
                 continue 
 
-        if not all_texts_for_analysis_combined:
+        if not all_texts_for_analysis_list:
             logger.warning("Nenhum texto para análise combinado de todos os arquivos.")
         else:
-            logger.info(f"Extração e pré-processamento em lote concluídos. Total de páginas com texto para análise: {len(all_texts_for_analysis_combined)}")
+            logger.info(f"Extração e pré-processamento em lote concluídos. Total de páginas com texto para análise: {len(all_texts_for_analysis_list)}")
         
-        return processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined
+        return processed_files_metadata, all_indices_in_batch, all_texts_for_storage_dict, all_texts_for_analysis_list
 
-    def _build_combined_page_data(self, 
-                                        processed_files_metadata: List[Tuple[int, str]], 
-                                        all_indices_in_batch: List[List[int]],
-                                        all_texts_for_storage_combined: List[Dict[int, str]]
-                                       ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+    def build_combined_page_data(self, 
+                                 processed_files_metadata: List[Tuple[int, str]], 
+                                 all_indices_in_batch: List[List[int]],
+                                 all_texts_for_storage_dict: List[Dict[int, str]]
+                                 ) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
 
         combined_processed_page_data: Dict[str, Dict[str, Any]] = {}
         all_global_page_keys_ordered: List[str] = [] 
@@ -509,7 +549,7 @@ class PDFDocumentAnalyzer:
         for processed_list_idx, (file_idx, pdf_path) in enumerate(processed_files_metadata):
 
             actual_indices_in_file = all_indices_in_batch[processed_list_idx]
-            texts_for_storage_single_file = all_texts_for_storage_combined[processed_list_idx]
+            texts_for_storage_single_file = all_texts_for_storage_dict[processed_list_idx]
 
             for page_idx_in_file in actual_indices_in_file:
                 text_stored = texts_for_storage_single_file[page_idx_in_file]
@@ -518,11 +558,12 @@ class PDFDocumentAnalyzer:
                 all_global_page_keys_ordered.append(global_page_key)
 
                 combined_processed_page_data[global_page_key] = {
-                    'texto': text_stored,
+                    'text_stored': text_stored,
                     'number_words': count_unique_words(text_stored),
                     'number_tokens': count_tokens(text_stored, model_name=model_name_for_tokens),
                     'inteligible': is_text_intelligible(text_stored),
                     'tf_idf_score': 0.0, 
+                    'vector': None,
                     'semelhantes': [],
                     'file_index': file_idx, 
                     'page_index_in_file': page_idx_in_file,
@@ -532,174 +573,325 @@ class PDFDocumentAnalyzer:
         return combined_processed_page_data, all_global_page_keys_ordered
 
     @timing_decorator()
-    def analyze_similarity_and_relevance_files(self, combined_processed_page_data: Dict[str, Dict[str, Any]], all_global_page_keys_ordered: List[str], 
-                                               all_texts_for_analysis_combined: List[str], model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: np_array = None
-                                               ) -> Dict[str, Dict[str, Any]]:
-        """
-        Analisa a similaridade textual e calcula os scores TF-IDF para um conjunto combinado de textos.
-        Atualiza o dicionário `combined_processed_page_data` com os scores de TF-IDF e 
-        listas de páginas semelhantes.
-        """
+    def get_similarity_and_tfidf_score_docs(self, all_texts_for_analysis_list: List[str], 
+                                            model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: np_array = None, preprocess_text_advanced: bool = False, 
+                                            ) -> Dict[str, Dict[str, Any]]:
+        if preprocess_text_advanced:
+            all_texts_for_analysis_list = [function_preprocess_text_advanced(text) for text in all_texts_for_analysis_list]
+        
         # --- 2. Análise de Similaridade e TF-IDF (COMBINADA para todos os arquivos) ---
-        logger.info(f"Realizando análise de similaridade e TF-IDF para {len(all_texts_for_analysis_combined)} páginas combinadas.")
+        logger.info(f"Realizando análise de similaridade e TF-IDF para {len(all_texts_for_analysis_list)} páginas combinadas.")
         try:
-            similarity_matrix_combined = analyze_text_similarity(all_texts_for_analysis_combined, model_embedding=model_embedding, ready_embeddings=ready_embeddings)
-            tf_idf_scores_array_combined = calculate_text_relevance_tfidf(all_texts_for_analysis_combined)
+            #similarity_matrix_combined = analyze_text_similarity(all_texts_for_storage_combined, model_embedding=model_embedding, ready_embeddings=ready_embeddings)
+            #tf_idf_scores_array_combined = calculate_text_relevance_tfidf(all_texts_for_storage_combined)
+            
+            if ready_embeddings is not None:
+                assert len(ready_embeddings) == len(all_texts_for_analysis_list)
+                embedding_vectors_combined = ready_embeddings
+            elif model_embedding:
+                embedding_vectors_combined = get_vectors(all_texts_for_analysis_list, model_embedding=model_embedding)
+            else:
+                # Deve ser None para não causar erro no método filter_and_classify_pages ao comandar get_similarity_matrix
+                embedding_vectors_combined = None 
 
-            # Mapear scores TF-IDF e similaridade de volta aos dados das páginas globais
-            for i, global_page_key in enumerate(all_global_page_keys_ordered):
-                if global_page_key in combined_processed_page_data:
-                    combined_processed_page_data[global_page_key]['tf_idf_score'] = round(tf_idf_scores_array_combined[i], 4)
-                    
-                    relative_similar_indices = get_similar_items_indices(i, similarity_matrix_combined)
-                    # Converte índices relativos (da lista combinada) para chaves de página globais
-                    absolute_similar_global_keys = [all_global_page_keys_ordered[sim_idx] for sim_idx in relative_similar_indices]
-                    combined_processed_page_data[global_page_key]['semelhantes'] = absolute_similar_global_keys
+            tf_idf_scores_array_combined, tfidf_vectors_combined = get_tfidf_scores(all_texts_for_analysis_list)
+            
         except Exception as e:
             logger.error(f"Erro durante análise combinada de similaridade/TF-IDF: {e}", exc_info=True)
             raise
             # Pode optar por continuar sem esses dados ou retornar erro.
             # Por ora, os scores/semelhantes podem ficar zerados/vazios.
 
-        logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(combined_processed_page_data)}")
-        return combined_processed_page_data
+        logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(all_texts_for_analysis_list)}")
+        return embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined
 
     @timing_decorator()
-    def analyze_pdf_documents(self, pdf_paths_ordered: List[str]) -> Dict[str, Dict[str, Any]]:
+    def analyze_pdf_documents(self, pdf_paths_ordered: List[str],
+                              clean_spaces=True, lowercase=False,
+                              model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: np_array = None, preprocess_text_advanced: bool = False) -> Dict[str, Dict[str, Any]]:
 
-        processed_files_metadata, all_indices_in_batch, all_texts_for_storage_combined, all_texts_for_analysis_combined = self.extract_texts_and_preprocess_files(pdf_paths_ordered)
+        processed_files_metadata, all_indices_in_batch, all_texts_for_storage_dict, all_texts_for_analysis_list = self.extract_texts_and_preprocess_files(
+                                                                                                                        pdf_paths_ordered, clean_spaces, lowercase)
         if not processed_files_metadata:
             logger.warning("Nenhum arquivo PDF produziu dados na fase de extração.")
             return {}
     
-        combined_processed_page_data, all_global_page_keys_ordered = self._build_combined_page_data(processed_files_metadata, 
-                                                                            all_indices_in_batch, all_texts_for_storage_combined)
+        combined_processed_page_data, all_global_page_keys_ordered = self.build_combined_page_data(processed_files_metadata, 
+                                                                            all_indices_in_batch, all_texts_for_storage_dict)
 
-        if not all_texts_for_analysis_combined:
+        if not all_texts_for_storage_dict or not all_texts_for_analysis_list:
             logger.warning("Nenhum texto para análise combinado de todos os arquivos. Pulando análise de similaridade e relevância.")
             return combined_processed_page_data
         
-        combined_processed_page_data = self.analyze_similarity_and_relevance_files(combined_processed_page_data, all_global_page_keys_ordered, all_texts_for_analysis_combined)
+        embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.get_similarity_and_tfidf_score_docs(
+                                                                    all_texts_for_analysis_list, model_embedding, ready_embeddings, preprocess_text_advanced)
 
-        return combined_processed_page_data
+        return combined_processed_page_data, all_global_page_keys_ordered, embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined
    
     ### ======================================================================================
 
     @timing_decorator()
     def filter_and_classify_pages(
         self, 
-        processed_page_data: Dict[str, Dict[str, Any]]
+        combined_processed_page_data: Dict[str, Dict[str, Any]],
+        all_global_page_keys_ordered: List[str], 
+        embedding_vectors_combined: Optional[np_ndarray] = None,
+        tfidf_vectors_combined: Optional[np_ndarray] = None,
+        tf_idf_scores_array_combined: Optional[np_ndarray] = None, 
+        mode_main_filter: str = 'get_pages_among_similars_graphs', # 'get_pages_by_tfidf_initial', 'get_pages_among_similars_matrix', get_pages_among_similars_groups
+        mode_filter_similar: str = 'bigger_content', # 'higher_initial_score'
+        similarity_threshold: float = 0.87
+        
     ) -> Tuple[List[str], List[str], int, int, int]: # Retorna listas de global_page_key (str)
         """
         Filtra e classifica páginas com base em sua relevância (TF-IDF) e similaridade.
         Remove páginas ininteligíveis e redundantes (mantendo a mais relevante do grupo).
-
-        Args:
-            processed_page_data (Dict[int, Dict[str, Any]]): Dados processados das páginas.
-
-        Returns:
-            Tuple[List[int], List[int], int, int, int]: Tupla contendo:
-                - Lista de índices das páginas relevantes (ordenadas por TF-IDF descendente).
-                - Lista de índices das páginas consideradas ininteligíveis.
-                - Contagem de páginas selecionadas como relevantes.
-                - Contagem de páginas descartadas por similaridade (redundância).
-                - Contagem de páginas descartadas por serem ininteligíveis.
         """
-        if not processed_page_data:
-            return [], [], 0, 0, 0 # Retornar zeros para as contagens
+        if not combined_processed_page_data:
+            return [], {}, 0 # Retornar zeros para as contagens
+        elif len(combined_processed_page_data)==1:
+            return [next(iter(combined_processed_page_data))], {}, 0  # Only one page, return it
+
+        for i, global_page_key in enumerate(all_global_page_keys_ordered):
+            assert global_page_key in combined_processed_page_data
+
+        total_pages = len(combined_processed_page_data) # Total de páginas que entraram no método
 
         processed_indices = set()
-        unintelligible_indices_set = set() # Renomeado para clareza, pois é um set
         relevant_indices_candidates = set()
-        # NOVO: Contador para páginas descartadas por similaridade
         discarded_by_similarity_count = 0
-        
-        page_indices_available = sorted(processed_page_data.keys())
-        total_pages_processed_initially = len(page_indices_available) # Total de páginas que entraram no método
-
+                
+        unintelligible_indices_set = set() # Renomeado para clareza, pois é um set
         # Primeira varredura para identificar todas as páginas ininteligíveis
-        for page_idx in page_indices_available:
-            if not processed_page_data[page_idx]['inteligible']:
-                unintelligible_indices_set.add(page_idx)
-                processed_indices.add(page_idx)
-        
-        # Contagem de páginas descartadas por ininteligibilidade já é o tamanho de unintelligible_indices_set
+        for current_page_index in combined_processed_page_data:
+            if not combined_processed_page_data[current_page_index]['inteligible']:
+                unintelligible_indices_set.add(current_page_index)
+                processed_indices.add(current_page_index)
         discarded_by_unintelligibility_count = len(unintelligible_indices_set)
 
+        page_indices_available = sorted(combined_processed_page_data.keys())
+
+        if len(page_indices_available) -len(unintelligible_indices_set) < 2:
+            return list(set(page_indices_available) - unintelligible_indices_set), unintelligible_indices_set, 0
+
+        if mode_main_filter != 'get_pages_by_tfidf_initial':
+            similarity_matrix_combined = get_similarity_matrix(embedding_vectors_combined) if embedding_vectors_combined is not None else get_similarity_matrix(tfidf_vectors_combined)
+
         # Agora, processe as demais páginas para relevância e similaridade
-        for page_idx in page_indices_available:
-            if page_idx in processed_indices: # Se ininteligível ou já processada em um grupo
-                continue
+        if mode_main_filter == 'get_pages_by_tfidf_initial':
+            assert not (isinstance(embedding_vectors_combined, list) and len(embedding_vectors_combined) == 0)
 
-            data = processed_page_data[page_idx]
-            current_group_indices_from_data = {page_idx}.union(
-                idx for idx in data.get('semelhantes', [])
-                if idx in processed_page_data
-            )
-            
-            group_to_evaluate = [
-                idx for idx in current_group_indices_from_data
-                if idx not in processed_indices 
-            ]
+            # Mapear scores TF-IDF e similaridade de volta aos dados das páginas globais
+            for i, global_page_key in enumerate(all_global_page_keys_ordered):
+                combined_processed_page_data[global_page_key]['tf_idf_score'] = round(tf_idf_scores_array_combined[i], 4)
+                combined_processed_page_data[global_page_key]['vector'] = tfidf_vectors_combined[i] if embedding_vectors_combined is None else embedding_vectors_combined[i]
 
-            if not group_to_evaluate:
-                if page_idx not in processed_indices:
-                    relevant_indices_candidates.add(page_idx)
-                    processed_indices.add(page_idx)
-                continue
+            page_indices_available = sorted(combined_processed_page_data.keys(),
+                                            key=lambda p_idx: combined_processed_page_data[p_idx]['tf_idf_score'],
+                                            reverse=True)
             
-            if len(group_to_evaluate) == 1:
-                most_relevant_in_group = group_to_evaluate[0]
-                # Nenhuma página descartada por similaridade neste caso (só há uma no grupo a avaliar)
-            else:
-                most_relevant_in_group = max(
-                    group_to_evaluate,
-                    key=lambda p_idx_key: processed_page_data[p_idx_key]['number_words']
-                )
-                logger.info(f'Do grupo de páginas semelhantes (considerando apenas inteligíveis e não processadas) '
-                            f'{[p for p in sorted(list(group_to_evaluate))]}, '
-                            f'a página {most_relevant_in_group} foi selecionada.')
+            selected_page_vectors = [] # Lista de vetores tfidf das páginas já selecionadas
+
+            for current_page_index in page_indices_available:
+                if current_page_index in processed_indices: # Se ininteligível 
+                    continue
                 
-                # NOVO: Contabilizar páginas descartadas por similaridade
-                for group_member_idx in group_to_evaluate:
-                    if group_member_idx != most_relevant_in_group:
-                        discarded_by_similarity_count += 1
-            
-            relevant_indices_candidates.add(most_relevant_in_group)
-            
-            if most_relevant_in_group in processed_page_data:
-                 processed_page_data[most_relevant_in_group]['tf_idf_score'] *= 2
+                current_page_vector = combined_processed_page_data[current_page_index]['vector']
+                current_page_vector = current_page_vector if embedding_vectors_combined is None else np_array(current_page_vector)
+                
+                if not relevant_indices_candidates: # Se é a primeira página (a mais relevante), seleciona.
+                    relevant_indices_candidates.add(current_page_index)
+                    selected_page_vectors.append(current_page_vector)
+                    continue
+                
+                # Vetores TF-IDF esparsos (já devem ser 1xN cada) Ou np.array de uma lista de vetores 1D ou (1,N) resulta em matriz 2D
+                selected_matrix = vstack(selected_page_vectors) if embedding_vectors_combined is None else np_array(selected_page_vectors) 
+                if selected_matrix.ndim == 1: selected_matrix = selected_matrix.reshape(1,-1)  # Se só havia um vetor antes e ele foi achatado para 1D
+                is_redundant = check_if_has_similar_items(current_page_vector, selected_matrix, similarity_threshold=similarity_threshold)
+                
+                if not is_redundant:
+                    relevant_indices_candidates.add(current_page_index)
+                    selected_page_vectors.append(current_page_vector)
+                else:
+                    discarded_by_similarity_count += 1
 
-            # CORREÇÃO: Atualiza com o grupo original, não o filtrado group_to_evaluate
-            processed_indices.update(current_group_indices_from_data)
+        elif mode_main_filter == 'get_pages_among_similars_matrix':
+            # Mapear scores TF-IDF e similaridade de volta aos dados das páginas globais
+            for i, global_page_key in enumerate(all_global_page_keys_ordered):             
+                relative_similar_indices = get_similar_items_indices(i, similarity_matrix_combined, similarity_threshold=similarity_threshold)
+                # Converte índices relativos (da lista combinada) para chaves de página globais
+                absolute_similar_global_keys = [all_global_page_keys_ordered[sim_idx] for sim_idx in relative_similar_indices]
+                combined_processed_page_data[global_page_key]['semelhantes'] = absolute_similar_global_keys
 
-        final_relevant_indices_list = list(relevant_indices_candidates) # Renomeado para clareza
-        final_relevant_indices_list.sort(
-            key=lambda p_idx: processed_page_data[p_idx]['tf_idf_score'],
-            reverse=True
-        )
+        elif mode_main_filter == 'get_pages_among_similars_groups':
+            # Agrupa páginas semelhantes iterativamente. Cada grupo contém uma página 'principal' e suas semelhantes.
+            # pages_assigned_to_group rastreia todos os índices relativos que já pertencem a algum grupo.
+            pages_assigned_to_group = set() 
+            # Mapear scores TF-IDF e similaridade de volta aos dados das páginas globais
+            for i, global_page_key in enumerate(all_global_page_keys_ordered):
+                if i in pages_assigned_to_group:
+                    if 'semelhantes' not in combined_processed_page_data[global_page_key]:
+                        combined_processed_page_data[global_page_key]['semelhantes'] = []
+                    continue
+                
+                pages_assigned_to_group.add(i)
+
+                # Encontra vizinhos diretos de 'i'
+                # Não precisa de exclude_idx aqui, pois vamos filtrar depois; e estava a criar muitos grupos pequenos.
+                relative_similar_indices = get_similar_items_indices(i, similarity_matrix_combined, similarity_threshold=similarity_threshold)
+
+                current_group_similar_global_keys = []
+                for sim_idx in relative_similar_indices:
+                    if sim_idx not in pages_assigned_to_group:
+                        # Este vizinho ainda não foi agrupado, então ele entra no grupo de 'i'
+                        pages_assigned_to_group.add(sim_idx)
+                        current_group_similar_global_keys.append(all_global_page_keys_ordered[sim_idx])
+                
+                combined_processed_page_data[global_page_key]['semelhantes'] = current_group_similar_global_keys
+
+        elif mode_main_filter == 'get_pages_among_similars_graphs':
+            #  Agrupa páginas semelhantes usando um grafo de similaridade e componentes conectados.
+            pages_assigned_to_group = set() # Evitar auto-loops e duplicatas de arestas
+            # Construir o grafo
+            graph = nx.Graph()
+            # Mapear scores TF-IDF e similaridade de volta aos dados das páginas globais
+            for i, global_page_key in enumerate(all_global_page_keys_ordered):      
+                graph.add_node(i) # Adiciona cada página como um nó
+                pages_assigned_to_group.add(i)
+                relative_similar_indices = get_similar_items_indices(i, similarity_matrix_combined, exclude_idx=pages_assigned_to_group, similarity_threshold=similarity_threshold)
+                for sim_idx in relative_similar_indices:
+                    graph.add_edge(i, sim_idx)
+                pages_assigned_to_group.update(relative_similar_indices)
+
+            # Encontrar componentes conectados:
+            connected_components_groups = list(nx.connected_components(graph))
+            # Converter para lista de listas (nx retorna conjuntos):
+            connected_components_groups = [list(group) for group in connected_components_groups]
+
+            # Crie um mapeamento de índice de página (relativo) para seu componente (lista de índices relativos)
+            page_idx_to_component_map = {}
+            for component in connected_components_groups:
+                for page_relative_idx in component:
+                    page_idx_to_component_map[page_relative_idx] = component
+
+            for i, global_page_key in enumerate(all_global_page_keys_ordered):
+                if i in page_idx_to_component_map:
+                    current_component = page_idx_to_component_map[i]
+                    # Semelhantes são todos os outros no mesmo componente
+                    similar_relative_indices = [idx for idx in current_component if idx != i]
+                    combined_processed_page_data[global_page_key]['semelhantes'] = [all_global_page_keys_ordered[sim_idx] for sim_idx in similar_relative_indices]
+                else: # Página não está em nenhum componente (pode acontecer se for única)
+                    combined_processed_page_data[global_page_key]['semelhantes'] = []
+
+        else:
+            msg_error = f"Modo de filtro principal desconhecido: {mode_main_filter}"
+            logger.error(msg_error)
+            raise ValueError(msg_error)
+
+        if mode_main_filter != 'get_pages_by_tfidf_initial':
+
+            for current_page_index in page_indices_available:
+                if current_page_index in processed_indices: # Se ininteligível ou já processada em um grupo
+                    continue
+
+                data = combined_processed_page_data[current_page_index]
+                current_group_indices_from_data = {current_page_index}.union(
+                    idx for idx in data.get('semelhantes', [])
+                    if idx in combined_processed_page_data
+                )
+                
+                group_to_evaluate = [
+                    idx for idx in current_group_indices_from_data
+                    if idx not in processed_indices 
+                ]
+
+                if not group_to_evaluate:
+                    if current_page_index not in processed_indices:
+                        relevant_indices_candidates.add(current_page_index)
+                        processed_indices.add(current_page_index)
+                    continue
+                
+                if len(group_to_evaluate) == 1:
+                    most_relevant_in_group = group_to_evaluate[0]
+                    # Nenhuma página descartada por similaridade neste caso (só há uma no grupo a avaliar)
+                else:
+                    if mode_filter_similar == 'bigger_content':
+                        most_relevant_in_group = max(
+                            group_to_evaluate,
+                            key=lambda p_idx_key: combined_processed_page_data[p_idx_key]['number_words'] )
+                    elif mode_filter_similar == 'higher_initial_score':
+                        for i, global_page_key in enumerate(all_global_page_keys_ordered):
+                            assert global_page_key in combined_processed_page_data
+                            combined_processed_page_data[global_page_key]['tf_idf_score'] = round(tf_idf_scores_array_combined[i], 4)
+
+                        most_relevant_in_group = max(
+                            group_to_evaluate,
+                            key=lambda p_idx_key: combined_processed_page_data[p_idx_key]['tf_idf_score'] )
+                    else:
+                        msg_error = f"Modo de filtro de similaridade desconhecido: {mode_filter_similar}"
+                        logger.error(msg_error)
+                        raise ValueError(msg_error)
+                    
+                    if DEBUG_MODE:
+                        print(f'Do grupo de páginas semelhantes (considerando apenas inteligíveis e não processadas) '
+                                    f'{[p for p in sorted(list(group_to_evaluate))]}, '
+                                    f'o índice-página {most_relevant_in_group} foi selecionado.')
+                    
+                    # Contabilizar páginas descartadas por similaridade
+                    for group_member_idx in group_to_evaluate:
+                        if group_member_idx != most_relevant_in_group:
+                            discarded_by_similarity_count += 1
+                
+                relevant_indices_candidates.add(most_relevant_in_group)
+                
+                # Atualiza com o grupo original, não o filtrado group_to_evaluate
+                processed_indices.update(current_group_indices_from_data)
+
+        # --- PASSO 3: Recálculo de TF-IDF no Conjunto Não Redundante ---
+        if not relevant_indices_candidates:
+            logger.warning("Nenhuma página selecionada após a primeira filtragem.")
+            return [], {}, 0 
+
+        logger.info(f"Páginas-índices após 1ª filtragem ({len(relevant_indices_candidates)} de {total_pages}).")
+
+        texts_for_recalculation = [combined_processed_page_data[i]['text_stored'] for i in relevant_indices_candidates]
+        final_relevance_scores, _ = get_tfidf_scores(texts_for_recalculation)
+
+        final_pages_data  = []
+        for i, original_page_idx in enumerate(relevant_indices_candidates):
+            final_pages_data .append({
+                "original_index": original_page_idx,
+                "recalculated_relevance": final_relevance_scores[i]
+            })
         
-        selected_relevant_count = len(final_relevant_indices_list)
+        # Ordenar pelo score de relevância recalculado (decrescente)
+        sorted_final_pages_data = sorted(final_pages_data, key=lambda x: x["recalculated_relevance"], reverse=True)
+
+        final_selected_ordered_indices = [page_data["original_index"] for page_data in sorted_final_pages_data]
         
+        selected_relevant_count = len(final_selected_ordered_indices)      
+
         # Verificação de consistência (opcional, para debug):
         # A soma das selecionadas, descartadas por similaridade e descartadas por ininteligibilidade
         # deveria ser igual ao total de páginas processadas inicialmente.
-        if total_pages_processed_initially != (selected_relevant_count + discarded_by_similarity_count + discarded_by_unintelligibility_count):
+        if total_pages != (selected_relevant_count + discarded_by_similarity_count + discarded_by_unintelligibility_count):
             logger.warning("Contagem de páginas inconsistente em filter_and_classify_pages!")
-            logger.warning(f"Total Inicial: {total_pages_processed_initially}, Selecionadas: {selected_relevant_count}, "
+            logger.warning(f"Total Inicial: {total_pages}, Selecionadas: {selected_relevant_count}, "
                            f"Descartadas Simil.: {discarded_by_similarity_count}, Descartadas Inint.: {discarded_by_unintelligibility_count}")
-
+        #print('\n')
+        #logger.info(f"[DEBUG] Índices relevantes após filtro: \n{sorted(final_selected_ordered_indices)}\n")
+        
         return (
-            final_relevant_indices_list, 
+            final_selected_ordered_indices, # ordenado pelo score tfidf recalculado
             unintelligible_indices_set,
-            discarded_by_similarity_count          
+            discarded_by_similarity_count
         )
 
     @timing_decorator()
     def group_texts_by_relevance_and_token_limit(
         self,
         processed_page_data: Dict[str, Dict[str, Any]], # Chave é global_page_key (str)
-        relevant_page_indices: List[str], # Lista de global_page_key (str)
+        relevant_page_ordered_indices: List[str], # Lista de global_page_key (str)
         token_limit: int,
     ) -> Tuple[str, str, int, int]: 
         """
@@ -727,16 +919,16 @@ class PDFDocumentAnalyzer:
         total_tokens_before_truncation = 0 # Variável para rastrear tokens totais das páginas selecionadas antes do truncamento
         texts_for_concatenation = {}
 
-        assert len(relevant_page_indices) == len(set(relevant_page_indices))
+        assert len(relevant_page_ordered_indices) == len(set(relevant_page_ordered_indices))
 
         limit_reached = False
-        for page_idx in relevant_page_indices:
+        for page_idx in relevant_page_ordered_indices:
             if page_idx not in processed_page_data:
                 #logger.warning(f"Índice de página relevante {page_idx+1} não encontrado nos dados processados. Ignorando.")
                 logger.warning(f"Chave de página relevante '{page_idx}' não encontrada...")
                 continue
 
-            page_text = processed_page_data[page_idx]['texto']
+            page_text = processed_page_data[page_idx]['text_stored']
             
             page_tokens = count_tokens(page_text, model_name=model_name_for_tokens)
 
@@ -781,116 +973,13 @@ class PDFDocumentAnalyzer:
         # Recalcula tokens finais do texto agregado para máxima precisão, pois o join(" ") pode adicionar/remover tokens.
         final_aggregated_tokens = count_tokens(accumulated_text, model_name=model_name_for_tokens)
 
+        print("\n")
+        if set(relevant_page_ordered_indices) == set(keys_of_included_texts):
+            logger.info("[DEBUG] Índices relevantes integra os mesmos índices do texto final agregado.\n")
+        else:
+            logger.info(f"[DEBUG] Índices relevantes NÃO integra os mesmos índices do texto final agregado.\n {set(keys_of_included_texts)-set(relevant_page_ordered_indices)}\n")
+
         return keys_of_included_texts, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
-
-    ### Métodos single_file com diferencial de argumentar page_indices. Avaliar se mantém ou descontinua. 
-
-    def extract_texts_and_preprocess(self, pdf_path: str, page_indices: Optional[List[int]] = None):
-        """
-        Processa um PDF, extrai texto de cada página e realiza análises.
-
-        Args:
-            pdf_path (str): Caminho do arquivo PDF.
-            page_indices (Optional[List[int]]): Índices das páginas a serem processadas (base 0).
-                                                 Se None, todas as páginas são processadas.
-
-        Returns:
-            Dict[int, Dict[str, Any]]: Dicionário com dados de cada página processada,
-                                       incluindo texto, contagem de palavras/tokens,
-                                       inteligibilidade, score TF-IDF e páginas semelhantes.
-        """
-        if not os.path.exists(pdf_path):
-            logger.error(f"PDF não encontrado: {pdf_path}")
-            raise FileNotFoundError(f"PDF não encontrado: {pdf_path}")
-
-        logger.info(f'Processando PDF {os.path.basename(pdf_path)}')
-
-        try:
-            # 1. Extrair texto das páginas
-            # O método extract_texts_from_pages já lida com page_indices=None para todas as páginas
-            extracted_pages_content = self.extractor.extract_texts_from_pages(pdf_path, page_indices)
-            
-            if not extracted_pages_content:
-                logger.warning(f"Nenhum texto extraído do PDF {os.path.basename(pdf_path)} para os índices fornecidos.")
-                return {}
-
-            # Mapear os textos extraídos para facilitar o acesso e manter os índices originais
-            # Mesmo que page_indices seja fornecido, a lista retornada pode ser menor
-            # se alguns índices estiverem fora do intervalo ou não tiverem conteúdo.
-            # Vamos usar os índices retornados por extract_texts_from_pages como a fonte da verdade.
-
-            actual_indices = [idx for idx, _ in extracted_pages_content]
-            
-            # 2. Pré-processar textos
-            # Texto para armazenamento e exibição (preprocessamento básico)
-            texts_for_storage = {idx: preprocess_text_basic(text) for idx, text in extracted_pages_content}
-            # Texto para análises mais profundas (preprocessamento avançado)
-            texts_for_analysis = [preprocess_text_advanced(text) for _, text in extracted_pages_content]
-
-            return actual_indices, texts_for_storage, texts_for_analysis
-
-        except Exception as e:
-            logger.error(f"Erro ao processar PDF {os.path.basename(pdf_path)}: {str(e)}")
-            raise
-
-    def analyze_similarity_and_relevance(self, pdf_path, actual_indices, texts_for_storage, texts_for_analysis) -> Dict[int, Dict[str, Any]]:
-        """
-        Continuação da função extract_texts_and_preprocess.
-        """
-        try:
-            # 3. Realizar análises de similaridade e relevância
-            # É importante que texts_for_analysis corresponda à ordem dos actual_indices
-            # se formos mapear os resultados de volta para os índices originais.
-            similarity_matrix = analyze_text_similarity(texts_for_analysis)
-            tf_idf_scores_array = calculate_text_relevance_tfidf(texts_for_analysis)
-
-            # Mapear scores TF-IDF de volta aos índices originais das páginas
-            tf_idf_scores = {actual_indices[i]: tf_idf_scores_array[i] for i in range(len(actual_indices))}
-            
-            # 4. Montar dicionário de dados por página
-            processed_page_data: Dict[int, Dict[str, Any]] = {}
-
-            for i, original_page_index in enumerate(actual_indices):
-                text_stored = texts_for_storage[original_page_index]
-                
-                is_intelligible = is_text_intelligible(text_stored) # Usa o texto com pré-processamento básico
-                if not is_intelligible:
-                    try:
-                        lang = detect(text_stored)
-                        logger.warning(f'[red]Página original {original_page_index+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text_stored)}')
-                    except LangDetectException:
-                        logger.warning(f'[red]Página original {original_page_index+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text_stored)}')
-
-
-                # `get_similar_items_indices` espera um índice relativo à matriz de similaridade,
-                # que é `i` neste loop, pois `texts_for_analysis` foi usado para criar a matriz.
-                # Os índices retornados por `get_similar_items_indices` também são relativos.
-                # Precisamos mapeá-los de volta para os `actual_indices`.
-                relative_similar_indices = get_similar_items_indices(i, similarity_matrix)
-                absolute_similar_indices = [actual_indices[sim_idx] for sim_idx in relative_similar_indices]
-
-                processed_page_data[original_page_index] = {
-                    'texto': text_stored,
-                    'number_words': count_unique_words(text_stored),
-                    'number_tokens': count_tokens(text_stored, model_name=model_name_for_tokens), # Usando a função de utils
-                    'inteligible': is_intelligible,
-                    'tf_idf_score': round(tf_idf_scores.get(original_page_index, 0.0), 4),
-                    'semelhantes': absolute_similar_indices # Lista de índices de páginas originais
-                }
-            
-            return processed_page_data
-
-        except Exception as e:
-            logger.error(f"Erro ao processar PDF {os.path.basename(pdf_path)}: {str(e)}")
-            raise
-
-    @timing_decorator()
-    def analyze_pdf_document(self, pdf_path: str, page_indices: Optional[List[int]] = None) -> Dict[int, Dict[str, Any]]:
-        
-        actual_indices, texts_for_storage, texts_for_analysis = self.extract_texts_and_preprocess(pdf_path, page_indices)
-        processed_page_data = self.analyze_similarity_and_relevance(pdf_path, actual_indices, texts_for_storage, texts_for_analysis)
-
-        return processed_page_data
 
 
 ### Func OCR #########################################################################################
@@ -1077,7 +1166,7 @@ for pagina, texto in result.items():
 
 ### Funcs Testes #########################################################################################
 
-def test_examples_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 100000): # Modificado para List[str]
+def teste_examples_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 100000): # Modificado para List[str]
     if not pdf_paths:
         print("Nenhum caminho de PDF fornecido para o teste.")
         return
@@ -1117,7 +1206,7 @@ def test_examples_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 
             original_pdf_path_for_item = data['original_pdf_path'] # Renomeado para evitar conflito de nome
             
             print(f"  Arquivo {file_idx + 1} ({os.path.basename(original_pdf_path_for_item)}), Página {page_idx_in_file + 1} (Chave Global: {global_page_key}):")
-            print(f"    Texto (primeiros 50 chars): '{data['texto'][:50]}...'")
+            print(f"    Texto (primeiros 50 chars): '{data['text_stored'][:50]}...'")
             print(f"    Inteligível: {data['inteligible']}")
             print(f"    Palavras Únicas: {data['number_words']}")
             print(f"    Tokens: {data['number_tokens']}") # model_name_for_tokens é usado internamente
@@ -1155,7 +1244,7 @@ def test_examples_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 
             # model_name_for_tokens é usado internamente por group_texts_by_relevance_and_token_limit
             str_pages, aggregated_text, tokens_antes, tokens_depois = analyzer.group_texts_by_relevance_and_token_limit(
                 processed_page_data=processed_data_batch,
-                relevant_page_indices=relevant_indices, # Já são global_page_key
+                relevant_page_ordered_indices=relevant_indices, # Já são global_page_key
                 token_limit=token_limit_for_summary
             )
             print(f"  Páginas consideradas para o texto agregado (chaves formatadas): {str_pages}\n")
@@ -1180,7 +1269,7 @@ def test_examples_analyzer(pdf_paths: List[str], token_limit_for_summary: int = 
         import traceback
         traceback.print_exc()
 
-def teste_ult():
+def teste_get_processed_text():
     pdf_paths = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.013511_2025-29.pdf']
     analyzer = PDFDocumentAnalyzer()
     processed_page_data_combined = analyzer.analyze_pdf_documents(pdf_paths)
@@ -1190,35 +1279,150 @@ def teste_ult():
     _, processed_text, *_ = aggregated_info
     return processed_text
 
-r'''
-python -i teste_interativo.py
+def teste_filters_pdf(get_embeddings_from_api):
+    # preprocess_text_advanced=False
+    # mode_filter_similar='bigger_content'
 
-pdf_paths_1 = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014072_2025-71.pdf']
+    from src.settings import api_key_test
+    processor = PDFDocumentAnalyzer()
+        
+    processed_files_metadata, all_indices_in_batch, all_texts_for_storage_dict, all_texts_for_analysis_list = processor.extract_texts_and_preprocess_files([r'C:\Users\edson.eab\Downloads\PDFs-Testes\08500.014141_2025-47.pdf'])
 
-pdf_paths_2 = [r'C:\Users\edson.eab\Downloads\PDFs-Testes\01_08500.014072_2025-71.pdf',
-               r'C:\Users\edson.eab\Downloads\PDFs-Testes\11_08500.014072_2025-71.pdf']
+    ready_embeddings_openai, *_ = get_embeddings_from_api(all_texts_for_analysis_list, api_key=api_key_test)
+    ready_embeddings_sentence = get_vectors(all_texts_for_analysis_list, model_embedding='all-MiniLM-L6-v2')  
 
-analyzer = PDFDocumentAnalyzer()
+    assert processed_files_metadata
 
-processed_data_batch_1 = analyzer.analyze_pdf_document_batch(pdf_paths_1)
-tupla_processed_data_batch_1 = analyzer.filter_and_classify_pages(processed_data_batch_1)
+    combined_processed_page_data, all_global_page_keys_ordered = processor.build_combined_page_data(processed_files_metadata, 
+                                                                        all_indices_in_batch, all_texts_for_storage_dict)
 
-processed_data_batch_2 = analyzer.analyze_pdf_document_batch(pdf_paths_2)
-tupla_processed_data_batch_2 = analyzer.filter_and_classify_pages(processed_data_batch_2)
+    assert all_texts_for_storage_dict and all_texts_for_analysis_list
 
-for k1, k2 in zip(list(processed_data_batch_1.keys()), list(processed_data_batch_2.keys())): 
-    for k3 in list(processed_data_batch_1[k1].keys()):
-        if k3 in ['semelhantes', 'page_index_in_file', 'original_pdf_path', 'file_index']:
-            continue
-        assert processed_data_batch_1[k1][k3] == processed_data_batch_2[k2][k3]
+    tf_idf_scores_array_combined, tfidf_vectors_combined = get_tfidf_scores(all_texts_for_analysis_list)
 
-assert tupla_processed_data_batch_1[2:] == tupla_processed_data_batch_2[2:]
+    assert len(ready_embeddings_openai) == len(all_texts_for_analysis_list)
+    assert len(ready_embeddings_sentence) == len(all_texts_for_analysis_list)
+   
+    dict_embeddings = {
+        'embeddings_openai': ready_embeddings_openai,
+        'embeddings_sentence': ready_embeddings_sentence,
+        'tdfidf_vectors': None}
 
---------------------------------------------------------------------------------------------
+    results = []
+    p=0
+    for mode_filter in ['get_pages_among_similars_groups', 'get_pages_among_similars_graphs']: # 'get_pages_by_tfidf_initial', 'get_pages_among_similars_matrix'
+        for embeddings_k in ['embeddings_openai', 'embeddings_sentence']: # 'tdfidf_vectors'
+            embedding_vectors_combined = dict_embeddings[embeddings_k]
+            parametros = {
+                'mode_main_filter': mode_filter,
+                'embedding_vectors_combined': embedding_vectors_combined,
+                'similarity_threshold': 0.78 if embeddings_k == 'tdfidf_vectors' else (0.91 if embeddings_k == 'embeddings_openai' else 0.85)
+            }
+            p+=1
+                    
+            final_selected_ordered_indices, unintelligible_indices_set, discarded_by_similarity_count = processor.filter_and_classify_pages(combined_processed_page_data, 
+                                        all_global_page_keys_ordered, parametros['embedding_vectors_combined'], tfidf_vectors_combined, tf_idf_scores_array_combined,
+                                        mode_main_filter = parametros['mode_main_filter'], similarity_threshold=parametros['similarity_threshold'])
+            print(f'''
+            Processamento a partir do grupo de Parâmetros {p}: {embeddings_k} + {mode_filter}
 
-processed_text = teste_ult()
+            Páginas Relevantes consideradas: {len(final_selected_ordered_indices)}: \n\n{processor.format_global_keys_for_display(sorted(final_selected_ordered_indices))}
 
-'''
+            Páginas Irrelevantes por Similaridade: {discarded_by_similarity_count}
+            Páginas Descartadas (Ininteligíveis): {len(unintelligible_indices_set)} \n
+            ''')
+            print('==='*50)
+            print('\n')
+            
+            results.append((f'{p}: {embeddings_k} + {mode_filter}', final_selected_ordered_indices))
+    
+    return results
+
+    '''
+    **Dados Resumidos (Páginas Relevantes Selecionadas de 727, 4 ininteligíveis):**
+
+    | `mode_main_filter`                | `embeddings_openai` (limiar 0.87) | `embeddings_sentence` (limiar 0.87) | `tfidf_vectors` (limiar 0.80)  |
+    | :-------------------------------- | :-------------------------------- | :---------------------------------- | :----------------------------- |
+    | `get_pages_among_similars_matrix` | 66                                | 156                                 | 278                            |
+    | `get_pages_among_similars_groups` | 186                               | 229                                 | 286                            |
+    | `get_pages_among_similars_graphs` | **51**  -> 74                     | **125**    -> 104                   | **253**                        |
+    | `get_pages_by_tfidf_initial`      | 66                                | 160                                 | 279                            |
+
+    '''
+
+def teste_analyze_page_differences(tupla_results):
+    """
+    Analisa uma lista de resultados de filtragem de páginas para encontrar as maiores diferenças.
+    """
+    import collections
+    
+    method_names, all_page_indices = [tp[0] for tp in tupla_results], [tp[1] for tp in  tupla_results]
+
+    if len(method_names) != len(all_page_indices):
+        raise ValueError("A lista de nomes de métodos e a lista de resultados devem ter o mesmo tamanho.")
+
+    # Dicionário para rastrear quais métodos selecionaram cada página
+    # Chave: page_index (int), Valor: lista de method_names (list[str])
+    page_occurrences = collections.defaultdict(list)
+
+    # Popula o dicionário
+    for method_name, page_indices in zip(method_names, all_page_indices):
+        for page_index in page_indices:
+            page_occurrences[page_index].append(method_name)
+
+    # Classifica as páginas com base na frequência
+    total_methods = len(method_names)
+    consensus_pages = []
+    unique_pages = {}
+    high_disagreement_pages = {} # Páginas que aparecem em 2 ou 3 grupos
+    almost_consensus_pages = {}  # Páginas que aparecem em (total-2) ou (total-1) grupos
+
+    sorted_pages = sorted(page_occurrences.keys())
+
+    for page_index in sorted_pages:
+        methods = page_occurrences[page_index]
+        count = len(methods)
+        
+
+        if count == total_methods:
+            consensus_pages.append(page_index)
+        elif count == 1:
+            unique_pages[page_index] = methods[0]
+        elif 2 <= count <= 3: # Limiar para alta discordância
+            high_disagreement_pages[page_index] = (count, methods)
+        elif total_methods - 2 <= count < total_methods:
+            # Identifica os métodos que *não* selecionaram a página
+            missing_in = [name for name in method_names if name not in methods]
+            almost_consensus_pages[page_index] = (count, missing_in)
+
+    # Apresenta os resultados de forma clara
+    print("Análise de Divergência entre os Métodos de Filtragem\n")
+    print(f"Total de métodos analisados: {total_methods}")
+    print("-" * 60)
+
+    print(f"\n✅ PÁGINAS DE CONSENSO TOTAL ({len(consensus_pages)} páginas)")
+    print("   (Selecionadas por todos os métodos)")
+    print(f"   {consensus_pages}")
+    print("-" * 60)
+
+    print(f"\n❗️ PÁGINAS ÚNICAS ({len(unique_pages)} páginas)")
+    print("   (Selecionadas por apenas 1 método - maior divergência)")
+    for page, method in unique_pages.items():
+        print(f"  - Pág {page}: Encontrada apenas por -> {method}")
+    print("-" * 60)
+    
+    print(f"\n⚠️ PÁGINAS DE QUASE CONSENSO ({len(almost_consensus_pages)} páginas)")
+    print("   (Selecionadas pela maioria, mas com exceções notáveis)")
+    for page, (count, missing_methods) in almost_consensus_pages.items():
+        print(f"  - Pág {page}: Encontrada por {count} métodos. Ausente em: {missing_methods}")
+    print("-" * 60)
+
+    print(f"\n❓ PÁGINAS DE ALTA DISCORDÂNCIA ({len(high_disagreement_pages)} páginas)")
+    print("   (Selecionadas por apenas 2 ou 3 métodos)")
+    for page, (count, methods) in high_disagreement_pages.items():
+        # Para não poluir, podemos apenas listar a contagem
+        print(f"  - Pág {page}: Selecionada por {count} métodos.")
+    print("-" * 60)
 
 from rich.console import Console
 from rich.table import Table
@@ -1410,7 +1614,7 @@ def build_key_map_for_parts(processor: PDFDocumentAnalyzer, part_pdf_paths: List
         processor.extract_texts_and_preprocess_files(part_pdf_paths)
 
     _, all_global_page_keys_ordered_p = \
-        processor._build_combined_page_data(processed_files_metadata_p, indices_p, storage_p)
+        processor.build_combined_page_data(processed_files_metadata_p, indices_p, storage_p)
 
     # Cria o mapa: a chave da parte mapeia para uma chave como se fosse do PDF único (file_index 0)
     for i, part_key in enumerate(all_global_page_keys_ordered_p):
@@ -1470,7 +1674,7 @@ def compare_page_results(key: str, data_single: Dict[str, Any], data_part_adj: D
     logger.info(f"\n--- Comparando página com chave (equivalente single): {key} ---")
 
     fields_to_compare = [
-        'texto', 'number_words', 'number_tokens', 
+        'text_stored', 'number_words', 'number_tokens', 
         'inteligible', 'file_index', 'page_index_in_file', 'original_pdf_path'
     ]
     float_fields = ['tf_idf_score']

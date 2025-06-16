@@ -1,6 +1,11 @@
 ======================================================================================
 # TODO: Próximas Tarefas:
 
+> Refactor e testes sobre nc_analyze_view
+> ERROS: págs relevantes ausentes do filtro final; displauLLMresponse replicado; Flag Reanalysis não capturado
+
+----------------
+
 > revisar sistemática do logging em nuvem;
 
 > Linkar alertas e msgs informativas de responsabilidade no uso de IA

@@ -5,7 +5,7 @@ usando LangChain.
 """
 import os, json
 from time import time, sleep, perf_counter
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Union
 from huggingface_hub import get_token
 from openai import OpenAI, AuthenticationError, APIError # Para tratamento específico de erros OpenAI
 
@@ -164,62 +164,186 @@ def contar_tokens(texto, model_name):
     texto = str(texto) if not isinstance(texto, str) else texto
     return len(codificador.encode(texto))
     
-def criar_batches(textos, limite_tokens, model_name):
-    batches = []
-    batch_atual = []
-    tokens_batch = 0
+def criar_batches(
+    textos_com_indices: List[Tuple[int, str]],
+    limite_tokens_por_texto: int,
+    limite_tokens_por_batch: int,
+    model_name: str
+) -> List[Tuple[List[str], List[int]]]:
+    """
+    Cria batches de textos a partir de uma lista de (índice_original, texto),
+    respeitando os limites de tokens por texto individual e por batch.
 
-    for texto in textos:
-        tokens_texto = contar_tokens(texto, model_name)
-        if tokens_texto > limite_tokens:
-            continue  # Ignora textos que excedem o limite individual
-        if batch_atual and (tokens_batch + tokens_texto > limite_tokens):
-            batches.append(batch_atual)
-            batch_atual = []
-            tokens_batch = 0
+    Args:
+        textos_com_indices: Lista de tuplas (índice_original, texto_da_pagina).
+        limite_tokens_por_texto: Máximo de tokens permitido para um único texto.
+        limite_tokens_por_batch: Máximo total de tokens permitido para um batch de textos.
+        model_name: Nome do modelo de embedding para contagem de tokens.
+
+    Returns:
+        Lista de tuplas, onde cada tupla contém:
+        (lista_de_textos_para_o_batch, lista_de_indices_originais_correspondentes).
+    """
+    batches_com_info_original = []
+    batch_atual_textos = []
+    batch_atual_indices_originais = []
+    tokens_acumulados_no_batch_atual = 0
+
+    for original_idx, texto_pagina in textos_com_indices:
+        tokens_texto_pagina = contar_tokens(texto_pagina, model_name)
+
+        if tokens_texto_pagina > limite_tokens_por_texto:
+            logger.warning(
+                f"Texto original no índice {original_idx} com {tokens_texto_pagina} tokens "
+                f"excede o limite de {limite_tokens_por_texto} tokens por texto e será ignorado."
+            )
+            continue  # Pula este texto
+
+        # Se o batch atual não estiver vazio E adicionar o novo texto estouraria o limite do batch
+        if batch_atual_textos and \
+           (tokens_acumulados_no_batch_atual + tokens_texto_pagina > limite_tokens_por_batch):
+            # Fecha o batch atual e o adiciona à lista de batches
+            batches_com_info_original.append((batch_atual_textos, batch_atual_indices_originais))
+            # Reseta para um novo batch
+            batch_atual_textos = []
+            batch_atual_indices_originais = []
+            tokens_acumulados_no_batch_atual = 0
         
-        batch_atual.append(texto)
-        tokens_batch += tokens_texto
+        # Adiciona o texto atual (que é válido) ao batch atual
+        batch_atual_textos.append(texto_pagina)
+        batch_atual_indices_originais.append(original_idx)
+        tokens_acumulados_no_batch_atual += tokens_texto_pagina
 
-    if batch_atual:
-        batches.append(batch_atual)
+    # Adiciona o último batch se ele contiver algum texto
+    if batch_atual_textos:
+        batches_com_info_original.append((batch_atual_textos, batch_atual_indices_originais))
 
-    return batches
+    return batches_com_info_original
 
 client_openai = None
 
 @timing_decorator()
-def get_embeddings_from_api(pages_texts: List[str], model_embedding: str, api_key: str = None, loaded_embeddings_providers: List[dict] = None) -> Tuple:
+def get_embeddings_from_api(
+    pages_texts: List[str],
+    model_embedding: str = 'text-embedding-3-small',
+    api_key: Optional[str] = None, # Alterado para Optional[str]
+    loaded_embeddings_providers: Optional[List[Dict[str, Any]]] = None # Alterado para Optional
+) -> Tuple[List[Union[List[float], None]], int, float]:
+    """
+    Obtém embeddings para uma lista de textos usando a API da OpenAI,
+    respeitando os limites de tokens e gerenciando batches.
+
+    Args:
+        pages_texts: Lista de strings, onde cada string é o texto de uma página.
+        model_embedding: Nome do modelo de embedding da OpenAI a ser usado.
+        api_key: Chave da API da OpenAI (opcional, pode ser pega do ambiente).
+        loaded_embeddings_providers: Informações sobre provedores (para cálculo de custo, opcional).
+
+    Returns:
+        Uma tupla contendo:
+        - Lista de embeddings: Mesmo tamanho de `pages_texts`. Cada item é um vetor (lista de floats)
+          ou None se o embedding não pôde ser gerado para aquela página.
+        - total_tokens_api: Número total de tokens processados pela API.
+        - cost_usd: Custo estimado em USD do processamento.
+    """
     global client_openai
-    if model_embedding == 'text-embedding-3-small':
-        logger.info('[DEBUG]: Modelo embeddings: text-embedding-3-small')
-        try:
-            os.environ["OPENAI_API_KEY"] = api_key
-            if not client_openai:
-                client_openai = OpenAI()
-            
-            limite_tokens = 300_000
-            batches = criar_batches(pages_texts, limite_tokens, model_embedding)
 
-            embeddings, total_tokens = [], 0
-            for batch in batches:
-                response = client_openai.embeddings.create(
-                    model=model_embedding,
-                    input=batch,
-                )
-                embeddings.extend([item.embedding for item in response.data])
-                total_tokens += (response.usage.total_tokens)
-            
-            cost_usd = 0
-            if loaded_embeddings_providers:
-                cost_usd = calc_costs_embedding_process(total_tokens, model_embedding, loaded_embeddings_providers)
+    assert type(pages_texts) == list
+    assert type(pages_texts[0]) == str
 
-        finally:
-            os.environ["OPENAI_API_KEY"] = ""
-    else:
-        raise ValueError(f"Modelo embeddings '{model_embedding}' desconhecido.")
-    
-    return embeddings, total_tokens, cost_usd
+    if model_embedding != 'text-embedding-3-small': # Atualmente, focando neste modelo
+        raise ValueError(f"Modelo de embedding '{model_embedding}' não é 'text-embedding-3-small' e não é suportado por esta implementação focada.")
+
+    logger.info(f"Solicitando embeddings da API para o modelo: {model_embedding}")
+
+    # Limites da API OpenAI (conforme regras fornecidas)
+    LIMITE_TOKENS_POR_TEXTO_API = 8191
+    # LIMITE_TOKENS_POR_BATCH_API = 300_000 # Limite "hard" da API
+    # Usar o recomendado com margem para evitar problemas com a contagem da API
+    LIMITE_TOKENS_POR_BATCH_RECOMENDADO = 250_000
+    # Adicional: text-embedding-3-small e -large podem aceitar um array de até 2048 strings.
+    # Nossa função criar_batches não limita o número de strings, apenas o total de tokens.
+    # Para robustez extra, poderíamos adicionar um limite de strings por batch, mas o token é o principal.
+
+    # Associa cada texto ao seu índice original para rastreamento
+    textos_com_indices_originais = list(enumerate(pages_texts))
+
+    # Cria os batches de textos válidos, já desconsiderando os que excedem o limite individual
+    batches_para_api = criar_batches(
+        textos_com_indices_originais,
+        LIMITE_TOKENS_POR_TEXTO_API,
+        LIMITE_TOKENS_POR_BATCH_RECOMENDADO,
+        model_embedding
+    )
+
+    # Inicializa a lista final de embeddings com Nones
+    # Terá o mesmo tamanho da lista `pages_texts` original.
+    lista_final_embeddings_ordenada: List[Union[List[float], None]] = [None] * len(pages_texts)
+    total_tokens_api = 0
+    cost_usd = 0.0
+
+    if not batches_para_api:
+        logger.warning(
+            "Nenhum batch foi criado para a API. Isso pode ocorrer se a lista de "
+            "textos de entrada estiver vazia ou se todos os textos excederem o "
+            "limite individual de tokens."
+        )
+        return lista_final_embeddings_ordenada, total_tokens_api, cost_usd
+
+    try:
+        # Configura o cliente OpenAI se ainda não estiver configurado ou se uma nova chave for fornecida
+        # Esta lógica assume que se `api_key` é fornecido, ele deve ser usado,
+        # caso contrário, o cliente (se já existir) ou um novo cliente usará a chave do ambiente.
+        current_api_key_in_env = os.environ.get("OPENAI_API_KEY")
+        key_to_use = api_key if api_key else current_api_key_in_env
+
+        if not key_to_use:
+            raise ValueError("Chave API da OpenAI não fornecida nem configurada no ambiente.")
+
+        # Reinstanciar o cliente se a chave mudou ou se não existe
+        if client_openai is None or (api_key and client_openai.api_key != api_key) :
+             logger.info("Instanciando ou reinstanciando o cliente OpenAI com a chave fornecida/ambiente.")
+             client_openai = OpenAI(api_key=key_to_use) # Usa a chave efetiva
+        
+        for batch_de_textos, batch_de_indices_originais in batches_para_api:
+            if not batch_de_textos: # Segurança, não deve acontecer se criar_batches for correta
+                continue
+
+            # Para text-embedding-3-small, a dimensão padrão é 1536.
+            # Se você quisesse um número menor de dimensões (e o modelo suportar), passaria `dimensions=`
+            response = client_openai.embeddings.create(
+                model=model_embedding,
+                input=batch_de_textos
+                # dimensions=256 # Exemplo se quisesse embeddings menores e o modelo suportasse
+            )
+
+            # A API retorna os embeddings na mesma ordem dos textos enviados no input do batch.
+            # response.data[j].embedding corresponde a batch_de_textos[j]
+            # response.data[j].index é o índice DENTRO DO BATCH (0 a N-1 do batch)
+            for i, embedding_obj in enumerate(response.data):
+                indice_original_da_pagina = batch_de_indices_originais[i]
+                lista_final_embeddings_ordenada[indice_original_da_pagina] = embedding_obj.embedding
+            
+            total_tokens_api += response.usage.total_tokens
+        
+        if loaded_embeddings_providers:
+            cost_usd = calc_costs_embedding_process(total_tokens_api, model_embedding, loaded_embeddings_providers)
+
+    except Exception as e:
+        logger.error(f"Erro ao obter embeddings da API OpenAI: {e}", exc_info=True)
+        # Em caso de erro, a lista_final_embeddings_ordenada pode estar parcialmente preenchida.
+        # O chamador pode decidir como lidar com isso.
+        # Re-lançar a exceção é geralmente uma boa prática.
+        raise
+
+    num_embeddings_gerados = sum(1 for emb in lista_final_embeddings_ordenada if emb is not None)
+    logger.info(
+        f"Embeddings obtidos para {num_embeddings_gerados} de {len(pages_texts)} páginas. "
+        f"Total de tokens API: {total_tokens_api}. Custo estimado: ${cost_usd:.5f}"
+    )
+    assert num_embeddings_gerados == len(pages_texts)
+
+    return lista_final_embeddings_ordenada, total_tokens_api, cost_usd
 
 def convert_pydantic_to_json_schema(formatted_initial_pydantic):
     #Conversão para modelo em esquema JSON, se necessário:
@@ -322,20 +446,14 @@ def analyze_text_with_llm(
     global client_openai
 
     logger.info(f"Iniciando análise de texto com LLM. Provider: {provider}, Prompt: {prompt_name}")
-    
-    # 2. Obter o Prompt (formato de mensagens de chat)
-    # Ex: [{"role": "system", "content": "Você é um assistente."}, 
-    # {"role": "user", "content": "Analise: {input_text}"}]
-    
+       
     start_time = perf_counter()
 
-    # 3. Configurar e Executar a Cadeia LangChain
     llm = None
     #chain_result: Optional[Dict[str, Any]] = None
     final_response: Optional[str] = None
     token_usage_info: Optional[Dict[str, Any]] = None
 
-    # Define a chave API no ambiente TEMPORARIAMENTE para o LangChain usar
     try:
         if provider == "openai":
             os.environ["OPENAI_API_KEY"] = api_key

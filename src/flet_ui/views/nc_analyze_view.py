@@ -1385,7 +1385,7 @@ class InternalAnalysisController:
             tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
             if tokens_embeddings_session:
                 processing_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0]
-                processing_metadata_to_log["embeddings_model"] = tokens_embeddings_session[1]      
+                processing_metadata_to_log["vectorization_model"] = tokens_embeddings_session[1]      
                 processing_metadata_to_log["calculated_embedding_cost_usd"] = calculated_embedding_cost_usd
 
             processing_metadata_to_log = {k: v for k, v in processing_metadata_to_log.items() if v is not None}
@@ -1602,7 +1602,8 @@ class InternalAnalysisController:
         _logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
         pdf_extractor = current_analysis_settings.get("pdf_extractor", FALLBACK_ANALYSIS_SETTINGS["pdf_extractor"])
         provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
-        model_embedding = current_analysis_settings.get("embeddings_model", FALLBACK_ANALYSIS_SETTINGS["embeddings_model"])
+        vectorization_model = current_analysis_settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
+        similarity_threshold = current_analysis_settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
         token_limit_pref = current_analysis_settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
         
         if pdf_extractor == 'PdfPlumber':
@@ -1619,34 +1620,33 @@ class InternalAnalysisController:
             _logger.info(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
             self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
 
-            processed_files_metadata, all_indices, all_storage, all_analysis_texts = \
+            processed_files_metadata, all_indices, all_texts_to_storage, all_texts_to_loop = \
                                 self.pdf_analyzer.extract_texts_and_preprocess_files(pdf_paths)
 
             processed_page_data_combined, all_global_page_keys_ordered = \
-                                self.pdf_analyzer._build_combined_page_data(processed_files_metadata, all_indices, all_storage)
+                                self.pdf_analyzer.build_combined_page_data(processed_files_metadata, all_indices, all_texts_to_storage)
 
             self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
 
             ready_embeddings, tokens_embeddings = None, None
             calculated_embedding_cost_usd = 0
-            if model_embedding == "text-embedding-3-small":
+            if vectorization_model == "text-embedding-3-small":
                 if not decrypted_api_key: 
                     decrypted_api_key = get_api_key_in_firestore(self.page, provider)
                     assert decrypted_api_key
 
                 loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
                 ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
-                                                                                     all_analysis_texts, model_embedding, decrypted_api_key, loaded_embeddings_providers)
+                                                                                     all_texts_to_storage, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
 
-            processed_page_data_combined = self.pdf_analyzer.analyze_similarity_and_relevance_files(
-                                processed_page_data_combined, all_global_page_keys_ordered, all_analysis_texts, 
-                                model_embedding=model_embedding, ready_embeddings=ready_embeddings)
+            embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.pdf_analyzer.get_similarity_and_tfidf_score_docs(
+                                                                            all_texts_to_loop, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
             
             point_time = perf_counter()
             self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
 
             if tokens_embeddings:
-                self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, model_embedding))
+                self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
                 _logger.info(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
             else:
                 if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
@@ -1659,13 +1659,16 @@ class InternalAnalysisController:
             #print('\n[DEBUG]:\n', processed_page_data_combined, '\n\n')
             self.page.session.set(KEY_SESSION_PDF_ANALYZER_DATA, processed_page_data_combined)           
 
-            classified_data = self.pdf_analyzer.filter_and_classify_pages(processed_page_data_combined)
+            classified_data = self.pdf_analyzer.filter_and_classify_pages(processed_page_data_combined, all_global_page_keys_ordered,
+                                                                          embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined,
+                                                                          mode_main_filter, mode_filter_similar, similarity_threshold)
+            
             self.page.session.set(KEY_SESSION_PDF_CLASSIFIED_INDICES_DATA, classified_data)
             
-            relevant_indices, unintelligible_indices, count_similars = classified_data
-            count_sel, count_unint = len(relevant_indices), len(unintelligible_indices)
+            relevant_ordered_indices, unintelligible_indices, count_similars = classified_data
+            count_sel, count_unint = len(relevant_ordered_indices), len(unintelligible_indices)
 
-            if not relevant_indices:
+            if not relevant_ordered_indices:
                 raise ValueError("Nenhuma página relevante encontrada após classificação.")
 
             if perf_counter() - point_time < 1: sleep(1) # Apenas Garante visibilidade do text_progressing
@@ -1673,9 +1676,8 @@ class InternalAnalysisController:
             point_time = perf_counter()
             self.page.run_thread(self._update_status_callback, "Etapa 4/5: Filtrando páginas...")
 
-            aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(
-                processed_page_data_combined, relevant_indices, token_limit_pref
-            )
+            aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(processed_page_data_combined, relevant_ordered_indices, token_limit_pref)
+            
             self.page.session.set(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, aggregated_info)
             
             pages_agg_indices, _, tokens_antes_agg, tokens_final_agg = aggregated_info
@@ -1689,7 +1691,7 @@ class InternalAnalysisController:
             
             proc_meta_for_ui = {
                 "total_pages_processed": len(processed_page_data_combined),
-                "relevant_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(relevant_indices),
+                "relevant_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(relevant_ordered_indices),
                 "count_selected_relevant": count_sel,
                 "unintelligible_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(unintelligible_indices), 
                 "count_discarded_unintelligible": count_unint,
@@ -2220,10 +2222,19 @@ class SettingsDrawerManager:
             ft.dropdown.Option("PyMuPdf-fitz", "PyMuPdf-fitz"),
             ft.dropdown.Option("PdfPlumber", "PdfPlumber"),
         ], value=current_analysis_settings.get("pdf_extractor"), width=default_width)
-        self.gui_controls_drawer["proc_embeddings_dd"]  = ft.Dropdown(label="Modelo de Embeddings", options=[
+        self.gui_controls_drawer["proc_vectorization_dd"]  = ft.Dropdown(label="Modelo de Vetorização", options=[
             ft.dropdown.Option("all-MiniLM-L6-v2", "all-MiniLM-L6-v2"),
             ft.dropdown.Option("text-embedding-3-small", "OpenAI text-embedding-3-small"),
-        ], value=current_analysis_settings.get("embeddings_model"), width=default_width)
+        ], value=current_analysis_settings.get("vectorization_model"), width=default_width)
+
+        # Slider similarity_threshold
+        initial_temp = current_analysis_settings.get("similarity_threshold", 0.87)
+        self.gui_controls_drawer["similarity_threshold_value_label"] = ft.Text(f"{initial_temp:.2f}", weight=ft.FontWeight.BOLD)
+        self.gui_controls_drawer["similarity_threshold_slider"] = ft.Slider(
+            min=0, max=100, value=initial_temp * 100,
+            divisions=100, expand=True, label="{value}",
+        )
+        
         self.gui_controls_drawer["lang_detector_dd"] = ft.Dropdown(
             label="Detector de Idioma", options=[ft.dropdown.Option("langdetect", "langdetect")],
             value=current_analysis_settings.get("language_detector"), width=default_width
@@ -2292,7 +2303,12 @@ class SettingsDrawerManager:
                 ft.Divider(),
                 ft.Text("Processamento de Documento", style=ft.TextThemeStyle.TITLE_MEDIUM),
                 self.gui_controls_drawer["proc_extractor_dd"],
-                self.gui_controls_drawer["proc_embeddings_dd"],
+                self.gui_controls_drawer["proc_vectorization_dd"],
+                ft.Column([
+                    ft.Text("Limiar de similaridade", style=ft.TextThemeStyle.LABEL_MEDIUM),
+                    ft.Row([self.gui_controls_drawer["similarity_threshold_slider"],self.gui_controls_drawer["similarity_threshold_value_label"]],
+                           alignment=ft.MainAxisAlignment.SPACE_BETWEEN)],
+                    width=default_width, spacing=1),
                 self.gui_controls_drawer["lang_detector_dd"],
                 self.gui_controls_drawer["token_counter_dd"],
                 self.gui_controls_drawer["tfidf_analyzer_dd"],
@@ -2327,8 +2343,8 @@ class SettingsDrawerManager:
         """Configura os handlers de eventos para os controles dentro do drawer."""
         _logger.info("SettingsDrawerManager: Configurando handlers de eventos.")
         controls_to_watch = [
-            "proc_extractor_dd" ,"proc_embeddings_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider", 
-            "prompt_structure_rg"
+            "proc_extractor_dd" ,"proc_vectorization_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider", 
+            "prompt_structure_rg", "similarity_threshold_slider"
             # "llm_output_format_dd", "llm_max_output_length_tf", 
         ]
         for key in controls_to_watch:
@@ -2336,7 +2352,7 @@ class SettingsDrawerManager:
                 control = self.gui_controls_drawer[key]
                 if key == "llm_provider_dd":
                     control.on_change = self._handle_provider_change_drawer
-                elif key == "temperature_slider": # Adicionado para o slider
+                elif key in ["temperature_slider", "similarity_threshold_slider"]: # Adicionado para o slider
                     control.on_change = self._handle_setting_change_drawer
                 elif hasattr(control, 'on_change'):
                      control.on_change = self._handle_setting_change_drawer
@@ -2352,6 +2368,12 @@ class SettingsDrawerManager:
             temp_label = self.gui_controls_drawer.get("temperature_value_label")
             if isinstance(temp_label, ft.Text):
                 temp_label.value = f"{slider_val:.1f}"
+                if temp_label.page: temp_label.update()
+        elif e and isinstance(e.control, ft.Slider) and e.control == self.gui_controls_drawer.get("similarity_threshold_slider"):
+            slider_val = float(e.control.value) / 100.0 # Converte de 87 para 0.87
+            temp_label = self.gui_controls_drawer.get("similarity_threshold_value_label")
+            if isinstance(temp_label, ft.Text):
+                temp_label.value = f"{slider_val:.2f}"
                 if temp_label.page: temp_label.update()
 
         new_settings = self._get_settings_from_drawer_controls()
@@ -2415,7 +2437,7 @@ class SettingsDrawerManager:
         settings = {}
         key_map = {
             "proc_extractor_dd": "pdf_extractor",
-            "proc_embeddings_dd": "embeddings_model",
+            "proc_vectorization_dd": "vectorization_model",
             "lang_detector_dd": "language_detector",
             "token_counter_dd": "token_counter",
             "tfidf_analyzer_dd": "tfidf_analyzer",
@@ -2425,6 +2447,7 @@ class SettingsDrawerManager:
             "llm_output_format_dd": "llm_output_format",
             "llm_max_output_length_tf": "llm_max_output_length",
             "temperature_slider": "llm_temperature", # O valor do slider será convertido
+            "similarity_threshold_slider": "similarity_threshold", # 
             "prompt_structure_rg": "prompt_structure",
         }
         for ctrl_key, setting_key in key_map.items():
@@ -2469,7 +2492,7 @@ class SettingsDrawerManager:
         )
         control_map = {
             "pdf_extractor": self.gui_controls_drawer.get("proc_extractor_dd"),
-            "embeddings_model": self.gui_controls_drawer.get("proc_embeddings_dd"),
+            "vectorization_model": self.gui_controls_drawer.get("proc_vectorization_dd"),
             "language_detector": self.gui_controls_drawer.get("lang_detector_dd"),
             "token_counter": self.gui_controls_drawer.get("token_counter_dd"),
             "tfidf_analyzer": self.gui_controls_drawer.get("tfidf_analyzer_dd"),
@@ -2477,6 +2500,7 @@ class SettingsDrawerManager:
             "llm_output_format": self.gui_controls_drawer.get("llm_output_format_dd"),
             "llm_max_output_length": self.gui_controls_drawer.get("llm_max_output_length_tf"),
             "llm_temperature": self.gui_controls_drawer.get("temperature_slider"),
+            "similarity_threshold": self.gui_controls_drawer.get("similarity_threshold_slider"),
             "prompt_structure": self.gui_controls_drawer.get("prompt_structure_rg"),
         }
         for setting_key, control in control_map.items():
@@ -2489,6 +2513,12 @@ class SettingsDrawerManager:
                     temp_label = self.gui_controls_drawer.get("temperature_value_label")
                     if isinstance(temp_label, ft.Text):
                         temp_label.value = f"{float(value):.1f}"
+                        if temp_label.page : temp_label.update()
+                elif isinstance(control, ft.Slider) and setting_key == "similarity_threshold":
+                    control.value = float(value) * 100.0
+                    temp_label = self.gui_controls_drawer.get("similarity_threshold_value_label")
+                    if isinstance(temp_label, ft.Text):
+                        temp_label.value = f"{float(value):.2f}"
                         if temp_label.page : temp_label.update()
                 if control.page : control.update()
         self._update_reset_button_visibility()
