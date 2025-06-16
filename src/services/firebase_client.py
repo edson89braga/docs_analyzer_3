@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List, Union, Callable
 import base64 # Para codificar/decodificar bytes para Firestore bytesValue
 
-from src.settings import PROJECT_ID, FB_STORAGE_BUCKET, FIREBASE_WEB_API_KEY
+from src.settings import APP_VERSION, PROJECT_ID, FB_STORAGE_BUCKET, FIREBASE_WEB_API_KEY
 from src.utils import with_proxy
 
 from flet import Page as ft_Page
@@ -515,11 +515,165 @@ class FirebaseClientFirestore:
         except Exception as e:
             self.logger.error(f"Falha ao salvar métrica (cliente) para Firestore ({full_document_path}): {e}")
             return False
-        
-    # Outros métodos como get/save_user_prompts_client, get/save_user_settings_client
-    # seguiriam um padrão similar a get/save_user_api_key_client, ajustando
-    # os document_paths e a estrutura do payload.
 
+
+    def save_analysis_metrics(self, user_id, user_token, filenames_uploaded, proc_meta_session, tokens_embeddings_session, llm_meta_session,
+            current_settings, default_settings, llm_response_obj, fields_to_log=[]):
+        """
+        Coleta os metadados da análise e os envia para registro no Firestore.
+        """
+        self.logger.info("Coletando e enviando métricas da análise.")
+        try:
+            if not user_id or not user_token:
+                self.logger.error("Não foi possível registrar métricas: usuário não autenticado na sessão.")
+                return False
+
+            # 2. Processing Metadata
+            # Adicionar o timestamp do evento da LLM para referência no feedback_metric
+            processing_metadata_to_log = {
+                "total_pages_processed": proc_meta_session.get("total_pages_processed"),
+                "relevant_pages_global_keys_formatted": proc_meta_session.get("relevant_pages_global_keys_formatted"),
+                "unintelligible_pages_global_keys_formatted": proc_meta_session.get("unintelligible_pages_global_keys_formatted"),
+                "final_aggregated_tokens": proc_meta_session.get("final_aggregated_tokens"),
+                "processing_time": proc_meta_session.get("processing_time")
+            }
+            
+            if tokens_embeddings_session:
+                processing_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0]
+                processing_metadata_to_log["vectorization_model"] = tokens_embeddings_session[1]      
+                processing_metadata_to_log["calculated_embedding_cost_usd"] = proc_meta_session.get("calculated_embedding_cost_usd")
+
+            processing_metadata_to_log = {k: v for k, v in processing_metadata_to_log.items() if v is not None}
+
+            # 3. LLM Analysis Metadata           
+            llm_analysis_metadata_to_log = {
+                "input_tokens": llm_meta_session.get("input_tokens"),
+                "cached_tokens": llm_meta_session.get("cached_tokens"),
+                "output_tokens": llm_meta_session.get("output_tokens"),
+                "total_cost_usd": llm_meta_session.get("total_cost_usd"),
+                "llm_provider_used": llm_meta_session.get("llm_provider_used"),
+                "llm_model_used": llm_meta_session.get("llm_model_used"),
+                "processing_time": llm_meta_session.get("processing_time"), # Tempo da LLM
+                "event_timestamp_iso": llm_meta_session.get("event_timestamp_iso"), 
+            } 
+            
+            # Remover chaves com valor None para não poluir o Firestore
+            llm_analysis_metadata_to_log = {k: v for k, v in llm_analysis_metadata_to_log.items() if v is not None}
+
+            # 4. LLM Parsed Response Fields
+            llm_parsed_response_fields = {}
+            if fields_to_log:
+                for field_name in fields_to_log:
+                    if hasattr(llm_response_obj, field_name):
+                        llm_parsed_response_fields[field_name] = getattr(llm_response_obj, field_name)
+
+            # 5. Analysis Settings Overrides
+            analysis_settings_overrides = {}
+            for key, current_val in current_settings.items():
+                default_val = default_settings.get(key)
+                # Garantir comparação de tipos consistentes, especialmente para números que podem ser strings
+                current_val_typed = current_val
+                default_val_typed = default_val
+                if isinstance(default_val, (int, float)) and isinstance(current_val, str):
+                    try:
+                        if isinstance(default_val, int): current_val_typed = int(current_val)
+                        elif isinstance(default_val, float): current_val_typed = float(current_val)
+                    except ValueError:
+                        pass # Mantém current_val_typed como string se não puder converter
+                
+                if current_val_typed != default_val_typed:
+                    analysis_settings_overrides[key] = current_val # Salva o valor da sessão (pode ser string ou número)
+
+            metric_data = {
+                "app_version": APP_VERSION,
+                "event_type": "pdf_analysis_completed",
+                "timestamp_event": datetime.now().isoformat(),
+                "filenames_uploaded": filenames_uploaded,
+                "processing_metadata": processing_metadata_to_log,
+                "llm_analysis_metadata": llm_analysis_metadata_to_log,
+                "llm_parsed_response_fields": llm_parsed_response_fields,
+                "analysis_settings_overrides": analysis_settings_overrides
+            }
+
+            # Envia a métrica
+            if not self.firestore_client_for_metrics.save_metrics_client(user_token, user_id, metric_data):
+                self.logger.error("Falha ao registrar métricas da análise no Firestore.")
+            else:
+                self.logger.info("Métricas da análise registradas com sucesso no Firestore.")
+                return True
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Erro ao coletar ou enviar métricas da análise: {e}", exc_info=True)
+
+    def save_feedback_data(self, user_id, user_token, feedback_data_list: List[Dict[str, Any]], llm_metadata_session, reanalysis_occurrence=None, related_batch_name="N/A"):
+        """
+        Salva os dados detalhados de feedback do usuário no Firestore como um documento separado,
+        referenciando a análise LLM principal através de um timestamp.
+        """
+        self.logger.info("Salvando dados de feedback detalhado do usuário...")
+        try:
+            if not user_id or not user_token:
+                self.logger.error("Não foi possível salvar feedback: usuário não autenticado.")
+                return False
+
+            # Tenta obter um timestamp de referência da análise LLM principal, se existir
+            # Este timestamp viria dos metadados da LLM que foram salvos na sessão
+            analysis_timestamp_ref = None
+            if llm_metadata_session and isinstance(llm_metadata_session.get("event_timestamp_iso"), str): # Supondo que salvaremos isso
+                analysis_timestamp_ref = llm_metadata_session["event_timestamp_iso"]
+            else:
+                # Fallback: usar o timestamp atual se o da análise não estiver disponível
+                # Isso pode acontecer se o feedback for dado antes de _log_analysis_metrics ser chamado
+                # ou se a estrutura de llm_metadata_session mudar.
+                analysis_timestamp_ref = datetime.now().isoformat()
+                self.logger.warning(f"Timestamp de referência da análise principal não encontrado em llm_metadata. Usando timestamp atual para feedback: {analysis_timestamp_ref}")
+
+            # Preparar os campos de feedback, removendo valores originais/atuais para tipos específicos
+            processed_feedback_fields = []
+            for field_data in feedback_data_list:
+                field_copy = field_data.copy() # Trabalha com uma cópia
+                tipo_campo = field_copy.get("tipo_campo", "")
+                
+                if tipo_campo in ["textfield_multiline", "textfield_lista"]:
+                    field_copy.pop("valor_original_llm", None)
+                    field_copy.pop("valor_atual_ui", None)
+                field_copy.pop("foi_editado", None)
+                processed_feedback_fields.append(field_copy)
+
+            feedback_document_payload = {
+                "app_version": APP_VERSION, # Definido em settings.py
+                "feedback_submission_timestamp": datetime.now().isoformat(),
+                "analysis_timestamp_ref": analysis_timestamp_ref,
+                "related_batch_name": related_batch_name,
+                "feedback_fields_details": processed_feedback_fields # Lista de dicts
+            }
+            
+            # Ajustamos o payload para se assemelhar mais a uma "métrica" para reutilizar a função
+            metric_like_feedback_payload = {
+                "event_type": "llm_feedback", # Tipo de evento específico para feedback
+                "timestamp_event": feedback_document_payload["feedback_submission_timestamp"], # Timestamp do feedback
+                "app_version": feedback_document_payload["app_version"],
+                "details": { # Agrupa os dados específicos do feedback
+                    "analysis_timestamp_ref": feedback_document_payload["analysis_timestamp_ref"],
+                    "related_batch_name": feedback_document_payload["related_batch_name"],
+                    "feedback_fields": feedback_document_payload["feedback_fields_details"]
+                }
+            }
+           
+            if reanalysis_occurrence:
+                metric_like_feedback_payload["reanalysis_occurrence"] = 1
+
+            if self.firestore_client_for_metrics.save_metrics_client(user_token, user_id, metric_like_feedback_payload):
+                self.logger.info("Dados de feedback detalhado salvos com sucesso no Firestore.")
+                return True
+            else:
+                self.logger.error("Falha ao salvar dados de feedback detalhado no Firestore.")
+        except Exception as e:
+            self.logger.error(f"Erro ao salvar dados de feedback detalhado: {e}", exc_info=True)
+        return False
+
+    
 
 class FbManagerAuth:
     """

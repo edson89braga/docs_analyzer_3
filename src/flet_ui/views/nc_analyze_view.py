@@ -1353,194 +1353,6 @@ class InternalAnalysisController:
         self.pdf_analyzer = parent_view.pdf_analyzer # Usa o da view
         self.firestore_client_for_metrics = FirebaseClientFirestore() # Instância para métricas
 
-    def _log_analysis_metrics(self):
-        """
-        Coleta os metadados da análise e os envia para registro no Firestore.
-        """
-        _logger.info("Coletando e enviando métricas da análise.")
-        try:
-            user_id = self.page.session.get("auth_user_id")
-            user_token = self.page.session.get("auth_id_token")
-
-            if not user_id or not user_token:
-                _logger.error("Não foi possível registrar métricas: usuário não autenticado na sessão.")
-                return
-
-            # 1. Filenames
-            files_ordered_session = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
-            filenames_uploaded = [f.get('name', 'unknown_file') for f in files_ordered_session if isinstance(f, dict)]
-
-            # 2. Processing Metadata
-            # Adicionar o timestamp do evento da LLM para referência no feedback_metric
-            proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {}            
-            processing_metadata_to_log = {
-                "total_pages_processed": proc_meta_session.get("total_pages_processed"),
-                "relevant_pages_global_keys_formatted": proc_meta_session.get("relevant_pages_global_keys_formatted"),
-                "unintelligible_pages_global_keys_formatted": proc_meta_session.get("unintelligible_pages_global_keys_formatted"),
-                "final_aggregated_tokens": proc_meta_session.get("final_aggregated_tokens"),
-                "processing_time": proc_meta_session.get("processing_time")
-            }
-
-            calculated_embedding_cost_usd = proc_meta_session.get("calculated_embedding_cost_usd")
-            tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
-            if tokens_embeddings_session:
-                processing_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0]
-                processing_metadata_to_log["vectorization_model"] = tokens_embeddings_session[1]      
-                processing_metadata_to_log["calculated_embedding_cost_usd"] = calculated_embedding_cost_usd
-
-            processing_metadata_to_log = {k: v for k, v in processing_metadata_to_log.items() if v is not None}
-
-            # 3. LLM Analysis Metadata           
-            llm_meta_session = self.page.session.get(KEY_SESSION_LLM_METADATA) or {}
-
-            event_timestamp_for_llm_analysis = datetime.now().isoformat() # Timestamp desta análise
-            if llm_meta_session: # Salva no objeto que será logado
-                 llm_meta_session["event_timestamp_iso"] = event_timestamp_for_llm_analysis
-                 # Também salva na sessão para que o save_feedback_data_now possa pegar
-                 self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_session)
-
-            llm_analysis_metadata_to_log = {
-                "input_tokens": llm_meta_session.get("input_tokens"),
-                "cached_tokens": llm_meta_session.get("cached_tokens"),
-                "output_tokens": llm_meta_session.get("output_tokens"),
-                "total_cost_usd": llm_meta_session.get("total_cost_usd"),
-                "llm_provider_used": llm_meta_session.get("llm_provider_used"),
-                "llm_model_used": llm_meta_session.get("llm_model_used"),
-                "processing_time": llm_meta_session.get("processing_time"), # Tempo da LLM
-                "event_timestamp_iso": llm_meta_session.get("event_timestamp_iso"), 
-            } 
-            
-            # Remover chaves com valor None para não poluir o Firestore
-            llm_analysis_metadata_to_log = {k: v for k, v in llm_analysis_metadata_to_log.items() if v is not None}
-
-            # 4. LLM Parsed Response Fields
-            llm_response_obj = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
-            llm_parsed_response_fields = {}
-            if isinstance(llm_response_obj, formatted_initial_analysis):
-                fields_to_log = [
-                    "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
-                    "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
-                    "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", 
-                    "materia_especial", "destinacao"
-                ]
-                for field_name in fields_to_log:
-                    if hasattr(llm_response_obj, field_name):
-                        llm_parsed_response_fields[field_name] = getattr(llm_response_obj, field_name)
-
-            # 5. Analysis Settings Overrides
-            current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
-            default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
-            analysis_settings_overrides = {}
-            for key, current_val in current_settings.items():
-                default_val = default_settings.get(key)
-                # Garantir comparação de tipos consistentes, especialmente para números que podem ser strings
-                current_val_typed = current_val
-                default_val_typed = default_val
-                if isinstance(default_val, (int, float)) and isinstance(current_val, str):
-                    try:
-                        if isinstance(default_val, int): current_val_typed = int(current_val)
-                        elif isinstance(default_val, float): current_val_typed = float(current_val)
-                    except ValueError:
-                        pass # Mantém current_val_typed como string se não puder converter
-                
-                if current_val_typed != default_val_typed:
-                    analysis_settings_overrides[key] = current_val # Salva o valor da sessão (pode ser string ou número)
-
-            metric_data = {
-                "event_type": "pdf_analysis_completed",
-                "timestamp_event": datetime.now().isoformat(),
-                "app_version": APP_VERSION,
-                "filenames_uploaded": filenames_uploaded,
-                "processing_metadata": processing_metadata_to_log,
-                "llm_analysis_metadata": llm_analysis_metadata_to_log,
-                "llm_parsed_response_fields": llm_parsed_response_fields,
-                "analysis_settings_overrides": analysis_settings_overrides
-            }
-
-            # Envia a métrica
-            if not self.firestore_client_for_metrics.save_metrics_client(user_token, user_id, metric_data):
-                _logger.error("Falha ao registrar métricas da análise no Firestore.")
-            else:
-                _logger.info("Métricas da análise registradas com sucesso no Firestore.")
-                #Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
-                if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
-                    self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
-
-        except Exception as e:
-            _logger.error(f"Erro ao coletar ou enviar métricas da análise: {e}", exc_info=True)
-
-    def save_feedback_data_now(self, feedback_data_list: List[Dict[str, Any]]):
-        """
-        Salva os dados detalhados de feedback do usuário no Firestore como um documento separado,
-        referenciando a análise LLM principal através de um timestamp.
-        """
-        _logger.info("Salvando dados de feedback detalhado do usuário...")
-        try:
-            user_id = self.page.session.get("auth_user_id")
-            user_token = self.page.session.get("auth_id_token")
-
-            if not user_id or not user_token:
-                _logger.error("Não foi possível salvar feedback: usuário não autenticado.")
-                return
-
-            # Tenta obter um timestamp de referência da análise LLM principal, se existir
-            # Este timestamp viria dos metadados da LLM que foram salvos na sessão
-            llm_metadata_session = self.page.session.get(KEY_SESSION_LLM_METADATA)
-            analysis_timestamp_ref = None
-            if llm_metadata_session and isinstance(llm_metadata_session.get("event_timestamp_iso"), str): # Supondo que salvaremos isso
-                analysis_timestamp_ref = llm_metadata_session["event_timestamp_iso"]
-            else:
-                # Fallback: usar o timestamp atual se o da análise não estiver disponível
-                # Isso pode acontecer se o feedback for dado antes de _log_analysis_metrics ser chamado
-                # ou se a estrutura de llm_metadata_session mudar.
-                analysis_timestamp_ref = datetime.now().isoformat()
-                _logger.warning(f"Timestamp de referência da análise principal não encontrado em llm_metadata. Usando timestamp atual para feedback: {analysis_timestamp_ref}")
-
-
-            # Preparar os campos de feedback, removendo valores originais/atuais para tipos específicos
-            processed_feedback_fields = []
-            for field_data in feedback_data_list:
-                field_copy = field_data.copy() # Trabalha com uma cópia
-                tipo_campo = field_copy.get("tipo_campo", "")
-                
-                if tipo_campo in ["textfield_multiline", "textfield_lista"]:
-                    field_copy.pop("valor_original_llm", None)
-                    field_copy.pop("valor_atual_ui", None)
-                field_copy.pop("foi_editado", None)
-                processed_feedback_fields.append(field_copy)
-
-
-            feedback_document_payload = {
-                "analysis_timestamp_ref": analysis_timestamp_ref,
-                "feedback_submission_timestamp": datetime.now().isoformat(),
-                "app_version": APP_VERSION, # Definido em settings.py
-                "related_batch_name": self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "N/A",
-                "feedback_fields_details": processed_feedback_fields # Lista de dicts
-            }
-            
-            # Ajustamos o payload para se assemelhar mais a uma "métrica" para reutilizar a função
-            metric_like_feedback_payload = {
-                "event_type": "llm_feedback", # Tipo de evento específico para feedback
-                "timestamp_event": feedback_document_payload["feedback_submission_timestamp"], # Timestamp do feedback
-                "app_version": feedback_document_payload["app_version"],
-                "details": { # Agrupa os dados específicos do feedback
-                    "analysis_timestamp_ref": feedback_document_payload["analysis_timestamp_ref"],
-                    "related_batch_name": feedback_document_payload["related_batch_name"],
-                    "feedback_fields": feedback_document_payload["feedback_fields_details"]
-                }
-            }
-           
-            if self.page.session.get(KEY_SESSION_LLM_REANALYSIS):
-                metric_like_feedback_payload["reanalysis_occurrence"] = 1
-
-            if self.firestore_client_for_metrics.save_metrics_client(user_token, user_id, metric_like_feedback_payload):
-                _logger.info("Dados de feedback detalhado salvos com sucesso no Firestore.")
-                self.page.session.set(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, True) # FB-5.4
-            else:
-                _logger.error("Falha ao salvar dados de feedback detalhado no Firestore.")
-        except Exception as e:
-            _logger.error(f"Erro ao salvar dados de feedback detalhado: {e}", exc_info=True)
-
     def _get_current_analysis_settings(self) -> Dict[str, Any]:
         """Busca as configurações de análise atuais da sessão."""
         settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
@@ -1605,6 +1417,10 @@ class InternalAnalysisController:
         vectorization_model = current_analysis_settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
         similarity_threshold = current_analysis_settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
         token_limit_pref = current_analysis_settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
+
+        # TODO: avaliar se tornar esses parâmetros mutáveis na Gui:
+        mode_main_filter = 'get_pages_among_similars_graphs'
+        mode_filter_similar = 'bigger_content'
         
         if pdf_extractor == 'PdfPlumber':
             self.pdf_analyzer.extractor = PdfPlumberExtractor()
@@ -1731,6 +1547,40 @@ class InternalAnalysisController:
             hide_loading_overlay(self.page)
             self.page.run_thread(self.parent_view._update_button_states)
 
+    def _get_data_to_log(self):
+        user_id = self.page.session.get("auth_user_id")
+        user_token = self.page.session.get("auth_id_token")
+    
+        llm_meta_session = self.page.session.get(KEY_SESSION_LLM_METADATA) or {}
+
+        if llm_meta_session: # Salva no objeto que será logado
+            event_timestamp_for_llm_analysis = datetime.now().isoformat() # Timestamp desta análise
+            llm_meta_session["event_timestamp_iso"] = event_timestamp_for_llm_analysis
+            # Também salva na sessão para que o save_feedback_data_now possa pegar
+            self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_session)
+
+        files_ordered_session = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
+        filenames_uploaded = [f.get('name', 'unknown_file') for f in files_ordered_session if isinstance(f, dict)]
+        
+        proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {} 
+        tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)    
+        current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
+        default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
+        llm_response_obj = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
+
+        if llm_response_obj and isinstance(llm_response_obj, formatted_initial_analysis):
+            fields_to_log = [
+                "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
+                "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
+                "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", 
+                "materia_especial", "destinacao"
+            ]
+        else:
+            fields_to_log = []
+        
+        return (user_id, user_token, filenames_uploaded, proc_meta_session, tokens_embeddings_session, llm_meta_session,
+            current_settings, default_settings, llm_response_obj, fields_to_log)
+    
     def _llm_analysis_thread_func(self, aggregated_text: str, batch_name: str):
         """
         Função executada em uma thread separada para realizar a análise LLM.
@@ -1745,7 +1595,9 @@ class InternalAnalysisController:
         model_name = current_analysis_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
         temperature = current_analysis_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
         mode_prompt = current_analysis_settings.get("prompt_structure", FALLBACK_ANALYSIS_SETTINGS["prompt_structure"])
-        _logger.info(f"[DEBUG] mode_prompt: {mode_prompt}")  
+
+        _logger.info(f"[DEBUG] mode_prompt: {mode_prompt}")  ,
+
         if mode_prompt == "sequential_prompts":
             selected_prompts = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
         else: # if mode_prompt == "prompt_unico":
@@ -1789,7 +1641,12 @@ class InternalAnalysisController:
                 self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
                 self.parent_view._analysis_requested = True
                 self.page.run_thread(self._update_status_callback,  "", False, True)
-                self._log_analysis_metrics()
+
+                data_to_log = self._get_data_to_log()
+                if self.save_analysis_metrics(*data_to_log):
+                    #Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
+                    self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
+
             else:
                 self.page.run_thread(self.parent_view._show_info_balloon_or_result, True) # Mostra balão de novo
                 self.page.run_thread(self._update_status_callback,  "Análise LLM: Falha ao obter resposta da IA.", True, True)
@@ -2223,6 +2080,7 @@ class SettingsDrawerManager:
             ft.dropdown.Option("PdfPlumber", "PdfPlumber"),
         ], value=current_analysis_settings.get("pdf_extractor"), width=default_width)
         self.gui_controls_drawer["proc_vectorization_dd"]  = ft.Dropdown(label="Modelo de Vetorização", options=[
+            ft.dropdown.Option("tfidf_vectorizer", "TF-IDF Vectorizer"),
             ft.dropdown.Option("all-MiniLM-L6-v2", "all-MiniLM-L6-v2"),
             ft.dropdown.Option("text-embedding-3-small", "OpenAI text-embedding-3-small"),
         ], value=current_analysis_settings.get("vectorization_model"), width=default_width)
@@ -2984,20 +2842,6 @@ class LLMStructuredResultDisplay(ft.Column):
             if validate_for_export:
                 return [("pydantic_validation_error_final", None)] 
             return None
-
-    def _get_field_type_for_feedback(self, field_name: str) -> str:
-        """Retorna o tipo do campo para categorização no feedback."""
-        # Mapeamento simplificado, pode ser expandido
-        if field_name in ["descricao_geral", "resumo_fato", "tipificacao_penal", "observacoes"]:
-            return "textfield_multiline"
-        elif field_name == "valor_apuracao":
-            return "textfield_valor"
-        elif field_name in ["pessoas_envolvidas", "linha_do_tempo"]:
-            return "textfield_lista" # Representa uma lista, mas editado como multiline
-        elif self.gui_fields.get(field_name) and isinstance(self.gui_fields[field_name], ft.Dropdown):
-            return "dropdown"
-        # Adicionar outros tipos se necessário (radio, checkbox etc.)
-        return "textfield" # Default
     
 class FeedbackDialog(ft.AlertDialog):
     """
@@ -3199,94 +3043,6 @@ class FeedbackWorkflowManager:
         self.page = page
         self.parent_view = parent_view # Referência à AnalyzePDFViewContent
 
-    def _get_prepared_feedback_data(self) -> Optional[List[Dict[str, Any]]]:
-        """
-        Prepara os dados para serem enviados ao FeedbackDialog, incluindo o status 'foi_editado'.
-        Este método deve ser chamado após garantir que get_current_form_data() foi executado
-        para que self.data reflita o estado atual da UI.
-
-        Returns:
-            Uma lista de dicionários, cada um representando um campo e seu status,
-            ou None se os dados originais não estiverem disponíveis.
-        """
-        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
-        if not isinstance(llm_display_component, LLMStructuredResultDisplay):
-            _logger.error("FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado.")
-            return None
-
-        # Acessa o snapshot original e os dados atuais da UI através do llm_display_component
-        original_snapshot = llm_display_component.original_llm_data_snapshot
-        # self.data em llm_display_component já reflete a UI após get_current_form_data()
-        # que deve ter sido chamado antes de _get_prepared_feedback_data ser invocado.
-        current_data_ui = llm_display_component.data 
-        
-        if not original_snapshot or not current_data_ui:
-            _logger.warning("FeedbackWorkflowManager: Dados originais ou atuais da UI ausentes em LLMStructuredResultDisplay.")
-            return None
-
-        feedback_field_data_prepared  = []
-        fields_for_feedback = [
-            "descricao_geral", "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
-            "resumo_fato", "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
-            "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", 
-            "destinacao", "materia_especial"
-            "pessoas_envolvidas", "linha_do_tempo", "observacoes"
-        ]
-
-        for field_name in fields_for_feedback:
-            # Pega os valores diretamente dos objetos Pydantic
-            original_value = getattr(original_snapshot, field_name, None)
-            current_value_ui = getattr(current_data_ui, field_name, None)
-
-            # Lógica de comparação para 'foi_editado' (permanece a mesma)
-            foi_editado = False
-            
-            # Demais normalizações tratadas na origem.
-            if field_name == "valor_apuracao":
-                original_float = original_value if isinstance(original_value, float) else 0.0
-                current_float_ui = current_value_ui if isinstance(current_value_ui, float) else 0.0
-                # Use math.isclose para comparar floats com tolerância, se necessário
-                # import math
-                # foi_editado = not math.isclose(original_float, current_float_ui, rel_tol=1e-9)
-                foi_editado = (original_float != current_float_ui)
-            elif field_name in ["pessoas_envolvidas", "linha_do_tempo"]:
-                original_list = original_value if isinstance(original_value, list) else []
-                current_list_ui = current_value_ui if isinstance(current_value_ui, list) else []
-                foi_editado = (original_list != current_list_ui)
-            else: # Campos string ou dropdowns diretos
-                foi_editado = (original_value != current_value_ui)
-            
-            _logger.debug(f"Feedback Prep (Manager): Campo '{field_name}', Original: '{original_value}', Atual UI: '{current_value_ui}', Editado: {foi_editado}")
-
-            # Obter o label amigável e o tipo do campo
-            label_campo = field_name.replace("_", " ").title() # Default label
-            control_gui = llm_display_component.gui_fields.get(field_name)
-            if control_gui and hasattr(control_gui, 'label') and control_gui.label:
-                label_campo = str(control_gui.label)
-            
-            tipo_campo_str = llm_display_component._get_field_type_for_feedback(field_name)
-
-
-            field_data_entry  = {
-                "nome_campo": field_name,
-                "label_campo": label_campo, # Adicionado para o diálogo
-                "tipo_campo": tipo_campo_str,
-                "llm_acertou": not foi_editado, # Novo campo para o Firestore
-                "foi_editado": foi_editado,
-                "valor_original_llm": original_value, 
-                "valor_atual_ui": current_value_ui,   
-            }
-
-            # Adiciona similaridade apenas se editado e for um tipo de texto aplicável
-            if foi_editado and tipo_campo_str in ["textfield_multiline", "textfield", "textfield_lista"]:
-                field_data_entry["similaridade_pos_edicao"] = calcular_similaridade_rouge_l(
-                    str(original_value or ""), str(current_value_ui or "")
-                )
-            
-            feedback_field_data_prepared.append(field_data_entry)
-            
-        return feedback_field_data_prepared 
-
     def _prepare_and_show_feedback_dialog(
         self,
         feedback_fields_list_prepared: List[Dict[str, Any]],
@@ -3328,8 +3084,7 @@ class FeedbackWorkflowManager:
         """
         Verifica se o feedback deve ser solicitado. Se sim, mostra o diálogo.
         Executa a `primary_action_callable` com base na resposta do diálogo.
-        """
-
+        """ 
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
         if not isinstance(llm_display_component, LLMStructuredResultDisplay):
             _logger.error(f"FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado para '{action_context_name}'. Prosseguindo sem feedback.")
@@ -3344,7 +3099,19 @@ class FeedbackWorkflowManager:
             return
 
         # 2. Prepara os dados para o diálogo de feedback
-        feedback_fields_data = self._get_prepared_feedback_data()
+        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+        if not isinstance(llm_display_component, LLMStructuredResultDisplay):
+            _logger.error("FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado.")
+            feedback_fields_data = None
+        else:
+            # Acessa o snapshot original e os dados atuais da UI através do llm_display_component
+            original_snapshot = llm_display_component.original_llm_data_snapshot
+            # self.data em llm_display_component já reflete a UI após get_current_form_data()
+            # que deve ter sido chamado antes de _get_prepared_feedback_data ser invocado.
+            current_data_ui = llm_display_component.data 
+
+            feedback_fields_data = get_prepared_feedback_data(original_snapshot, current_data_ui, llm_display_component.gui_fields)
+
         if not feedback_fields_data:
             _logger.warning(f"FeedbackWorkflowManager: Não foi possível preparar dados para feedback para '{action_context_name}'. Prosseguindo sem feedback.")
             primary_action_callable()
@@ -3367,7 +3134,18 @@ class FeedbackWorkflowManager:
             
             if action_taken == FeedbackDialogAction.CONFIRM_AND_CONTINUE:
                 if collected_feedback_data:
-                    self.parent_view.analysis_controller.save_feedback_data_now(collected_feedback_data)
+                    user_id = self.page.session.get("auth_user_id")
+                    user_token = self.page.session.get("auth_id_token")
+                    llm_metadata_session = self.page.session.get(KEY_SESSION_LLM_METADATA)
+                    if self.page.session.get(KEY_SESSION_LLM_REANALYSIS):
+                        reanalysis_occurrence = True
+                    else:
+                        reanalysis_occurrence = False
+                    related_batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "N/A"
+
+                    if self.parent_view.analysis_controller.save_feedback_data(user_id, user_token, collected_feedback_data, llm_metadata_session, reanalysis_occurrence, related_batch_name):
+                        self.page.session.set(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, True)
+
                 primary_action_callable()
             
             elif action_taken == FeedbackDialogAction.SKIP_AND_CONTINUE:
@@ -3447,3 +3225,93 @@ def get_api_key_in_firestore(page, provider):
     page.session.set(f"decrypted_api_key_{provider}", decrypted_api_key)
     return decrypted_api_key
 
+def get_prepared_feedback_data(original_snapshot, current_data_ui, gui_fields) -> Optional[List[Dict[str, Any]]]:
+    """
+    Prepara os dados para serem enviados ao FeedbackDialog, incluindo o status 'foi_editado'.
+    Este método deve ser chamado após garantir que get_current_form_data() foi executado
+    para que self.data reflita o estado atual da UI.
+
+    Returns:
+        Uma lista de dicionários, cada um representando um campo e seu status,
+        ou None se os dados originais não estiverem disponíveis.
+    """
+    
+    if not original_snapshot or not current_data_ui:
+        _logger.warning("FeedbackWorkflowManager: Dados originais ou atuais da UI ausentes em LLMStructuredResultDisplay.")
+        return None
+
+    feedback_field_data_prepared  = []
+    fields_for_feedback = [
+        "descricao_geral", "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
+        "resumo_fato", "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
+        "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", 
+        "destinacao", "materia_especial"
+        "pessoas_envolvidas", "linha_do_tempo", "observacoes"
+    ]
+
+    for field_name in fields_for_feedback:
+        # Pega os valores diretamente dos objetos Pydantic
+        original_value = getattr(original_snapshot, field_name, None)
+        current_value_ui = getattr(current_data_ui, field_name, None)
+
+        # Lógica de comparação para 'foi_editado' (permanece a mesma)
+        foi_editado = False
+        
+        # Demais normalizações tratadas na origem.
+        if field_name == "valor_apuracao":
+            original_float = original_value if isinstance(original_value, float) else 0.0
+            current_float_ui = current_value_ui if isinstance(current_value_ui, float) else 0.0
+            # Use math.isclose para comparar floats com tolerância, se necessário
+            # import math
+            # foi_editado = not math.isclose(original_float, current_float_ui, rel_tol=1e-9)
+            foi_editado = (original_float != current_float_ui)
+        elif field_name in ["pessoas_envolvidas", "linha_do_tempo"]:
+            original_list = original_value if isinstance(original_value, list) else []
+            current_list_ui = current_value_ui if isinstance(current_value_ui, list) else []
+            foi_editado = (original_list != current_list_ui)
+        else: # Campos string ou dropdowns diretos
+            foi_editado = (original_value != current_value_ui)
+        
+        _logger.debug(f"Feedback Prep (Manager): Campo '{field_name}', Original: '{original_value}', Atual UI: '{current_value_ui}', Editado: {foi_editado}")
+
+        # Obter o label amigável e o tipo do campo
+        label_campo = field_name.replace("_", " ").title() # Default label
+        control_gui = gui_fields.get(field_name)
+        if control_gui and hasattr(control_gui, 'label') and control_gui.label:
+            label_campo = str(control_gui.label)
+        
+        tipo_campo_str = get_field_type_for_feedback(field_name, gui_fields)
+
+        field_data_entry  = {
+            "nome_campo": field_name,
+            "label_campo": label_campo, # Adicionado para o diálogo
+            "tipo_campo": tipo_campo_str,
+            "llm_acertou": not foi_editado, # Novo campo para o Firestore
+            "foi_editado": foi_editado,
+            "valor_original_llm": original_value, 
+            "valor_atual_ui": current_value_ui,   
+        }
+
+        # Adiciona similaridade apenas se editado e for um tipo de texto aplicável
+        if foi_editado and tipo_campo_str in ["textfield_multiline", "textfield", "textfield_lista"]:
+            field_data_entry["similaridade_pos_edicao"] = calcular_similaridade_rouge_l(
+                str(original_value or ""), str(current_value_ui or "")
+            )
+        
+        feedback_field_data_prepared.append(field_data_entry)
+        
+    return feedback_field_data_prepared 
+
+def get_field_type_for_feedback(field_name: str, gui_fields) -> str:
+    """Retorna o tipo do campo para categorização no feedback."""
+    # Mapeamento simplificado, pode ser expandido
+    if field_name in ["descricao_geral", "resumo_fato", "tipificacao_penal", "observacoes"]:
+        return "textfield_multiline"
+    elif field_name == "valor_apuracao":
+        return "textfield_valor"
+    elif field_name in ["pessoas_envolvidas", "linha_do_tempo"]:
+        return "textfield_lista" # Representa uma lista, mas editado como multiline
+    elif gui_fields.get(field_name) and isinstance(gui_fields[field_name], ft.Dropdown):
+        return "dropdown"
+    # Adicionar outros tipos se necessário (radio, checkbox etc.)
+    return "textfield" # Default

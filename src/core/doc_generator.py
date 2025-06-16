@@ -1,10 +1,7 @@
 # src/core/doc_generator.py
 import os
-from typing import Dict, Any, List, Optional, Tuple
+from typing import List, Tuple
 from docx import Document
-from docx.shared import Inches, Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-import shutil # Para copiar templates
 
 from src.core.prompts import formatted_initial_analysis # Para type hinting e acesso aos campos
 from src.settings import ASSETS_DIR_ABS # Para acessar a pasta de assets
