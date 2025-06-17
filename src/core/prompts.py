@@ -2,6 +2,11 @@
 """
 Módulo para gerenciar e fornecer os prompts utilizados nas interações com LLMs.
 """
+
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando prompts.py")
+
 from typing import Optional, Dict, List, Type
 
 # FORMATOS das saídas estruturadas:
@@ -879,7 +884,7 @@ output_formats = {
 
 # FUNÇÕES AUXILIARES:
 import logging, json
-from src.utils import (get_sigla_uf, MUNICIPIOS_POR_UF, obter_string_normalizada_em_lista, clean_and_convert_to_float, convert_to_list_of_strings)
+from src.utils import (get_sigla_uf, get_municipios_por_uf_cached, obter_string_normalizada_em_lista, clean_and_convert_to_float, convert_to_list_of_strings)
 
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
@@ -942,6 +947,7 @@ def merge_parts_into_model(
     return target_model(**combined_data)
 
 def normalizing_function(resposta_formatada: formatted_initial_analysis):
+    municipios_list = get_municipios_por_uf_cached()
 
     if not isinstance(resposta_formatada, formatted_initial_analysis):
         resposta_formatada = try_convert_to_pydantic_format(resposta_formatada, formatted_initial_analysis)
@@ -951,11 +957,11 @@ def normalizing_function(resposta_formatada: formatted_initial_analysis):
         # Isso garante que os valores iniciais dos dropdowns de UF sejam válidos.
         resposta_formatada.uf_origem = get_sigla_uf(resposta_formatada.uf_origem)
         resposta_formatada.uf_fato = get_sigla_uf(resposta_formatada.uf_fato)
-
-        municipios_origem_init = MUNICIPIOS_POR_UF.get(resposta_formatada.uf_origem, []) if resposta_formatada.uf_origem else []
+        
+        municipios_origem_init = municipios_list.get(resposta_formatada.uf_origem, []) if resposta_formatada.uf_origem else []
         resposta_formatada.municipio_origem = obter_string_normalizada_em_lista(resposta_formatada.municipio_origem, municipios_origem_init)
 
-        municipios_fato_init = MUNICIPIOS_POR_UF.get(resposta_formatada.uf_fato, []) if resposta_formatada.uf_fato else []
+        municipios_fato_init = municipios_list.get(resposta_formatada.uf_fato, []) if resposta_formatada.uf_fato else []
         resposta_formatada.municipio_fato = obter_string_normalizada_em_lista(resposta_formatada.municipio_fato, municipios_fato_init)
     else:
         logger.warning(f"Resposta fora da formatação esperada: {type(resposta_formatada)}.\nCancelando normalização de dados.")
@@ -1023,3 +1029,6 @@ Grupos de prompt:
 
 
 '''
+
+execution_time = perf_counter() - start_time
+print(f"Carregado PROMPTS em {execution_time:.4f}s")

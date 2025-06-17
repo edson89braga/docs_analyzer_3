@@ -1,6 +1,11 @@
 '''
 Componentes de UI Reutilizáveis: Contém classes ou funções que criam componentes customizados ou combinações de componentes Flet.
 '''
+
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando components.py")
+
 import flet as ft
 from typing import List, Dict, Any, Optional, Callable, Type, Union, Tuple
 import os, shutil, time, threading
@@ -2097,3 +2102,6 @@ class CompactKeyValueTable(ft.Column):
         if self.page: # Só atualiza se o componente estiver na página
             self.update()
 
+
+execution_time = perf_counter() - start_time
+print(f"Carregado COMPONENTS.py em {execution_time:.4f}s")

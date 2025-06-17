@@ -1,4 +1,7 @@
 # src/config/settings.py
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando settings.py")
 
 import os
 import logging
@@ -138,3 +141,7 @@ CLOUD_LOGGER_UPLOAD_INTERVAL = 120   # Tempo de intervalo entre uploads (segundo
 CLOUD_LOGGER_MAX_BUFFER_SIZE = 1000  # Tamanho máximo do buffer (número de linhas)
 CLOUD_LOGGER_MAX_RETRIES = 3         # Número máximo de tentativas de upload
 CLOUD_LOGGER_RETRY_DELAY = 12        # Tempo de espera entre as tentativas (segundos)
+
+
+execution_time = perf_counter() - start_time
+print(f"Carregado em {execution_time:.4f}s")

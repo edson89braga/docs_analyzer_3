@@ -1,3 +1,7 @@
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando cloud_logger_handler.py")
+
 import logging, atexit, os, re
 from threading import Thread, Lock, Event
 from typing import Any, List, Optional
@@ -332,3 +336,6 @@ class CloudLogHandler(logging.Handler):
         if current_logs:
             self._perform_upload(current_logs)
 
+
+execution_time = perf_counter() - start_time
+print(f"Carregado CLOUD_LOGGER em {execution_time:.4f}s")

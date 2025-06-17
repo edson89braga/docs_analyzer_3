@@ -1,5 +1,9 @@
 # src/utils/fb_credentials_manager.py
 
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando credentials_manager.py")
+
 import keyring, logging, json, os
 from cryptography.fernet import Fernet, InvalidToken
 from typing import Optional
@@ -303,3 +307,6 @@ def decrypt(encrypted_bytes: bytes) -> Optional[str]:
         logger.error(f"Falha durante a descriptografia pública: {e}", exc_info=True)
         return None
 
+
+execution_time = perf_counter() - start_time
+print(f"Carregado CREDENTIALS_MANAGER em {execution_time:.4f}s")

@@ -1,3 +1,7 @@
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando pdf_processor.py")
+
 DEBUG_MODE = False
 
 from rich import print
@@ -36,10 +40,6 @@ initialize_nltk_data()
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Optional, Union, Set
 
-import pdfplumber
-from PyPDF2 import PdfReader
-import fitz
-
 class PDFTextExtractorStrategy(ABC):
     """Interface abstrata para estratégias de extração de texto de PDFs."""
 
@@ -67,11 +67,13 @@ class PdfPlumberExtractor(PDFTextExtractorStrategy):
     """Estratégia de extração de texto usando pdfplumber."""
 
     def get_total_pages(self, pdf_path: str) -> int:
+        import pdfplumber
         with pdfplumber.open(pdf_path) as pdf:
             return len(pdf.pages)
 
     @timing_decorator()
     def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
+        import pdfplumber
         content_by_page = []
         try:
             with pdfplumber.open(pdf_path) as pdf:
@@ -103,6 +105,7 @@ class PyPdfExtractor(PDFTextExtractorStrategy):
     """Estratégia de extração de texto usando pypdf """
 
     def get_total_pages(self, pdf_path: str) -> int:
+        from PyPDF2 import PdfReader
         try:
             reader = PdfReader(pdf_path)
             return len(reader.pages)
@@ -111,6 +114,7 @@ class PyPdfExtractor(PDFTextExtractorStrategy):
             raise RuntimeError(f"PyPdf extraction error (get_total_pages) for {pdf_path}: {e}")
 
     def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
+        from PyPDF2 import PdfReader
         content_by_page = []
         try:
             reader = PdfReader(pdf_path)
@@ -137,6 +141,7 @@ class FitzExtractor(PDFTextExtractorStrategy):
     """Estratégia de extração de texto usando Docling"""
 
     def get_total_pages(self, pdf_path: str) -> int:
+        import fitz
         try:
             doc = fitz.open(pdf_path)
             return len(doc)
@@ -144,6 +149,7 @@ class FitzExtractor(PDFTextExtractorStrategy):
             raise RuntimeError(f"PyPdf extraction error (get_total_pages) for {pdf_path}: {e}")
 
     def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
+        import fitz
         content_by_page = []
         try:
             doc = fitz.open(pdf_path)
@@ -259,7 +265,6 @@ from numpy import ndarray as np_ndarray
 from numpy import any as np_any
 
 from nltk.corpus import stopwords
-from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize as sk_normalize
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -268,6 +273,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 _sentence_model = None
 
 def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
+    from sentence_transformers import SentenceTransformer
     global _sentence_model
     if _sentence_model is None:
         _sentence_model = SentenceTransformer(model_name)
@@ -982,4 +988,7 @@ class PDFDocumentAnalyzer:
             logger.info(f"[DEBUG] Índices relevantes NÃO integra os mesmos índices do texto final agregado.\n {set(keys_of_included_texts)-set(relevant_page_ordered_indices)}\n")
 
         return keys_of_included_texts, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
+
+execution_time = perf_counter() - start_time
+print(f"Carregado PDF_PROCESSOR em {execution_time:.4f}s")
 

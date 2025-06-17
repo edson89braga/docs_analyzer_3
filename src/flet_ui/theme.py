@@ -2,6 +2,11 @@
 """
 Define o tema visual, cores, fontes e estilos reutilizáveis para a aplicação Flet.
 """
+
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando themes.py")
+
 import flet as ft
 from datetime import datetime
 
@@ -112,3 +117,7 @@ WIDTH_CONTAINER_CONFIGS = 700
 # Cores para Cards e Panels
 PANEL_HEADER_BGCOLOR = ft.Colors.with_opacity(0.05, ft.Colors.SECONDARY) # Usando PRIMARY que já deve estar definido
 PANEL_CONTENT_BGCOLOR = ft.colors.BACKGROUND # SURFACE Ou ft.colors.BACKGROUND, ou uma cor customizada
+
+
+execution_time = perf_counter() - start_time
+print(f"Carregado THEME.py em {execution_time:.4f}s")

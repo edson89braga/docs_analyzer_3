@@ -3,6 +3,11 @@
 Módulo responsável por orquestrar a interação com os modelos de linguagem (LLMs)
 usando LangChain.
 """
+
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando ai_orchestrator.py")
+
 import os, json
 from time import time, sleep, perf_counter
 from typing import Optional, Dict, Any, List, Tuple, Union
@@ -617,3 +622,5 @@ def analyze_text_with_llm(
     return final_response, token_usage_info, processing_time
 
 
+execution_time = perf_counter() - start_time
+print(f"Carregado AI_ORCHESTRATOR em {execution_time:.4f}s")

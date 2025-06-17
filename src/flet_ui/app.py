@@ -1,4 +1,9 @@
 # src/flet_ui/app.py
+
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando app.py")
+
 import flet as ft
 import time, os, threading
 from typing import Dict, Any, Optional
@@ -340,7 +345,14 @@ def load_auth_state_from_storage(page: ft.Page):
 
 
 def main(page: ft.Page, dev_mode: bool = False): 
+    app_start_time = perf_counter()
+    logger.info(f"{app_start_time:.4f}s - Função main() iniciada.")
+
     global _token_refresh_thread_stop_event, _token_refresh_thread_instance
+
+    # Para uploads no modo web, Flet precisa de FLET_SECRET_KEY e upload_dir
+    if not os.getenv("FLET_SECRET_KEY"):
+        os.environ["FLET_SECRET_KEY"] = FLET_SECRET_KEY
 
     if dev_mode:
         logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando em MODO DE DESENVOLVIMENTO (UI Test).")
@@ -430,6 +442,75 @@ def main(page: ft.Page, dev_mode: bool = False):
     )
     page.on_view_pop = None # Não usamos a pilha de views padrão com este layout
 
+    # --- Limpeza ao Fechar ---
+    def on_disconnect(e):
+        logger.info("Cliente desconectado ou aplicação Flet fechando...")
+        LoggerSetup.set_cloud_user_context(None, None)
+        logger.info("Contexto do logger de nuvem limpo ao desconectar.")
+
+        # Para a thread de renovação de token
+        if _token_refresh_thread_stop_event:
+            logger.info("Sinalizando parada para a thread de renovação proativa de token...")
+            _token_refresh_thread_stop_event.set()
+        if _token_refresh_thread_instance and _token_refresh_thread_instance.is_alive():
+            logger.debug("Aguardando thread de renovação de token finalizar...")
+            _token_refresh_thread_instance.join(timeout=5) # Espera um pouco
+            if _token_refresh_thread_instance.is_alive():
+                logger.warning("Thread de renovação de token não finalizou a tempo.")
+        
+        from src.flet_ui.views.nc_analyze_view import clear_user_cache
+        clear_user_cache(page)
+
+    page.on_disconnect = on_disconnect
+
+    def threaded_load_settings(target_page: ft.Page):
+        """Função a ser executada em uma thread para carregar settings."""
+        local_start_time = perf_counter()
+        logger.info(f"{local_start_time:.4f}s - Função Load_settings iniciada.")
+        logger.info("Thread de settings iniciada.")
+        load_default_analysis_settings(target_page)
+        logger.info("Thread de settings concluída. Dados carregados na sessão.")
+        logger.info(f"{perf_counter() - local_start_time:.4f}s - Analysis settings carregado.")
+        # Opcional: notificar a UI principal que os dados estão prontos, se necessário.
+        # Ex: page.pubsub.send_all("settings_loaded")
+
+    # --- Lógica de Inicialização Principal ---
+    def initialize_app_flow():
+        """Função que executa a lógica de inicialização, incluindo chamadas de rede."""
+        load_auth_state_from_storage(page)
+        logger.info(f"{perf_counter() - app_start_time:.4f}s - Auth state carregado.")
+        
+        # Se autenticado, carrega as configurações em uma thread
+        if page.session.contains_key("auth_id_token"):
+            logger.info("Usuário autenticado. Disparando carregamento de settings em background.")
+            threading.Thread(target=threaded_load_settings, args=(page,), daemon=True).start()
+            
+            # Inicia thread de renovação de token (isso já é non-blocking)
+            global _token_refresh_thread_instance, _token_refresh_thread_stop_event
+            if _token_refresh_thread_instance is None or not _token_refresh_thread_instance.is_alive():
+                _token_refresh_thread_stop_event = threading.Event()
+                _token_refresh_thread_instance = threading.Thread(
+                    target=_proactive_token_refresh_loop,
+                    args=(page, _token_refresh_thread_stop_event),
+                    daemon=True
+                )
+                _token_refresh_thread_instance.start()
+            
+            # Navega para a home imediatamente após verificar a autenticação
+            final_route = "/home"
+        else:
+            logger.info("Usuário não autenticado na inicialização, thread de renovação proativa não iniciada.")
+            # Garante que as chaves de settings estejam com fallback
+            if not page.session.contains_key(KEY_SESSION_ANALYSIS_SETTINGS):
+                page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS.copy())
+                page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
+            final_route = "/login"
+
+        # Dispara a navegação inicial
+        logger.info(f"Disparando navegação inicial para: {final_route}")
+        logger.info(f"{perf_counter() - app_start_time:.4f}s - Navegação inicial page.go() será chamada.")
+        page.go(final_route)
+
     if dev_mode:
         logger.info("DEV_MODE: Populando page.session com dados mockados.")
         page.session.set("auth_id_token", "mock_dev_id_token_abcdef123456")
@@ -459,58 +540,10 @@ def main(page: ft.Page, dev_mode: bool = False):
                                 # O router ainda fará a checagem, mas is_user_authenticated retornará True
                                 # devido ao token mockado na sessão.
     else:
-        load_auth_state_from_storage(page)
-        # Inicia a thread de renovação proativa de token APÓS o carregamento inicial do estado de auth
-        # e APENAS se o usuário estiver autenticado.
-        if page.session.contains_key("auth_id_token"):
-            load_default_analysis_settings(page)
-            if _token_refresh_thread_instance is None or not _token_refresh_thread_instance.is_alive():
-                _token_refresh_thread_stop_event = threading.Event()
-                _token_refresh_thread_instance = threading.Thread(
-                    target=_proactive_token_refresh_loop,
-                    args=(page, _token_refresh_thread_stop_event), # Passa a instância da page
-                    daemon=True
-                )
-                _token_refresh_thread_instance.start()
-            else:
-                logger.debug("Thread de renovação proativa já está rodando.")
-        else:
-            logger.info("Usuário não autenticado na inicialização, thread de renovação proativa não iniciada.")
-            # Garante que as chaves de settings estejam com fallback se o usuário não estiver logado
-            # (embora o acesso a views que usam isso seria bloqueado pelo router)
-            if not page.session.contains_key(KEY_SESSION_ANALYSIS_SETTINGS):
-                 page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS.copy())
-                 page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
+        # Inicia o fluxo de inicialização. Ele cuidará da navegação.
+        initialize_app_flow()  
 
 
-    # --- Limpeza ao Fechar ---
-    def on_disconnect(e):
-        logger.info("Cliente desconectado ou aplicação Flet fechando...")
-        LoggerSetup.set_cloud_user_context(None, None)
-        logger.info("Contexto do logger de nuvem limpo ao desconectar.")
 
-        # Para a thread de renovação de token
-        if _token_refresh_thread_stop_event:
-            logger.info("Sinalizando parada para a thread de renovação proativa de token...")
-            _token_refresh_thread_stop_event.set()
-        if _token_refresh_thread_instance and _token_refresh_thread_instance.is_alive():
-            logger.debug("Aguardando thread de renovação de token finalizar...")
-            _token_refresh_thread_instance.join(timeout=5) # Espera um pouco
-            if _token_refresh_thread_instance.is_alive():
-                logger.warning("Thread de renovação de token não finalizou a tempo.")
-        
-        from src.flet_ui.views.nc_analyze_view import clear_user_cache
-        clear_user_cache(page)
-
-    page.on_disconnect = on_disconnect
-
-    # --- Navegar para a Rota Inicial ---
-    # O router agora lida com o redirecionamento para /login se não autenticado.
-    logger.info(f"Disparando navegação inicial para: {initial_route}")
-    page.go(initial_route) # Dispara o on_route_change
-
-    # Para uploads no modo web, Flet precisa de FLET_SECRET_KEY e upload_dir
-    if not os.getenv("FLET_SECRET_KEY"):
-        os.environ["FLET_SECRET_KEY"] = FLET_SECRET_KEY
-
-
+execution_time = perf_counter() - start_time
+print(f"Carregado APP.py em {execution_time:.4f}s")

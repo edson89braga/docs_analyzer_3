@@ -1,3 +1,7 @@
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando firebase_manager.py")
+
 import os, json, logging
 import firebase_admin
 from firebase_admin import credentials, storage, firestore # db, auth as firebase_auth
@@ -427,4 +431,5 @@ def sync_local_and_storage_files(
 
 
 
-
+execution_time = perf_counter() - start_time
+print(f"Carregado FIREBASE_MANAGER em {execution_time:.4f}s")

@@ -1,3 +1,7 @@
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando logger.py")
+
 import os, shutil, logging, re
 from time import time, sleep
 
@@ -560,3 +564,8 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
 # fb_manager = firebase_manager.FbManagerStorage()
 # from src.logger.logger import test_cloud_logging
 # test_cloud_logging(test_identifier='TESTE-456', fb_manager_instance=fb_manager)
+
+
+
+execution_time = perf_counter() - start_time
+print(f"Carregado LOGGER em {execution_time:.4f}s")

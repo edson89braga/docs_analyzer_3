@@ -1,5 +1,9 @@
 # run.py
-import logging
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando run.py")
+
+import logging, os
 import flet as ft
 # Importa a função 'main' do seu módulo app dentro de flet_ui
 from src.flet_ui.app import main
@@ -56,10 +60,11 @@ logging.getLogger("starlette").setLevel(logging.WARNING)
 from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR 
 from src.utils import register_temp_files_cleanup
 
+execution_time = perf_counter() - start_time
+print(f"Carregado RUN em {execution_time:.4f}s")
+
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
-    import os
-
     register_temp_files_cleanup(UPLOAD_TEMP_DIR)
 
     temp_exports_full_path = os.path.join(ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR)

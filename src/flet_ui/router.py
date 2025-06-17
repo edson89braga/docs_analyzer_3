@@ -1,4 +1,9 @@
 # src/flet_ui/router.py
+
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando router.py")
+
 import flet as ft
 import re
 from typing import Optional, Dict, Callable, Any
@@ -283,3 +288,7 @@ def route_change_content_only(
 
     page.update() # Atualiza a página inteira com a nova estrutura e conteúdo
 
+
+
+execution_time = perf_counter() - start_time
+print(f"Carregado ROUTER.py em {execution_time:.4f}s")

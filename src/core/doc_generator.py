@@ -1,4 +1,9 @@
 # src/core/doc_generator.py
+
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando doc_generator.py")
+
 import os
 from typing import List, Tuple
 from docx import Document
@@ -289,4 +294,7 @@ class DocxExporter:
         except Exception as e:
             _logger.error(f"Erro ao exportar DOCX de template '{template_path}' para '{output_path}': {e}", exc_info=True)
             return False, ["Erro interno durante a exportação."]
+
+execution_time = perf_counter() - start_time
+print(f"Carregado DOC_GENERATOR em {execution_time:.4f}s")
 

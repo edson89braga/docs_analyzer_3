@@ -1,5 +1,9 @@
 # src/services/firebase_client.py
 
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando firebase_client.py")
+
 import requests, json, re, secrets, logging, time
 import urllib.parse
 from datetime import datetime
@@ -1496,6 +1500,9 @@ def test_firebase_auth():
 
 # test_firebase_clients()
 # test_firebase_auth()
+
+execution_time = perf_counter() - start_time
+print(f"Carregado FIREBASE_CLIENT em {execution_time:.4f}s")
 
 '''
 TODO: Os atributos de usuários não estão sendo exibidos no console do Firebase, mas conseguimos visualizar através do Admin SDK. A Checar novamente...

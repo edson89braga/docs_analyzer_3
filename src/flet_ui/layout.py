@@ -3,6 +3,11 @@
 Define elementos de layout reutilizáveis como AppBar e NavigationRail.
 
 """
+
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando layout.py")
+
 import flet as ft
 from typing import List, Dict, Any, Optional
 # Importa definições de tema se necessário (ex: para padding ou cores)
@@ -543,3 +548,7 @@ def show_proxy_settings_dialog(page: ft.Page):
     )
     dialog_proxy_instance.show()
 
+
+
+execution_time = perf_counter() - start_time
+print(f"Carregado LAYOUT.py em {execution_time:.4f}s")

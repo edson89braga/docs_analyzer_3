@@ -1,4 +1,7 @@
 # src/utils/config_manager.py
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando config_manager.py")
 
 import atexit
 import keyring
@@ -117,3 +120,6 @@ def set_final_keyring_proxy():
         delete_proxy_settings(logger) 
 
 atexit.register(set_final_keyring_proxy)
+
+execution_time = perf_counter() - start_time
+print(f"Carregado CONFIG_MANAGER em {execution_time:.4f}s")

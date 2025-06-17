@@ -1,3 +1,7 @@
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando utils.py")
+
 import os, keyring, logging, re
 from rich import print
 from typing import Union, Optional, List
@@ -393,9 +397,25 @@ def load_dict_municipios_local():
         print(f"Erro ao carregar dicionário de municípios: {e}")
         return {}
 
-# Carregar os dados na inicialização do módulo
-MUNICIPIOS_POR_UF = load_dict_municipios_local()
-LISTA_UFS = sorted(list(MUNICIPIOS_POR_UF.keys()))
+_municipios_cache = None
+_ufs_cache = None
+
+def get_municipios_por_uf_cached() -> dict:
+    """Carrega o dicionário de municípios do arquivo local, usando um cache em memória."""
+    #MUNICIPIOS_POR_UF = load_dict_municipios_local()
+    global _municipios_cache
+    if _municipios_cache is None:
+        _municipios_cache = load_dict_municipios_local()
+    return _municipios_cache
+
+def get_lista_ufs_cached() -> list:
+    """Retorna a lista de UFs ordenada, usando um cache em memória."""
+    #LISTA_UFS = sorted(list(MUNICIPIOS_POR_UF.keys()))
+    global _ufs_cache
+    if _ufs_cache is None:
+        municipios = get_municipios_por_uf_cached()
+        _ufs_cache = sorted(list(municipios.keys()))
+    return _ufs_cache
 
 def convert_to_list_of_strings(value:str):
     if not value:
@@ -646,7 +666,6 @@ def format_seconds_to_min_sec(total_segundos):
     segundos = int(total_segundos) % 60
     return f"{minutos:02d}m:{segundos:02d}s"
 
-
 from rouge_score import rouge_scorer
 def calcular_similaridade_rouge_l(texto_original: str, texto_editado: str) -> float:
     """
@@ -715,3 +734,8 @@ def testando_similaridade_rouge_l():
     
     print(f"\nSimilaridade (longo) entre original e similar: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_similar):.4f}")
     print(f"\nSimilaridade (longo) entre original e diferente: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_diferente):.4f}")
+
+
+
+execution_time = perf_counter() - start_time
+print(f"Carregado UTILS em {execution_time:.4f}s")

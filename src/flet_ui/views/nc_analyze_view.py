@@ -1,4 +1,9 @@
 # src/flet_ui/views/nc_analyze_view.py
+
+from time import perf_counter
+start_time = perf_counter()
+print(f"{start_time:.4f}s - Iniciando nc_analyze_view.py")
+
 import flet as ft
 import threading, json, os, shutil
 from typing import Optional, Dict, Any, List, Union, Tuple, Callable
@@ -27,7 +32,7 @@ from src.settings import (APP_VERSION , UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEM
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST)
 
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
-                        LISTA_UFS, MUNICIPIOS_POR_UF, calcular_similaridade_rouge_l)
+                        get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l)
 
 from src.core.prompts import (
     formatted_initial_analysis,
@@ -2428,7 +2433,8 @@ class LLMStructuredResultDisplay(ft.Column):
         self.dropdown_municipio_fato: Optional[ft.Dropdown] = None
 
         # Listas de referência (carregadas uma vez)
-        self.ufs_list = LISTA_UFS  # TODO: incluir atualização a partir do firestore
+        self.ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
+        self.municipios_list = get_municipios_por_uf_cached()
 
         self.user_cache = get_user_cache(self.page)
 
@@ -2461,7 +2467,7 @@ class LLMStructuredResultDisplay(ft.Column):
         if self.dropdown_uf_origem and self.dropdown_municipio_origem:
             selected_uf = self.dropdown_uf_origem.value
             if selected_uf:
-                municipios = MUNICIPIOS_POR_UF[selected_uf]
+                municipios = self.municipios_list[selected_uf]
                 self.dropdown_municipio_origem.options = [ft.dropdown.Option(m) for m in municipios]
                 # Tenta manter o valor se ainda for válido, ou reseta
                 current_municipio_val = self.dropdown_municipio_origem.value
@@ -2484,7 +2490,7 @@ class LLMStructuredResultDisplay(ft.Column):
         if self.dropdown_uf_fato and self.dropdown_municipio_fato:
             selected_uf = self.dropdown_uf_fato.value
             if selected_uf:
-                municipios = MUNICIPIOS_POR_UF[selected_uf]
+                municipios = self.municipios_list[selected_uf]
                 self.dropdown_municipio_fato.options = [ft.dropdown.Option(m) for m in municipios]
                 current_municipio_val = self.dropdown_municipio_fato.value
                 if current_municipio_val not in [opt.key for opt in self.dropdown_municipio_fato.options]:
@@ -2570,7 +2576,7 @@ class LLMStructuredResultDisplay(ft.Column):
         )
         self.gui_fields["uf_origem"] = self.dropdown_uf_origem # Adiciona ao ui_fields
 
-        municipios_origem_init = MUNICIPIOS_POR_UF[self.data.uf_origem] if self.data.uf_origem else []
+        municipios_origem_init = self.municipios_list[self.data.uf_origem] if self.data.uf_origem else []
         municipio_origem = self.data.municipio_origem
         self.dropdown_municipio_origem = ft.Dropdown(
             label="Município de Origem",
@@ -2608,7 +2614,7 @@ class LLMStructuredResultDisplay(ft.Column):
         )
         self.gui_fields["uf_fato"] = self.dropdown_uf_fato
 
-        municipios_fato_init = MUNICIPIOS_POR_UF[self.data.uf_fato] if self.data.uf_fato else []
+        municipios_fato_init = self.municipios_list[self.data.uf_fato] if self.data.uf_fato else []
         municipio_fato = self.data.municipio_fato
         self.dropdown_municipio_fato = ft.Dropdown(
             label="Município do Fato",
@@ -3285,3 +3291,7 @@ def get_field_type_for_feedback(field_name: str, gui_fields) -> str:
         return "dropdown"
     # Adicionar outros tipos se necessário (radio, checkbox etc.)
     return "textfield" # Defa
+
+
+execution_time = perf_counter() - start_time
+print(f"Carregado NC_ANALYZE_VIEW em {execution_time:.4f}s")
