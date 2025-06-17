@@ -595,7 +595,7 @@ class FirebaseClientFirestore:
             }
 
             # Envia a métrica
-            if not self.firestore_client_for_metrics.save_metrics_client(user_token, user_id, metric_data):
+            if not self.save_metrics_client(user_token, user_id, metric_data):
                 self.logger.error("Falha ao registrar métricas da análise no Firestore.")
             else:
                 self.logger.info("Métricas da análise registradas com sucesso no Firestore.")
@@ -663,7 +663,7 @@ class FirebaseClientFirestore:
             if reanalysis_occurrence:
                 metric_like_feedback_payload["reanalysis_occurrence"] = 1
 
-            if self.firestore_client_for_metrics.save_metrics_client(user_token, user_id, metric_like_feedback_payload):
+            if self.save_metrics_client(user_token, user_id, metric_like_feedback_payload):
                 self.logger.info("Dados de feedback detalhado salvos com sucesso no Firestore.")
                 return True
             else:

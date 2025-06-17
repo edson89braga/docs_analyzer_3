@@ -498,6 +498,9 @@ def main(page: ft.Page, dev_mode: bool = False):
             _token_refresh_thread_instance.join(timeout=5) # Espera um pouco
             if _token_refresh_thread_instance.is_alive():
                 logger.warning("Thread de renovação de token não finalizou a tempo.")
+        
+        from src.flet_ui.views.nc_analyze_view import clear_user_cache
+        clear_user_cache(page)
 
     page.on_disconnect = on_disconnect
 

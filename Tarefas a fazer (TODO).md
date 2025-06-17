@@ -58,17 +58,12 @@ Não é Aconselhamento Jurídico: As tipificações penais e classificações su
 > Test  View: analyze_pdf1
 
 # TODO: Posteriormente: 
-
 > Exibir prompt_estruturado editável;
 > Melhorias na apresentação dos metadados: coluna em vez de lista única?
+> Rever lógica do modo de filtro 'get_pages_among_similars_groups'
 
+# AVALIAR:
 > Reorganização de InternalAnalysisController: passar para outro módulo?
 > Reorganização de FeedbackWorkflowManager: incorporar à FeedbackDialog?
 
 ============================================================================================================================
-
-> Reorganização referente aos métodos de limpeza e atualização da nc_analyze_view
-- Prompt inicial: "Considere a versão atual do módulo nc_analyze_view.py. Identifique oportunidades de refatoração relacionadas aos métodos de limpeza e atualização da interface gráfica (GUI), que atualmente são invocados em múltiplos pontos do código. Proponha uma refatoração pontual que centralize essa lógica de atualização, simplifique a manutenção e garanta o correto tratamento das flags relacionadas a dados salvos dinamicamente."
-
-
-

@@ -45,21 +45,38 @@ from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLA
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
 
-firestore_client = FirebaseClientFirestore() # Instancia o cliente Firestore
+# Dicionário para servir como cache no lado do servidor para dados pesados da sessão.
+# A chave será o ID da sessão do Flet (page.session_id).
+# O valor será outro dicionário contendo os dados pesados.
+_SERVER_SIDE_CACHE = {}
 
+def get_user_cache(page: ft.Page) -> dict:
+    """Retorna o cache específico para a sessão do usuário atual, criando-o se não existir."""
+    session_id = page.session_id
+    if session_id not in _SERVER_SIDE_CACHE:
+        _SERVER_SIDE_CACHE[session_id] = {}
+    return _SERVER_SIDE_CACHE[session_id]
+
+def clear_user_cache(page: ft.Page):
+    """Limpa o cache para a sessão do usuário atual."""
+    session_id = page.session_id
+    if session_id in _SERVER_SIDE_CACHE:
+        del _SERVER_SIDE_CACHE[session_id]
+        _logger.info(f"Cache do lado do servidor limpo para a sessão {session_id}.")
+        
 # Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
 KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
 KEY_SESSION_PDF_FILES_ORDERED = "apv_pdf_files_ordered"
-KEY_SESSION_PDF_ANALYZER_DATA = "apv_pdf_analyzer_data" # Dados processados das páginas
-KEY_SESSION_PDF_CLASSIFIED_INDICES_DATA = "apv_pdf_classified_indices_data" # (relevant_indices, unintelligible_indices, counts...)
-KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "apv_pdf_aggregated_text_info" # (str_pages, aggregated_text, tokens_antes, tokens_depois)
-KEY_SESSION_PDF_LLM_RESPONSE = "apv_pdf_llm_response"
-KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL = "apv_pdf_llm_response_actual"
 KEY_SESSION_PROCESSING_METADATA = "apv_processing_metadata"
 KEY_SESSION_LLM_METADATA = "apv_llm_metadata"
 KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS = "apv_feedback_collected"
-KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK = "apv_llm_response_snapshot_for_feedback"
 KEY_SESSION_LLM_REANALYSIS = "apv_llm_reanalysis_flag"
+
+# Dados a ficar em _SERVER_SIDE_CACHE:
+KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "apv_pdf_aggregated_text_info" # (str_pages, aggregated_text, tokens_antes, tokens_depois)
+KEY_SESSION_PDF_LLM_RESPONSE = "apv_pdf_llm_response"
+KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL = "apv_pdf_llm_response_actual"
+KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK = "apv_llm_response_snapshot_for_feedback"
 
 # Constantes para nomes de controles (facilita acesso) CTL = Control
 CTL_UPLOAD_BTN = "upload_button"
@@ -78,7 +95,6 @@ CTL_PROC_METADATA_PANEL_TITLE = "proc_metadata_panel_title"
 CTL_PROC_METADATA_CONTENT = "proc_metadata_content"
 CTL_LLM_RESULT_TEXT = "llm_result_text"
 CTL_LLM_STRUCTURED_RESULT_DISPLAY = "llm_structured_result_display" # Novo
-CTL_LLM_RESULT_INFO_TITLE = "llm_result_info_title"
 CTL_LLM_STATUS_INFO = "llm_status_info"
 CTL_LLM_RESULT_INFO_BALLOON = "llm_result_info_balloon"
 CTL_LLM_METADATA_PANEL = "llm_metadata_panel"
@@ -136,12 +152,14 @@ class AnalyzePDFViewContent(ft.Column):
         self._prompt_display_layout: Optional[ft.Container] = None      # Para o layout de exibição do prompt
 
         self.feedback_workflow_manager: Optional[FeedbackWorkflowManager] = None
+        
+        self.user_cache = get_user_cache(self.page)
 
         self._build_gui_structure()
         self.feedback_workflow_manager = FeedbackWorkflowManager(self.page, self)
         self._initialize_pickers()  # Deve ser chamado após _build_gui_structure e instanciação dos managers
         self._setup_event_handlers()
-        self._restore_state_from_session() # que chama self._update_button_states(), que chama self._update_export_button_menu()
+        self._restore_state_from_session() 
 
     def _remove_data_session(self, key):
         """Remove um dado específico da sessão da página, se existir."""
@@ -227,10 +245,10 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_PROC_METADATA_PANEL].visible=False, # visível após processamento de PDF(s)
 
         # Container 3: Resposta/Resultado da Análise
-        self.gui_controls[CTL_LLM_RESULT_INFO_TITLE] = ft.Row([ft.Container(width=12), 
-                                                                ft.Text("Resultado da Análise LLM:", 
-                                                                    style=ft.TextThemeStyle.TITLE_MEDIUM, 
-                                                                    weight=ft.FontWeight.BOLD)], visible=False)
+        self.llm_result_title = ft.Row([ft.Container(width=12), 
+                                            ft.Text("Resultado da Análise LLM:", 
+                                                style=ft.TextThemeStyle.TITLE_MEDIUM, 
+                                                weight=ft.FontWeight.BOLD)], visible=False)
         self.gui_controls[CTL_LLM_STATUS_INFO] = ft.Text("Aguardando para exibir os resultados...", italic=True, size=14, expand=True)
         self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON] = ft.Container(
             content=ft.Row(
@@ -290,7 +308,7 @@ class AnalyzePDFViewContent(ft.Column):
                 self.gui_controls[CTL_FILE_LIST_PANEL],
                 self.gui_controls[CTL_PROC_METADATA_PANEL],
                 ft.Column([
-                    self.gui_controls[CTL_LLM_RESULT_INFO_TITLE],
+                    self.llm_result_title,
                     self.llm_result_container], expand=True, spacing=6,
                     ),
                 self.gui_controls[CTL_LLM_METADATA_PANEL]
@@ -471,19 +489,12 @@ class AnalyzePDFViewContent(ft.Column):
                 if final_message: 
                     show_snackbar(self.page, final_message, color=final_color)
                 
-                self.file_list_manager.update_selected_files_display()
-                if final_message and final_message != "Nenhum arquivo selecionado.": 
-                    self._files_processed = False # Novos arquivos, processamento necessário
-                    self._analysis_requested = False # Análise LLM também precisará ser refeita
-                    self._remove_data_session(KEY_SESSION_PDF_ANALYZER_DATA)
-                    self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Limpa dados antigos
-                    self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
-                    self._clear_processing_metadata_display()
-                    self._clear_llm_metadata_display()
-                    self._show_info_balloon_or_result(show_balloon=True)
-                
-                self._update_button_states()
-                self.page.update()
+                # Se novos arquivos foram adicionados, invalida os resultados anteriores.
+                if successful_uploads:
+                    self._reset_processing_and_llm_results()
+                else:
+                    # Se todos os uploads falharam, apenas atualiza a UI sem resetar os dados
+                    self._update_ui_from_state()
 
             self.managed_file_picker = ManagedFilePicker(
                 page=self.page,
@@ -527,9 +538,6 @@ class AnalyzePDFViewContent(ft.Column):
             self.feedback_workflow_manager.request_feedback_and_proceed(
                 action_context_name="Carregar Novos Arquivos",
                 primary_action_callable=primary_upload_action,
-                # Não há necessidade de on_feedback_confirmed_before_action aqui,
-                # pois _clear_all_data_and_gui será chamado dentro da primary_action
-                # após o fluxo de feedback.
             )
         else: # Fallback se o manager não estiver pronto
             primary_upload_action()
@@ -550,6 +558,14 @@ class AnalyzePDFViewContent(ft.Column):
         pdf_paths = [f['path'] for f in ordered_files] if ordered_files else []
         batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
 
+        # Verifica se é uma reanálise ANTES de limpar os resultados existentes
+        is_reanalysis = False
+        if step_type in ["analyze_only", "process_and_analyze"]:
+            # É uma reanálise se já existe uma resposta LLM no cache
+            if self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE):
+                is_reanalysis = True
+                _logger.info("Detectada uma solicitação de REANÁLISE LLM.")
+
         # 2. Definir a ação primária específica para a etapa
         primary_action_callable: Optional[Callable[[], None]] = None
         action_context_name_for_feedback = ""
@@ -558,15 +574,8 @@ class AnalyzePDFViewContent(ft.Column):
             action_context_name_for_feedback = "Processar Arquivos"
             
             def primary_process_action():
-                self._files_processed = False 
-                self._analysis_requested = False
-                # Mantemos os metadados de processamento PDF anteriores até que o novo termine.
-                # Limpamos apenas o que é da LLM, pois um novo processamento PDF os invalidaria.
-                self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) # Invalida LLM anterior
-                self._clear_llm_metadata_display()
-                self._show_info_balloon_or_result(show_balloon=True)
-                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS) # Permite novo feedback
-                self._update_button_states()
+                # Apenas reseta o estado. A UI será atualizada pelo método de reset.
+                self._reset_processing_and_llm_results() 
                 self.analysis_controller.start_pdf_processing_only(pdf_paths, batch_name)
             
             primary_action_callable = primary_process_action
@@ -584,21 +593,15 @@ class AnalyzePDFViewContent(ft.Column):
             def primary_llm_analysis_action():
                 # A lógica de decidir entre pipeline completo ou só LLM está dentro de proceed_with_llm_analysis
                 # do exemplo anterior, que agora será parte de primary_analyze_action.        
-                aggregated_text_info = self.page.session.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
+                aggregated_text_info = self.user_cache.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
                 if not aggregated_text_info or not aggregated_text_info[1]: # [1] é o texto
                     show_snackbar(self.page, "Não há texto agregado para análise. Verifique o processamento.", theme.COLOR_ERROR)
                     return
-                
                 aggregated_text = aggregated_text_info[1]
                 
-                self._analysis_requested = False 
-                self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE) 
-                # self._clear_llm_metadata_display()
-                # Coomentado porque a limpeza está sendo feito no batch_upload_complete_cb
-                self._show_info_balloon_or_result(show_balloon=True)
-                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
-                self._update_button_states()
-                self.analysis_controller.start_llm_analysis_only(aggregated_text, batch_name)
+                # Apenas reseta os resultados da LLM.
+                self._reset_llm_results()
+                self.analysis_controller.start_llm_analysis_only(aggregated_text, batch_name, is_reanalysis=is_reanalysis)
             
             primary_action_callable = primary_llm_analysis_action
 
@@ -606,15 +609,8 @@ class AnalyzePDFViewContent(ft.Column):
             action_context_name_for_feedback = "Processar e Solicitar Nova Análise"
             
             def primary_full_pipeline_action():
-                self._files_processed = False
-                self._analysis_requested = False
-                self._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
-                # self._clear_llm_metadata_display() 
-                # Coomentado porque a limpeza está sendo feito no batch_upload_complete_cb
-                self._show_info_balloon_or_result(show_balloon=True)
-                self._remove_data_session(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS)
-                self._update_button_states()
-                self.analysis_controller.start_full_analysis_pipeline(pdf_paths, batch_name)
+                self._reset_processing_and_llm_results()
+                self.analysis_controller.start_full_analysis_pipeline(pdf_paths, batch_name, is_reanalysis=is_reanalysis)
             
             primary_action_callable = primary_full_pipeline_action
         
@@ -787,8 +783,7 @@ class AnalyzePDFViewContent(ft.Column):
     def _update_button_states(self):
         """Atualiza o estado (habilitado/desabilitado) dos botões da UI."""
         barra_main_btns = [CTL_UPLOAD_BTN, CTL_PROCESS_BTN, CTL_ANALYZE_BTN, CTL_PROMPT_STRUCT_BTN, CTL_RESTART_BTN, CTL_EXPORT_BTN, CTL_SETTINGS_BTN]
-        llm_btns = [CTL_LLM_RESULT_INFO_TITLE, CTL_LLM_STATUS_INFO, CTL_LLM_STRUCTURED_RESULT_DISPLAY]
-
+        
         if self._is_prompt_view_active:
             for key in barra_main_btns:
                 if key in self.gui_controls and key != CTL_PROMPT_STRUCT_BTN:
@@ -803,7 +798,7 @@ class AnalyzePDFViewContent(ft.Column):
             return # Termina aqui se a visualização do prompt estiver ativa
 
         files_exist = bool(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED))
-        llm_response_exists = bool(self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE))
+        llm_response_exists = bool(self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE))
 
         # Sempre habilitados
         self.gui_controls[CTL_UPLOAD_BTN].disabled = False
@@ -821,7 +816,8 @@ class AnalyzePDFViewContent(ft.Column):
         # Botão de Exportar
         self._update_export_button_menu()
         self.gui_controls[CTL_EXPORT_BTN].disabled = not llm_response_exists
-        self.gui_controls[CTL_LLM_RESULT_INFO_TITLE].visible = llm_response_exists
+
+        self.llm_result_title.visible = llm_response_exists
         
         if not self.gui_controls[CTL_LLM_STATUS_INFO].value or self.gui_controls[CTL_LLM_STATUS_INFO].color != theme.COLOR_ERROR:
             if not self._files_processed:
@@ -830,6 +826,7 @@ class AnalyzePDFViewContent(ft.Column):
                 self.gui_controls[CTL_LLM_STATUS_INFO].value = "Clique em 'Solicitar Análise' para prosseguir "
 
         # Força atualização dos botões
+        llm_btns = [CTL_LLM_STATUS_INFO, CTL_LLM_STRUCTURED_RESULT_DISPLAY]
         for btn_key in barra_main_btns+llm_btns:
             if btn_key in self.gui_controls and self.gui_controls[btn_key].page and self.gui_controls[btn_key].uid:
                 self.gui_controls[btn_key].update()
@@ -934,10 +931,6 @@ class AnalyzePDFViewContent(ft.Column):
                         padding=ft.padding.only(left=20, bottom=10)
                     )
                 )
-            
-        # Comentado devido AssertionError: Text Control must be added to the page first
-        # if content_area.page: content_area.update()
-        # A view principal faz o update quando _restore_state_from_session ou uma ação que modifique os metadados for concluída.
 
     def _update_llm_metadata_display(self, llm_meta: Optional[Dict[str, Any]] = None):
         """
@@ -1056,101 +1049,108 @@ class AnalyzePDFViewContent(ft.Column):
             if ctl in self.gui_controls and self.gui_controls[ctl].page and self.gui_controls[ctl].uid:
                 #self.gui_controls[ctl].update()
                 self.page.update(self.gui_controls[ctl])        
+
+    def _reset_processing_and_llm_results(self):
+        """Limpa os resultados do processamento PDF e da análise LLM."""
+        # NOVO MÉTODO (a ser usado quando a lista de arquivos muda)
+        _logger.debug("Resetando resultados de processamento e LLM.")
         
-        # Não chamar .update() nos controles individuais aqui.
-        # A atualização será feita pelo page.update() no método chamador ou em _restore_state_from_session.
+        self.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = None
+        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = None
+        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL] = None
+        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = None
+        
+        keys_to_clear = [
+            KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA,
+            KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS          
+        ]
+        for key in keys_to_clear:
+            self._remove_data_session(key)
+        
+        # Atualiza a GUI para refletir o estado limpo
+        self._update_ui_from_state()
 
-    def _clear_processing_metadata_display(self):
-        """Limpa os metadados de processamento da sessão e da UI."""
-        self._remove_data_session(KEY_SESSION_PROCESSING_METADATA)
-        self._update_processing_metadata_display() # Passar None para limpar
+    def _reset_llm_results(self):
+        """Limpa apenas os resultados da análise LLM."""
+        # NOVO MÉTODO (a ser usado quando uma nova análise LLM é solicitada)
+        _logger.debug("Resetando resultados da LLM.")
+        
+        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = None
+        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL] = None
+        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = None
 
-    def _clear_llm_metadata_display(self):
-        """Limpa os metadados da análise LLM da sessão e da UI."""
-        self._remove_data_session(KEY_SESSION_LLM_METADATA)
-        self._update_llm_metadata_display()
+        keys_to_clear = [
+            KEY_SESSION_LLM_METADATA,
+            KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
+        ]
+        for key in keys_to_clear:
+            self._remove_data_session(key)
+            
+        # Atualiza a UI para refletir o estado limpo
+        self._update_ui_from_state()
 
-    # --- Gerenciamento de Estado e Limpeza ---
-    def _restore_state_from_session(self):
-        """Restaura o estado da view a partir dos dados salvos na sessão."""
-        _logger.info("Restaurando estado da view Análise PDF da sessão.")
+    def _update_ui_from_state(self):
+        """
+        Atualiza toda a GUI da view com base no estado atual salvo na sessão.
+        Este método centraliza todas as chamadas de atualização da GUI.
+        """
+        _logger.info("Atualizando GUI a partir do estado da sessão...")
+        hide_loading_overlay(self.page)
+        
+        # Atualiza flags internas com base na sessão Flet
+        self._files_processed = self.page.session.get("has_analyzer_data") or False
+        self._analysis_requested = self.page.session.get("has_llm_response") or False
+        
+        # 2. Chama os métodos de atualização individuais
         self.file_list_manager.update_selected_files_display()
-        
-        self._files_processed = bool(self.page.session.get(KEY_SESSION_PDF_ANALYZER_DATA))
-        self._analysis_requested = bool(self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE) or \
-                                     self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL) or \
-                                     self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)) # Ajuste aqui
-        
         self._update_processing_metadata_display()
         self._update_llm_metadata_display()
 
+        # 3. Decide qual conteúdo de resultado LLM exibir
+        llm_response_to_show = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL) or \
+                               self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
+        
+        if llm_response_to_show:
+            is_initial_response = not bool(self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL))
+            self._show_info_balloon_or_result(False, llm_response_to_show, is_initial_response)
+        else:
+            self._show_info_balloon_or_result(True)
+
+        # 4. Atualiza o estado dos botões (que depende das flags atualizadas)
+        self._update_button_states()
+
+        # 5. Renderiza todas as alterações na página de uma só vez
+        self.page.update()
+        _logger.info("Atualização da GUI a partir do estado concluída.")
+        
+    # --- Gerenciamento de Estado e Limpeza ---
+    def _restore_state_from_session(self):
+        """Restaura o estado da view a partir dos dados salvos na sessão."""
+        _logger.info("Restaurando estado da view Análise PDF da sessão.")    
+        
+        # Carrega as configurações para o drawer (isso não afeta o estado principal da análise)
         analysis_settings_from_session = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
         if analysis_settings_from_session:
             self.settings_drawer_manager._load_settings_into_drawer_controls(analysis_settings_from_session)
         else:
             self.settings_drawer_manager._load_settings_into_drawer_controls(FALLBACK_ANALYSIS_SETTINGS)
 
-        # --- Lógica de restauração do resultado da LLM e snapshot ---
-        is_this_the_initial_llm_response_for_snapshot = False
-
-        # Prioridade 1: Tentar carregar o snapshot dedicado, se existir. Ele é o "original" se foi salvo.
-        snapshot_for_feedback = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
-        
-        # Prioridade 2: Tentar carregar a resposta "atual" (potencialmente editada)
-        llm_response_actual = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL)
-        
-        # Prioridade 3: Tentar carregar a resposta "original da LLM" (se as anteriores não existirem)
-        llm_response_original = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
-
-        source_for_ui_data = None
-        
-        if llm_response_actual: # Se temos dados "atuais", são eles que a UI deve mostrar
-            source_for_ui_data = llm_response_actual
-            _logger.info("_restore_state_from_session: Usando KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL para popular a UI.")
-            # Se não há snapshot dedicado, mas temos o "original" da LLM,
-            # E o "atual" é o mesmo que o "original", então podemos considerar o "atual" como inicial para o snapshot.
-            if not snapshot_for_feedback and llm_response_original and llm_response_actual == llm_response_original:
-                is_this_the_initial_llm_response_for_snapshot = True
-                _logger.info("_restore_state_from_session: Marcando dados de ACTUAL como 'initial' pois não há snapshot dedicado e ACTUAL == ORIGINAL.")
-
-        elif snapshot_for_feedback: # Se não há "actual", mas há snapshot, a UI mostra o snapshot.
-            source_for_ui_data = snapshot_for_feedback
-            is_this_the_initial_llm_response_for_snapshot = True # O snapshot é, por definição, o "inicial"
-            _logger.info("_restore_state_from_session: Usando SNAPSHOT_FOR_FEEDBACK para popular a UI e como 'initial'.")
-        elif llm_response_original: # Se não há "actual" nem snapshot, mas há "original"
-            source_for_ui_data = llm_response_original
-            is_this_the_initial_llm_response_for_snapshot = True # Este é o melhor candidato para "inicial"
-            _logger.info("_restore_state_from_session: Usando KEY_SESSION_PDF_LLM_RESPONSE para popular a UI e como 'initial'.")
-        
-        if source_for_ui_data:
-            self._show_info_balloon_or_result(
-                show_balloon=False, 
-                result_data=source_for_ui_data, 
-                is_initial_llm_response=is_this_the_initial_llm_response_for_snapshot
-            )
-        else:
-            self._show_info_balloon_or_result(show_balloon=True)
-        
-        self._update_button_states()
-        
-        if self.page:
-            if self.gui_controls.get(CTL_PROC_METADATA_PANEL) and self.gui_controls[CTL_PROC_METADATA_PANEL].page:
-                self.gui_controls[CTL_PROC_METADATA_PANEL].update()
-            if self.gui_controls.get(CTL_LLM_METADATA_PANEL) and self.gui_controls[CTL_LLM_METADATA_PANEL].page:
-                self.gui_controls[CTL_LLM_METADATA_PANEL].update()
+        # Chama o método central que lê a sessão e atualiza TODOS os componentes da UI
+        self._update_ui_from_state()
 
     def _clear_all_data_and_gui(self):
         """Limpa todos os dados da sessão e reseta a UI para o estado inicial."""
         _logger.info("Limpando todos os dados e resetando UI da Análise PDF.")
+        
+        # Limpa o cache do servidor para este usuário
+        clear_user_cache(self.page)
+
         # Limpa sessão relacionada a esta view
         keys_to_clear_from_session = [
             KEY_SESSION_CURRENT_BATCH_NAME, KEY_SESSION_PDF_FILES_ORDERED,
-            KEY_SESSION_PDF_ANALYZER_DATA, KEY_SESSION_PDF_CLASSIFIED_INDICES_DATA,
-            KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, KEY_SESSION_PDF_LLM_RESPONSE,
             KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA,
             KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
-            KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL,
-            KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK
+            "has_analyzer_data", "has_llm_response"
         ]
         for key in keys_to_clear_from_session:
             self._remove_data_session(key)
@@ -1158,21 +1158,14 @@ class AnalyzePDFViewContent(ft.Column):
         # Reseta estado interno
         self._files_processed = False
         self._analysis_requested = False
-
-        # Limpa UI
-        self.file_list_manager.update_selected_files_display() # Isso vai limpar a lista de arquivos
-        self._clear_processing_metadata_display()
-        self._clear_llm_metadata_display()
-        self._show_info_balloon_or_result(show_balloon=True) # Mostra balão informativo
         
         # Limpa diretório de uploads temporários, se o ManagedFilePicker estiver configurado
         if self.managed_file_picker:
              self.managed_file_picker.clear_upload_directory()
 
-        self._update_button_states()
-        if self.page: 
-            self.page.update()
-
+        # Chama o método central para atualizar toda a UI para o estado limpo
+        self._update_ui_from_state()
+# 
 # --- Classes Internas para Gerenciamento ---
 class InternalFileListManager:
     """
@@ -1272,17 +1265,9 @@ class InternalFileListManager:
         def primary_move_action():
             current_files.insert(new_index, current_files.pop(index))
             self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
-            self.update_selected_files_display(current_files)
-            self.parent_view._files_processed = False # Requer reprocessamento
-            self.parent_view._analysis_requested = False
-            self.parent_view._update_button_states()
-            self.parent_view._clear_processing_metadata_display()
-            self.parent_view._clear_llm_metadata_display()
-            self.parent_view._show_info_balloon_or_result(show_balloon=True)
-            title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
-            list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
-            self.page.update(title_text, list_view)
-        
+            # Apenas reseta os resultados, a UI será atualizada pelo método de reset
+            self.parent_view._reset_processing_and_llm_results()
+                    
         if self.parent_view.feedback_workflow_manager:
             self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
                 action_context_name="Reordenar Arquivos",
@@ -1312,17 +1297,8 @@ class InternalFileListManager:
             self.update_selected_files_display(current_files)
             if not current_files: # Se a lista ficou vazia
                 self.parent_view._clear_all_data_and_gui() # Limpa tudo
-            else: # Apenas marca para reprocessar
-                self.parent_view._files_processed = False
-                self.parent_view._analysis_requested = False
-                self.parent_view._clear_processing_metadata_display()
-                self.parent_view._clear_llm_metadata_display()
-                self.parent_view._show_info_balloon_or_result(show_balloon=True)
-
-            self.parent_view._update_button_states()
-            title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
-            list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
-            self.page.update(title_text, list_view)
+            else: # Apenas reseta os resultados do processamento
+                self.parent_view._reset_processing_and_llm_results()
 
         if self.parent_view.feedback_workflow_manager:
             self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
@@ -1353,6 +1329,7 @@ class InternalAnalysisController:
         self.gui_controls = gui_controls
         self.parent_view = parent_view # Referência à view principal
         self.pdf_analyzer = parent_view.pdf_analyzer # Usa o da view
+        self.firestore_client = FirebaseClientFirestore()
 
     def _get_current_analysis_settings(self) -> Dict[str, Any]:
         """Busca as configurações de análise atuais da sessão."""
@@ -1375,6 +1352,10 @@ class InternalAnalysisController:
             current_settings['llm_temperature'] = float(current_settings.get('llm_temperature', FALLBACK_ANALYSIS_SETTINGS['llm_temperature']))
         except (ValueError, TypeError):
             current_settings['llm_temperature'] = FALLBACK_ANALYSIS_SETTINGS['llm_temperature']
+        try:
+            current_settings['similarity_threshold'] = float(current_settings.get('similarity_threshold', FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']))
+        except (ValueError, TypeError):
+            current_settings['similarity_threshold'] = FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']
         
         return current_settings
 
@@ -1402,7 +1383,7 @@ class InternalAnalysisController:
             txt_to_update.weight = ft.FontWeight.BOLD if is_error else ft.FontWeight.NORMAL
             txt_to_update.update()
         
-    def _pdf_processing_thread_func(self, pdf_paths: List[str], batch_name: str, analyze_llm_after: bool):
+    def _pdf_processing_thread_func(self, pdf_paths: List[str], batch_name: str, analyze_llm_after: bool, is_reanalysis: bool = False):
         """
         Função executada em uma thread separada para realizar o processamento de PDF.
 
@@ -1449,7 +1430,7 @@ class InternalAnalysisController:
             calculated_embedding_cost_usd = 0
             if vectorization_model == "text-embedding-3-small":
                 if not decrypted_api_key: 
-                    decrypted_api_key = get_api_key_in_firestore(self.page, provider)
+                    decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
                     assert decrypted_api_key
 
                 loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
@@ -1474,13 +1455,9 @@ class InternalAnalysisController:
                 raise ValueError("Nenhum dado processável encontrado nos PDFs.")
             
             #print('\n[DEBUG]:\n', processed_page_data_combined, '\n\n')
-            self.page.session.set(KEY_SESSION_PDF_ANALYZER_DATA, processed_page_data_combined)           
-
             classified_data = self.pdf_analyzer.filter_and_classify_pages(processed_page_data_combined, all_global_page_keys_ordered,
                                                                           embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined,
                                                                           mode_main_filter, mode_filter_similar, similarity_threshold)
-            
-            self.page.session.set(KEY_SESSION_PDF_CLASSIFIED_INDICES_DATA, classified_data)
             
             relevant_ordered_indices, unintelligible_indices, count_similars = classified_data
             count_sel, count_unint = len(relevant_ordered_indices), len(unintelligible_indices)
@@ -1495,7 +1472,8 @@ class InternalAnalysisController:
 
             aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(processed_page_data_combined, relevant_ordered_indices, token_limit_pref)
             
-            self.page.session.set(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, aggregated_info)
+            self.parent_view.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = aggregated_info
+            self.page.session.set("has_analyzer_data", True)
             
             pages_agg_indices, _, tokens_antes_agg, tokens_final_agg = aggregated_info
             count_sel_final = len(pages_agg_indices)
@@ -1532,10 +1510,12 @@ class InternalAnalysisController:
 
             if analyze_llm_after:
                 self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
-                self.start_llm_analysis_only(aggregated_info[1], batch_name, from_pipeline=True) # Passa o texto agregado
+                self.start_llm_analysis_only(aggregated_info[1], batch_name, from_pipeline=True, is_reanalysis=is_reanalysis) # Passa o texto agregado
                 self.page.run_thread(self._update_status_callback, "", False, True)
             else: # Só processou, não vai para LLM agora
                 hide_loading_overlay(self.page)
+                # Se não vai para a LLM, a UI precisa ser atualizada agora com os resultados do processamento.
+                self.page.run_thread(self.parent_view._update_ui_from_state)
                 self.page.run_thread(show_snackbar, self.page, f"Conteúdo de '{batch_name}' processado. Pronto para análise LLM.", theme.COLOR_SUCCESS)
         
         except Exception as ex_proc:
@@ -1546,7 +1526,10 @@ class InternalAnalysisController:
             self.gui_controls[CTL_PROC_METADATA_PANEL].visible = True
             self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = True
             hide_loading_overlay(self.page)
-            self.page.run_thread(self.parent_view._update_button_states)
+            # Garante que, mesmo em erro, os botões sejam reavaliados.
+            # Se a análise não prosseguir para a LLM, a atualização da UI já foi feita no try.
+            if not analyze_llm_after:
+                self.page.run_thread(self.parent_view._update_button_states)
 
     def _get_data_to_log(self):
         user_id = self.page.session.get("auth_user_id")
@@ -1567,7 +1550,8 @@ class InternalAnalysisController:
         tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)    
         current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
         default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
-        llm_response_obj = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE)
+        
+        llm_response_obj = self.parent_view.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
 
         if llm_response_obj and isinstance(llm_response_obj, formatted_initial_analysis):
             fields_to_log = [
@@ -1582,7 +1566,7 @@ class InternalAnalysisController:
         return (user_id, user_token, filenames_uploaded, proc_meta_session, tokens_embeddings_session, llm_meta_session,
             current_settings, default_settings, llm_response_obj, fields_to_log)
     
-    def _llm_analysis_thread_func(self, aggregated_text: str, batch_name: str):
+    def _llm_analysis_thread_func(self, aggregated_text: str, batch_name: str, is_reanalysis: bool = False):
         """
         Função executada em uma thread separada para realizar a análise LLM.
 
@@ -1611,7 +1595,7 @@ class InternalAnalysisController:
             if decrypted_api_key:
                 _logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
             else:
-                decrypted_api_key = get_api_key_in_firestore(self.page, provider)
+                decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
                 assert decrypted_api_key
 
             loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
@@ -1621,13 +1605,13 @@ class InternalAnalysisController:
                                                                                                 decrypted_api_key, loaded_llm_providers)
 
             if llm_response_data:
-                self.page.session.set(KEY_SESSION_LLM_REANALYSIS, False)
-                if self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE):
-                    # Se já existe uma llm_response na sessão é porque é caso de reanálise (usuário clicou em 'Solicitar Análise' novamente).
-                    # Registrar essa informação para o feedback_metric
-                    self.page.session.set(KEY_SESSION_LLM_REANALYSIS, True)
+                # Se já existe uma llm_response na sessão é porque é caso de reanálise (usuário clicou em 'Solicitar Análise' novamente).
+                # Registrar essa informação para o feedback_metric
+                self.page.session.set(KEY_SESSION_LLM_REANALYSIS, is_reanalysis)
                 
-                self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE, llm_response_data)
+                self.parent_view.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = llm_response_data
+                self.page.session.set("has_llm_response", True)
+
                 self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, llm_response_data, True)
                 
                 llm_meta_for_gui = token_usage_info if token_usage_info else {} 
@@ -1636,34 +1620,33 @@ class InternalAnalysisController:
                     "llm_model_used": model_name.upper(),
                     "processing_time": format_seconds_to_min_sec(processing_time_llm)
                 }) 
-                    
-                self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_for_gui)
-                self.page.run_thread(self.parent_view._update_llm_metadata_display, llm_meta_for_gui)
-                self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
+                
                 self.parent_view._analysis_requested = True
+                self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_for_gui)
+                self.page.run_thread(self.parent_view._update_ui_from_state)
+                self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
                 self.page.run_thread(self._update_status_callback,  "", False, True)
 
                 data_to_log = self._get_data_to_log()
-                if firestore_client.save_analysis_metrics(*data_to_log):
+                if self.firestore_client.save_analysis_metrics(*data_to_log):
                     #Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
                     self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
 
             else:
-                self.page.run_thread(self.parent_view._show_info_balloon_or_result, True) # Mostra balão de novo
+                self.page.run_thread(self.parent_view._update_ui_from_state) # Atualiza a UI para mostrar o balão de falha
                 self.page.run_thread(self._update_status_callback,  "Análise LLM: Falha ao obter resposta da IA.", True, True)
-
                 self.page.run_thread(show_snackbar, self.page, "Erro na consulta à LLM.", theme.COLOR_ERROR)
                 self.parent_view._analysis_requested = False
         except Exception as ex_llm:
             _logger.error(f"Thread: Erro na análise LLM para '{batch_name}': {ex_llm}", exc_info=True)
-            self.page.run_thread(self.parent_view._show_info_balloon_or_result, True)
-            self.page.run_thread(self._update_status_callback,  f"Erro na consulta à LLM: {ex_llm}", True, True)
             self.parent_view._analysis_requested = False
+            self.page.run_thread(self.parent_view._update_ui_from_state) # Atualiza a UI para mostrar o balão de falha
+            self.page.run_thread(self._update_status_callback,  f"Erro na consulta à LLM: {ex_llm}", True, True)
         finally:
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
             self.gui_controls[CTL_LLM_METADATA_PANEL].controls[0].expanded = True
             hide_loading_overlay(self.page)
-            self.page.run_thread(self.parent_view._update_button_states)
+            # A atualização da GUI já foi tratada dentro do try/except, não precisa aqui.
 
     def start_pdf_processing_only(self, pdf_paths: List[str], batch_name: str):
         """
@@ -1672,17 +1655,11 @@ class InternalAnalysisController:
         Args:
             pdf_paths: Lista de caminhos para os arquivos PDF.
             batch_name: Nome do lote de arquivos.
-        """
-        #show_loading_overlay(self.page, f"Processando conteúdo de '{batch_name}'...")
-        # Limpa metadados anteriores de LLM e o resultado
-        self.parent_view._clear_llm_metadata_display()
-        self.parent_view._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
-        self.parent_view._show_info_balloon_or_result(show_balloon=True)
-        
+        """        
         thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, False), daemon=True)
         thread.start()
 
-    def start_llm_analysis_only(self, aggregated_text: str, batch_name: str, from_pipeline:bool = False):
+    def start_llm_analysis_only(self, aggregated_text: str, batch_name: str, from_pipeline:bool = False, is_reanalysis: bool = False):
         """
         Inicia a análise LLM em uma nova thread.
 
@@ -1694,10 +1671,10 @@ class InternalAnalysisController:
         if not from_pipeline: # Se chamado diretamente (não pelo pipeline do fast_forward)
             ...
         # A thread _llm_analysis_thread_func já lida com hide_loading_overlay no finally
-        thread = threading.Thread(target=self._llm_analysis_thread_func, args=(aggregated_text, batch_name), daemon=True)
+        thread = threading.Thread(target=self._llm_analysis_thread_func, args=(aggregated_text, batch_name, is_reanalysis), daemon=True)
         thread.start()
     
-    def start_full_analysis_pipeline(self, pdf_paths: List[str], batch_name: str):
+    def start_full_analysis_pipeline(self, pdf_paths: List[str], batch_name: str, is_reanalysis: bool = False):
         """
         Inicia o pipeline completo: processamento de PDF seguido por análise LLM.
 
@@ -1705,12 +1682,7 @@ class InternalAnalysisController:
             pdf_paths: Lista de caminhos para os arquivos PDF.
             batch_name: Nome do lote de arquivos.
         """
-        # Limpa metadados anteriores de LLM e o resultado
-        self.parent_view._clear_llm_metadata_display()
-        self.parent_view._remove_data_session(KEY_SESSION_PDF_LLM_RESPONSE)
-        self.parent_view._show_info_balloon_or_result(show_balloon=True)
-
-        thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, True), daemon=True)
+        thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, True, is_reanalysis), daemon=True)
         thread.start()
 
 class InternalExportManager:
@@ -2027,15 +1999,12 @@ class InternalExportManager:
             template_p = selected_action_data[len("export_template_"):]
         elif selected_action_data == "manage_templates": 
             self.handle_add_new_template_click()
-            self.parent_view._update_button_states()
             return
         else:
             _logger.warning(f"Ação de exportação desconhecida: {selected_action_data}")
-            self.parent_view._update_button_states()
             return
 
         if not operation: # Se a operação não foi definida (ex: manage_templates já retornou)
-            self.parent_view._update_button_states()
             return
             
         # A validação e obtenção dos dados, bem como o disparo do diálogo de feedback,
@@ -2043,7 +2012,6 @@ class InternalExportManager:
         # Se a validação em _trigger_feedback_and_export falhar (get_current_form_data retornar lista de erros),
         # a exportação não prosseguirá.
         self._trigger_feedback_and_export(operation, template_p) # Passa template_p
-        self.parent_view._update_button_states() # Garante que os botões estejam corretos após a ação
 
 class SettingsDrawerManager:
     """
@@ -2323,6 +2291,8 @@ class SettingsDrawerManager:
                         except ValueError: value = FALLBACK_ANALYSIS_SETTINGS[setting_key]
                 elif setting_key == "llm_temperature" and isinstance(control, ft.Slider):
                     value = float(control.value) / 10.0
+                elif setting_key == "similarity_threshold" and isinstance(control, ft.Slider):
+                    value = float(control.value) / 100.0
                 settings[setting_key] = value
         return settings
 
@@ -2460,6 +2430,8 @@ class LLMStructuredResultDisplay(ft.Column):
         # Listas de referência (carregadas uma vez)
         self.ufs_list = LISTA_UFS  # TODO: incluir atualização a partir do firestore
 
+        self.user_cache = get_user_cache(self.page)
+
     def _create_justificativa_icon(self, justificativa: Optional[str]) -> ft.IconButton:
         """
         Cria um ícone informativo com tooltip para exibir justificativas.
@@ -2542,8 +2514,8 @@ class LLMStructuredResultDisplay(ft.Column):
             _logger.warning("LLMStructuredResultDisplay.update_data: data_to_display_in_ui é None. Limpando display e snapshots.")
             self.original_llm_data_snapshot = None
             self.data = None
-            if self.page.session.contains_key(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK):
-                self.page.session.remove(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
+            
+            self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = None
             self.controls.clear()
             self.gui_fields.clear()
             if self.page and self.uid:
@@ -2557,12 +2529,12 @@ class LLMStructuredResultDisplay(ft.Column):
         if is_new_llm_response:
             # É uma resposta fresca da LLM, este é o nosso "original" definitivo.
             self.original_llm_data_snapshot = data_to_display_in_gui.model_copy(deep=True)
-            self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK, self.original_llm_data_snapshot)
+            self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = self.original_llm_data_snapshot
             _logger.info("Snapshot dos dados ORIGINAIS da LLM capturado e salvo na sessão (is_new_llm_response=True).")
         else:
             # Não é uma nova resposta LLM (ex: restauração de sessão, ou após edição do usuário).
             # Tentamos carregar o snapshot da sessão dedicada.
-            snapshot_from_session = self.page.session.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
+            snapshot_from_session = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
             if snapshot_from_session and isinstance(snapshot_from_session, formatted_initial_analysis):
                 self.original_llm_data_snapshot = snapshot_from_session
                 _logger.info("Snapshot original da LLM restaurado da sessão dedicada.")
@@ -2574,7 +2546,7 @@ class LLMStructuredResultDisplay(ft.Column):
                                 "Capturando snapshot com dados atuais da UI como base. O feedback pode ser impreciso se os dados já foram editados anteriormente e o snapshot original não foi salvo corretamente.")
                 # Opcional: Salvar este snapshot "tardio" na sessão dedicada também, para consistência na sessão atual,
                 # mas sabendo que pode não ser o "verdadeiro" original da LLM.
-                self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK, self.original_llm_data_snapshot)
+                self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = self.original_llm_data_snapshot
 
         # Limpa controles antigos e reconstrói a UI
         self.controls.clear()
@@ -2830,7 +2802,7 @@ class LLMStructuredResultDisplay(ft.Column):
             _logger.info("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
 
             # Atualiza também a sessão com a representação mais recente (objeto Pydantic)
-            self.page.session.set(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL, self.data)
+            self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL] = self.data
             _logger.info("KEY_SESSION_PDF_LLM_RESPONSE atualizado na sessão com os dados da UI.")
             return self.data
         except Exception as pydantic_error: # Use ValidationError de Pydantic se importado
@@ -3043,6 +3015,7 @@ class FeedbackWorkflowManager:
     def __init__(self, page: ft.Page, parent_view: 'AnalyzePDFViewContent'):
         self.page = page
         self.parent_view = parent_view # Referência à AnalyzePDFViewContent
+        self.firestore_client = FirebaseClientFirestore()
 
     def _prepare_and_show_feedback_dialog(
         self,
@@ -3124,7 +3097,7 @@ class FeedbackWorkflowManager:
             return
 
         # Só pede feedback se houver uma análise LLM anterior
-        if not self.page.session.contains_key(KEY_SESSION_PDF_LLM_RESPONSE):
+        if not self.parent_view.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE):
             _logger.info(f"FeedbackWorkflowManager: Nenhuma análise LLM anterior para '{action_context_name}'. Prosseguindo com ação primária.")
             primary_action_callable()
             return
@@ -3144,7 +3117,7 @@ class FeedbackWorkflowManager:
                         reanalysis_occurrence = False
                     related_batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "N/A"
 
-                    if firestore_client.save_feedback_data(user_id, user_token, collected_feedback_data, llm_metadata_session, reanalysis_occurrence, related_batch_name):
+                    if self.firestore_client.save_feedback_data(user_id, user_token, collected_feedback_data, llm_metadata_session, reanalysis_occurrence, related_batch_name):
                         self.page.session.set(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, True)
 
                 primary_action_callable()
@@ -3180,7 +3153,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
 
 # Funções acessórias:
 
-def get_api_key_in_firestore(page, provider):
+def get_api_key_in_firestore(page, provider, firestore_client):
     """
     Busca a chave de API criptografada para um provedor específico no Firestore
     e a descriptografa.
@@ -3311,4 +3284,4 @@ def get_field_type_for_feedback(field_name: str, gui_fields) -> str:
     elif gui_fields.get(field_name) and isinstance(gui_fields[field_name], ft.Dropdown):
         return "dropdown"
     # Adicionar outros tipos se necessário (radio, checkbox etc.)
-    return "textfield" # Default
+    return "textfield" # Defa
