@@ -10,8 +10,6 @@ import flet as ft
 from typing import List, Dict, Any, Optional, Callable, Type, Union, Tuple
 import os, shutil, time, threading
 
-from sympy import N
-
 from src.flet_ui import theme
 from src.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
 

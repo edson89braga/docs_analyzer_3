@@ -10,11 +10,8 @@ from typing import Optional, Dict, Any, List, Union, Tuple, Callable
 from time import time, sleep, perf_counter
 from datetime import datetime
 from enum import Enum
-
 #from pathlib import Path
 #from rich import print
-
-import src.core.ai_orchestrator as ai_orchestrator
 
 from src.flet_ui.components import (
     show_snackbar, show_loading_overlay, hide_loading_overlay,
@@ -22,7 +19,6 @@ from src.flet_ui.components import (
     CardWithHeader, show_confirmation_dialog 
 )
 from src.flet_ui import theme
-from src.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
 
 from src.services.firebase_client import FirebaseClientFirestore
 
@@ -34,18 +30,22 @@ from src.settings import (APP_VERSION , UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEM
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
                         get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l)
 
-from src.core.prompts import (
-    formatted_initial_analysis,
-    tipos_doc, origens_doc, tipos_locais,
-    areas_de_atribuição, tipos_a_autuar, assuntos_re,
-    lista_delegacias_especializadas, materias_prometheus, 
-    lista_delegacias_interior, lista_corregedorias
-)
-from src.core import prompts as core_prompts
+from src.core.prompts import formatted_initial_analysis
 
-destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
+# Removendo imports pesados daqui
+# import src.core.ai_orchestrator as ai_orchestrator
+# from src.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
+# from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
+# 
+# from src.core.prompts import (
+#     tipos_doc, origens_doc, tipos_locais,
+#     areas_de_atribuição, tipos_a_autuar, assuntos_re,
+#     lista_delegacias_especializadas, materias_prometheus, 
+#     lista_delegacias_interior, lista_corregedorias
+# )
+# destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
+# from src.core import prompts as core_prompts
 
-from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
@@ -143,6 +143,8 @@ class AnalyzePDFViewContent(ft.Column):
         self.managed_file_picker: Optional[ManagedFilePicker] = None
         self.global_file_picker_instance: Optional[ft.FilePicker] = None
 
+        from src.core.pdf_processor import PDFDocumentAnalyzer
+        from src.core.doc_generator import DocxExporter
         self.pdf_analyzer = PDFDocumentAnalyzer()
         self.docx_exporter = DocxExporter()
 
@@ -352,6 +354,7 @@ class AnalyzePDFViewContent(ft.Column):
 
     def _create_prompt_display_layout(self) -> ft.Container:
         """Cria o layout para exibir os prompts estruturados."""
+        from src.core import prompts as core_prompts
         _logger.info("Criando layout de visualização do prompt.")
 
         prompt_variables_to_display = [                       
@@ -1397,6 +1400,9 @@ class InternalAnalysisController:
             batch_name: Nome do lote de arquivos.
             analyze_llm_after: Se True, inicia a análise LLM após o processamento.
         """
+        import src.core.ai_orchestrator as ai_orchestrator 
+        from src.core.pdf_processor import PdfPlumberExtractor
+
         current_analysis_settings = self._get_current_analysis_settings()
         _logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
         pdf_extractor = current_analysis_settings.get("pdf_extractor", FALLBACK_ANALYSIS_SETTINGS["pdf_extractor"])
@@ -1579,6 +1585,8 @@ class InternalAnalysisController:
             aggregated_text: O texto agregado das páginas relevantes do PDF.
             batch_name: Nome do lote de arquivos.
         """
+        import src.core.ai_orchestrator as ai_orchestrator
+
         current_analysis_settings = self._get_current_analysis_settings()
         _logger.info(f"Usando configurações de análise para LLM: {current_analysis_settings}")
         provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
@@ -1697,6 +1705,7 @@ class InternalExportManager:
     Lida com a interação com o FilePicker para salvar arquivos e utiliza o DocxExporter
     para gerar os documentos nos formatos simples ou usando templates.
     """
+    from src.core.doc_generator import DocxExporter
     def __init__(self, parent_view: AnalyzePDFViewContent, docx_exporter: DocxExporter, global_file_picker: Optional[ft.FilePicker]):
         """
         Inicializa o gerenciador de exportação.
@@ -1908,6 +1917,8 @@ class InternalExportManager:
             original_filename: O nome original do arquivo.
             is_web_upload_temp: Indica se o arquivo de origem é um temporário de upload web.
         """
+        from src.core.doc_generator import TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
+
         templates_dir = os.path.join(ASSETS_DIR_ABS, DOCX_TEMPLATES_SUBDIR)
         os.makedirs(templates_dir, exist_ok=True)
         destination_path = os.path.join(templates_dir, original_filename)
@@ -2049,10 +2060,11 @@ class SettingsDrawerManager:
         loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
 
         # Seção Processamento
-        self.gui_controls_drawer["proc_extractor_dd"] = ft.Dropdown(label="Extrator de Texto PDF", options=[
-            ft.dropdown.Option("PyMuPdf-fitz", "PyMuPdf-fitz"),
-            ft.dropdown.Option("PdfPlumber", "PdfPlumber"),
-        ], value=current_analysis_settings.get("pdf_extractor"), width=default_width)
+        # self.gui_controls_drawer["proc_extractor_dd"] = ft.Dropdown(label="Extrator de Texto PDF", options=[
+        #     ft.dropdown.Option("PyMuPdf-fitz", "PyMuPdf-fitz"),
+        #     ft.dropdown.Option("PdfPlumber", "PdfPlumber"),
+        # ], value=current_analysis_settings.get("pdf_extractor"), width=default_width)
+        
         self.gui_controls_drawer["proc_vectorization_dd"]  = ft.Dropdown(label="Modelo de Vetorização", options=[
             ft.dropdown.Option("tfidf_vectorizer", "TF-IDF Vectorizer"),
             ft.dropdown.Option("all-MiniLM-L6-v2", "all-MiniLM-L6-v2"),
@@ -2067,18 +2079,18 @@ class SettingsDrawerManager:
             divisions=100, expand=True, label="{value}",
         )
         
-        self.gui_controls_drawer["lang_detector_dd"] = ft.Dropdown(
-            label="Detector de Idioma", options=[ft.dropdown.Option("langdetect", "langdetect")],
-            value=current_analysis_settings.get("language_detector"), width=default_width
-        )
-        self.gui_controls_drawer["token_counter_dd"] = ft.Dropdown(
-            label="Contador de Tokens", options=[ft.dropdown.Option("tiktoken", "tiktoken")],
-            value=current_analysis_settings.get("token_counter"), width=default_width
-        )
-        self.gui_controls_drawer["tfidf_analyzer_dd"] = ft.Dropdown(
-            label="Analisador TF-IDF", options=[ft.dropdown.Option("sklearn", "sklearn")],
-            value=current_analysis_settings.get("tfidf_analyzer"), width=default_width
-        )
+        # self.gui_controls_drawer["lang_detector_dd"] = ft.Dropdown(
+        #     label="Detector de Idioma", options=[ft.dropdown.Option("langdetect", "langdetect")],
+        #     value=current_analysis_settings.get("language_detector"), width=default_width
+        # )
+        # self.gui_controls_drawer["token_counter_dd"] = ft.Dropdown(
+        #     label="Contador de Tokens", options=[ft.dropdown.Option("tiktoken", "tiktoken")],
+        #     value=current_analysis_settings.get("token_counter"), width=default_width
+        # )
+        # self.gui_controls_drawer["tfidf_analyzer_dd"] = ft.Dropdown(
+        #     label="Analisador TF-IDF", options=[ft.dropdown.Option("sklearn", "sklearn")],
+        #     value=current_analysis_settings.get("tfidf_analyzer"), width=default_width
+        # )
 
         # Seção LLM
         provider_options_drawer = [
@@ -2095,10 +2107,10 @@ class SettingsDrawerManager:
             label="Limite Tokens Input", value=str(current_analysis_settings.get("llm_input_token_limit")),
             input_filter=ft.InputFilter(r"[0-9]"), width=default_width
         )
-        self.gui_controls_drawer["llm_output_format_dd"] = ft.Dropdown(
-            label="Formato de Saída", options=[ft.dropdown.Option("Padrão", "Padrão")],
-            value=current_analysis_settings.get("llm_output_format"), width=default_width
-        )
+        # self.gui_controls_drawer["llm_output_format_dd"] = ft.Dropdown(
+        #     label="Formato de Saída", options=[ft.dropdown.Option("Padrão", "Padrão")],
+        #     value=current_analysis_settings.get("llm_output_format"), width=default_width
+        # )
         self.gui_controls_drawer["llm_max_output_length_tf"] = ft.TextField(
             label="Comprimento Max. Saída", value=str(current_analysis_settings.get("llm_max_output_length")),
             input_filter=ft.InputFilter(r"[0-9]*"),
@@ -2134,30 +2146,30 @@ class SettingsDrawerManager:
                 ft.Text("Configurações específicas", style=ft.TextThemeStyle.TITLE_LARGE),
                 ft.Divider(),
                 ft.Text("Processamento de Documento", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                self.gui_controls_drawer["proc_extractor_dd"],
+                #self.gui_controls_drawer["proc_extractor_dd"],
                 self.gui_controls_drawer["proc_vectorization_dd"],
                 ft.Column([
                     ft.Text("Limiar de similaridade", style=ft.TextThemeStyle.LABEL_MEDIUM),
                     ft.Row([self.gui_controls_drawer["similarity_threshold_slider"],self.gui_controls_drawer["similarity_threshold_value_label"]],
                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN)],
                     width=default_width, spacing=1),
-                self.gui_controls_drawer["lang_detector_dd"],
-                self.gui_controls_drawer["token_counter_dd"],
-                self.gui_controls_drawer["tfidf_analyzer_dd"],
+                #self.gui_controls_drawer["lang_detector_dd"],
+                #self.gui_controls_drawer["token_counter_dd"],
+                #self.gui_controls_drawer["tfidf_analyzer_dd"],
                 ft.Divider(),
                 ft.Text("Modelo de Linguagem (LLM)", style=ft.TextThemeStyle.TITLE_MEDIUM),
                 self.gui_controls_drawer["llm_provider_dd"],
                 self.gui_controls_drawer["llm_model_dd"],
                 self.gui_controls_drawer["llm_token_limit_tf"],
+                self.gui_controls_drawer["llm_max_output_length_tf"],
                 ft.Column([
                     ft.Text("Temperatura de resposta", style=ft.TextThemeStyle.LABEL_MEDIUM),
                     ft.Row([self.gui_controls_drawer["temperature_slider"],self.gui_controls_drawer["temperature_value_label"]],
                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN)],
                     width=default_width, spacing=1),
-                self.gui_controls_drawer["llm_output_format_dd"],
-                self.gui_controls_drawer["llm_max_output_length_tf"],
-                ft.Dropdown(label="Configurações Avançadas", options=[ft.dropdown.Option("indisponivel", "Indisponível")],
-                            value="indisponivel", disabled=True, width=default_width),
+                #self.gui_controls_drawer["llm_output_format_dd"],
+                # ft.Dropdown(label="Configurações Avançadas", options=[ft.dropdown.Option("indisponivel", "Indisponível")],
+                #             value="indisponivel", disabled=True, width=default_width),
                 ft.Divider(),
                 ft.Text("Estrutura do Prompt", style=ft.TextThemeStyle.TITLE_MEDIUM),
                 self.gui_controls_drawer["prompt_structure_rg"],
@@ -2175,9 +2187,9 @@ class SettingsDrawerManager:
         """Configura os handlers de eventos para os controles dentro do drawer."""
         _logger.info("SettingsDrawerManager: Configurando handlers de eventos.")
         controls_to_watch = [
-            "proc_extractor_dd" ,"proc_vectorization_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider", 
+            "proc_vectorization_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider", 
             "prompt_structure_rg", "similarity_threshold_slider"
-            # "llm_output_format_dd", "llm_max_output_length_tf", 
+            # "llm_output_format_dd", "llm_max_output_length_tf", "proc_extractor_dd"
         ]
         for key in controls_to_watch:
             if key in self.gui_controls_drawer:
@@ -2268,15 +2280,15 @@ class SettingsDrawerManager:
         """
         settings = {}
         key_map = {
-            "proc_extractor_dd": "pdf_extractor",
+            #"proc_extractor_dd": "pdf_extractor",
             "proc_vectorization_dd": "vectorization_model",
-            "lang_detector_dd": "language_detector",
-            "token_counter_dd": "token_counter",
-            "tfidf_analyzer_dd": "tfidf_analyzer",
+            #"lang_detector_dd": "language_detector",
+            #"token_counter_dd": "token_counter",
+            #"tfidf_analyzer_dd": "tfidf_analyzer",
             "llm_provider_dd": "llm_provider",
             "llm_model_dd": "llm_model",
             "llm_token_limit_tf": "llm_input_token_limit",
-            "llm_output_format_dd": "llm_output_format",
+            #"llm_output_format_dd": "llm_output_format",
             "llm_max_output_length_tf": "llm_max_output_length",
             "temperature_slider": "llm_temperature", # O valor do slider será convertido
             "similarity_threshold_slider": "similarity_threshold", # 
@@ -2325,13 +2337,13 @@ class SettingsDrawerManager:
             settings_to_load.get("llm_model")
         )
         control_map = {
-            "pdf_extractor": self.gui_controls_drawer.get("proc_extractor_dd"),
+            #"pdf_extractor": self.gui_controls_drawer.get("proc_extractor_dd"),
             "vectorization_model": self.gui_controls_drawer.get("proc_vectorization_dd"),
-            "language_detector": self.gui_controls_drawer.get("lang_detector_dd"),
-            "token_counter": self.gui_controls_drawer.get("token_counter_dd"),
-            "tfidf_analyzer": self.gui_controls_drawer.get("tfidf_analyzer_dd"),
+            #"language_detector": self.gui_controls_drawer.get("lang_detector_dd"),
+            #"token_counter": self.gui_controls_drawer.get("token_counter_dd"),
+            #"tfidf_analyzer": self.gui_controls_drawer.get("tfidf_analyzer_dd"),
             "llm_input_token_limit": self.gui_controls_drawer.get("llm_token_limit_tf"),
-            "llm_output_format": self.gui_controls_drawer.get("llm_output_format_dd"),
+            #"llm_output_format": self.gui_controls_drawer.get("llm_output_format_dd"),
             "llm_max_output_length": self.gui_controls_drawer.get("llm_max_output_length_tf"),
             "llm_temperature": self.gui_controls_drawer.get("temperature_slider"),
             "similarity_threshold": self.gui_controls_drawer.get("similarity_threshold_slider"),
@@ -2513,6 +2525,15 @@ class LLMStructuredResultDisplay(ft.Column):
             is_new_llm_response: True se data_to_display_in_ui é uma resposta fresca da LLM,
                                  False caso contrário (ex: restauração de sessão).
         """
+        from src.core.prompts import (
+            formatted_initial_analysis,
+            tipos_doc, origens_doc, tipos_locais,
+            areas_de_atribuição, tipos_a_autuar, assuntos_re,
+            lista_delegacias_especializadas, materias_prometheus, 
+            lista_delegacias_interior, lista_corregedorias
+        )
+        destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
+
         # data aqui é o objeto FormatAnaliseInicial como recebido (após parsing inicial da resposta da LLM)
         _logger.info(f"LLMStructuredResultDisplay.update_data chamado. is_new_llm_response={is_new_llm_response}, data_is_none={data_to_display_in_gui is None}")
         

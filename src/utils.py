@@ -4,14 +4,14 @@ print(f"{start_time:.4f}s - Iniciando utils.py")
 
 import os, keyring, logging, re
 from rich import print
-from typing import Union, Optional, List
+from typing import Union, Optional, Any
 
 #from src.logger.logger import LoggerSetup
 #logger = LoggerSetup.get_logger(__name__)
 logger = logging.getLogger(__name__)
 
-from src.settings import (PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT, K_PROXY_ENABLED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, 
-                            K_PROXY_PASSWORD, K_PROXY_PASSWORD_SAVED, ASSETS_DIR_ABS)
+from src.settings import (K_PROXY_ENABLED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, 
+                            K_PROXY_PASSWORD_SAVED, ASSETS_DIR_ABS)
 
 import functools, urllib, ssl
 def with_proxy(skip_ssl_verify: bool = True):
@@ -165,10 +165,34 @@ def with_proxy(skip_ssl_verify: bool = True):
         return wrapper
     return decorator    # @with_proxy(skip_ssl_verify=False)
 
+# 1. Declarar variáveis globais para os módulos pesados.
+_utils_initialized = False
+_requests: Optional[Any] = None
+_tiktoken: Optional[Any] = None
+_rouge_scorer: Optional[Any] = None
+
+def _initialize_heavy_utils():
+    """
+    Função de inicialização tardia. Carrega módulos pesados apenas uma vez, quando necessário.
+    """
+    global _utils_initialized, _tiktoken, _rouge_scorer, _requests
+    if _utils_initialized:
+        return
+
+    # 2. Realizar todas as importações pesadas aqui.
+    import requests
+    import tiktoken
+    from rouge_score import rouge_scorer as scorer
+
+    _tiktoken = tiktoken
+    _rouge_scorer = scorer
+    _requests = requests
+    
+    _utils_initialized = True
+    logger.debug("Utilitários pesados (tiktoken, rouge, etc.) foram inicializados.")
+
 ### ========================================================================================================
-import requests, tiktoken
 import collections.abc
-from unidecode import unidecode
 from time import time
 from rich.console import Console
 from rich.table import Table
@@ -207,12 +231,13 @@ def count_tokens(text: str, model_name: str = "gpt-3.5-turbo") -> int:
     Returns:
         int: O número de tokens.
     """
+    _initialize_heavy_utils()
     try:
-        encoding = tiktoken.encoding_for_model(model_name)
+        encoding = _tiktoken.encoding_for_model(model_name)
     except KeyError:
         # Se o modelo não for encontrado, usar um encoding padrão como cl100k_base
         # print(f"Aviso: Modelo '{model_name}' não encontrado para tiktoken. Usando 'cl100k_base'.") # Opcional
-        encoding = tiktoken.get_encoding("cl100k_base")
+        encoding = _tiktoken.get_encoding("cl100k_base")
     
     # O método encode não aceita 'verbose' ou 'add_special_tokens'.
     # Para controlar tokens especiais, você usaria:
@@ -237,16 +262,17 @@ def reduce_text_to_limit(text_full: str, token_limit: int, model_name: str = "gp
         str: Texto reduzido que (aproximadamente) cabe no limite de tokens,
              ou o texto original se já estiver dentro do limite.
     """
+    _initialize_heavy_utils()
     if not text_full or token_limit <= 0:
         return ""
 
     try:
         # Obter o codificador para o modelo especificado
-        encoding = tiktoken.encoding_for_model(model_name)
+        encoding = _tiktoken.encoding_for_model(model_name)
     except KeyError:
         # Fallback para um encoding comum se o modelo não for encontrado
         # print(f"Aviso: Modelo '{model_name}' não encontrado para tiktoken. Usando 'cl100k_base' para reduce_text_to_limit.") # Opcional
-        encoding = tiktoken.get_encoding("cl100k_base")
+        encoding = _tiktoken.get_encoding("cl100k_base")
     
     # 1. Codificar o texto completo em tokens
     # Os parâmetros verbose e add_special_tokens não são usados aqui.
@@ -346,8 +372,9 @@ def get_string_intervalos(numeros, incrementa_1=False):
 @timing_decorator()
 def get_uf_list():
     # Função para buscar UFs
+    _initialize_heavy_utils()
     url = "https://brasilapi.com.br/api/ibge/uf/v1"
-    response = requests.get(url)
+    response = _requests.get(url)
     if response.status_code == 200:
         return [uf['sigla'] for uf in response.json()]
     else:
@@ -356,8 +383,9 @@ def get_uf_list():
 @timing_decorator()
 def get_municipios_by_uf(uf):
     # Função para buscar municípios por UF
+    _initialize_heavy_utils()
     url = f"https://brasilapi.com.br/api/ibge/municipios/v1/{uf}"
-    response = requests.get(url)
+    response = _requests.get(url)
     if response.status_code == 200:
         return [municipio['nome'] for municipio in response.json()]
     else:
@@ -471,41 +499,6 @@ def clean_and_convert_to_float(value_str: Union[str, float, int, None], default_
     except ValueError:
         return default_if_empty_or_error
 
-ESTADO_PARA_SIGLA = {
-    unidecode("acre").lower(): "AC",
-    unidecode("alagoas").lower(): "AL",
-    unidecode("amapa").lower(): "AP",
-    unidecode("amazonas").lower(): "AM",
-    unidecode("bahia").lower(): "BA",
-    unidecode("ceara").lower(): "CE",
-    unidecode("distrito federal").lower(): "DF",
-    unidecode("espirito santo").lower(): "ES",
-    unidecode("goias").lower(): "GO",
-    unidecode("maranhao").lower(): "MA",
-    unidecode("mato grosso").lower(): "MT",
-    unidecode("mato grosso do sul").lower(): "MS",
-    unidecode("minas gerais").lower(): "MG",
-    unidecode("para").lower(): "PA",
-    unidecode("paraiba").lower(): "PB",
-    unidecode("parana").lower(): "PR",
-    unidecode("pernambuco").lower(): "PE",
-    unidecode("piaui").lower(): "PI",
-    unidecode("rio de janeiro").lower(): "RJ",
-    unidecode("rio grande do norte").lower(): "RN",
-    unidecode("rio grande do sul").lower(): "RS",
-    unidecode("rondonia").lower(): "RO",
-    unidecode("roraima").lower(): "RR",
-    unidecode("santa catarina").lower(): "SC",
-    unidecode("sao paulo").lower(): "SP",
-    unidecode("sergipe").lower(): "SE",
-    unidecode("tocantins").lower(): "TO",
-    # Adicionar siglas diretamente também, para o caso da LLM retornar a sigla
-    "ac": "AC", "al": "AL", "ap": "AP", "am": "AM", "ba": "BA", "ce": "CE", "df": "DF", "es": "ES",
-    "go": "GO", "ma": "MA", "mt": "MT", "ms": "MS", "mg": "MG", "pa": "PA", "pb": "PB", "pr": "PR",
-    "pe": "PE", "pi": "PI", "rj": "RJ", "rn": "RN", "rs": "RS", "ro": "RO", "rr": "RR", "sc": "SC",
-    "sp": "SP", "se": "SE", "to": "TO"
-}
-
 def get_sigla_uf(nome_estado_ou_sigla: Optional[str]) -> Optional[str]:
     """
     Converte um nome de estado (ou sigla) para sua sigla UF normalizada.
@@ -514,7 +507,45 @@ def get_sigla_uf(nome_estado_ou_sigla: Optional[str]) -> Optional[str]:
     if not nome_estado_ou_sigla or not isinstance(nome_estado_ou_sigla, str):
         return None
     
-    normalizado = unidecode(nome_estado_ou_sigla.strip()).lower()
+    _initialize_heavy_utils()
+    from unidecode import unidecode as unidecoder
+
+    ESTADO_PARA_SIGLA = {
+        unidecoder("acre").lower(): "AC",
+        unidecoder("alagoas").lower(): "AL",
+        unidecoder("amapa").lower(): "AP",
+        unidecoder("amazonas").lower(): "AM",
+        unidecoder("bahia").lower(): "BA",
+        unidecoder("ceara").lower(): "CE",
+        unidecoder("distrito federal").lower(): "DF",
+        unidecoder("espirito santo").lower(): "ES",
+        unidecoder("goias").lower(): "GO",
+        unidecoder("maranhao").lower(): "MA",
+        unidecoder("mato grosso").lower(): "MT",
+        unidecoder("mato grosso do sul").lower(): "MS",
+        unidecoder("minas gerais").lower(): "MG",
+        unidecoder("para").lower(): "PA",
+        unidecoder("paraiba").lower(): "PB",
+        unidecoder("parana").lower(): "PR",
+        unidecoder("pernambuco").lower(): "PE",
+        unidecoder("piaui").lower(): "PI",
+        unidecoder("rio de janeiro").lower(): "RJ",
+        unidecoder("rio grande do norte").lower(): "RN",
+        unidecoder("rio grande do sul").lower(): "RS",
+        unidecoder("rondonia").lower(): "RO",
+        unidecoder("roraima").lower(): "RR",
+        unidecoder("santa catarina").lower(): "SC",
+        unidecoder("sao paulo").lower(): "SP",
+        unidecoder("sergipe").lower(): "SE",
+        unidecoder("tocantins").lower(): "TO",
+        # Adicionar siglas diretamente também, para o caso da LLM retornar a sigla
+        "ac": "AC", "al": "AL", "ap": "AP", "am": "AM", "ba": "BA", "ce": "CE", "df": "DF", "es": "ES",
+        "go": "GO", "ma": "MA", "mt": "MT", "ms": "MS", "mg": "MG", "pa": "PA", "pb": "PB", "pr": "PR",
+        "pe": "PE", "pi": "PI", "rj": "RJ", "rn": "RN", "rs": "RS", "ro": "RO", "rr": "RR", "sc": "SC",
+        "sp": "SP", "se": "SE", "to": "TO"
+    }
+    
+    normalizado = unidecoder(nome_estado_ou_sigla.strip()).lower()
     return ESTADO_PARA_SIGLA.get(normalizado)
 
 
@@ -547,11 +578,13 @@ def obter_string_normalizada_em_lista(string_atual, lista_opções):
     :return: String correspondente da lista ou None se não encontrar
     """
     # Normaliza o nome do município a ser buscado
-    nome_normalizado = unidecode(string_atual.lower())
+    _initialize_heavy_utils()
+    from unidecode import unidecode as unidecoder
+    nome_normalizado = unidecoder(string_atual.lower())
 
     for item in lista_opções:
         # Normaliza cada município na lista:
-        item_normalizado = unidecode(item.lower())
+        item_normalizado = unidecoder(item.lower())
         # Compara os municípios normalizados:
         if nome_normalizado == item_normalizado:
             return item  # Retorna o município correspondente
@@ -560,7 +593,6 @@ def obter_string_normalizada_em_lista(string_atual, lista_opções):
 
 ### ========================================================================================================
 
-import unicodedata, re
 def normalize_key(text: str) -> str:
     """
     Normaliza uma string para ser usada como chave:
@@ -569,6 +601,9 @@ def normalize_key(text: str) -> str:
     - Substitui espaços e caracteres não alfanuméricos por underscore.
     - Remove underscores duplicados.
     """
+    _initialize_heavy_utils()
+    import unicodedata
+
     if not isinstance(text, str):
         text = str(text)
     # Converte para minúsculas
@@ -666,7 +701,6 @@ def format_seconds_to_min_sec(total_segundos):
     segundos = int(total_segundos) % 60
     return f"{minutos:02d}m:{segundos:02d}s"
 
-from rouge_score import rouge_scorer
 def calcular_similaridade_rouge_l(texto_original: str, texto_editado: str) -> float:
     """
     Calcula a similaridade ROUGE-L F-score entre dois textos.
@@ -680,6 +714,7 @@ def calcular_similaridade_rouge_l(texto_original: str, texto_editado: str) -> fl
                Retorna 1.0 se ambos os textos forem vazios/nulos.
                Retorna 0.0 se um for vazio/nulo e o outro não.
     """
+    _initialize_heavy_utils()
     original_strip = texto_original.strip() if isinstance(texto_original, str) else ""
     editado_strip = texto_editado.strip() if isinstance(texto_editado, str) else ""
 
@@ -692,7 +727,7 @@ def calcular_similaridade_rouge_l(texto_original: str, texto_editado: str) -> fl
 
     try:
         # Se `use_stemmer=True` for problemático para português, remova-o ou use um tokenizer específico.
-        scorer = rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True) 
+        scorer = _rouge_scorer.RougeScorer(['rougeL'], use_stemmer=True) 
         scores = scorer.score(original_strip, editado_strip)
         fmeasure = scores['rougeL'].fmeasure
         

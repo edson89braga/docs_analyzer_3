@@ -8,10 +8,8 @@ from time import perf_counter
 start_time = perf_counter()
 print(f"{start_time:.4f}s - Iniciando ai_orchestrator.py")
 
-import os, json
-from time import time, sleep, perf_counter
+import os
 from typing import Optional, Dict, Any, List, Tuple, Union
-from huggingface_hub import get_token
 from openai import OpenAI, AuthenticationError, APIError # Para tratamento específico de erros OpenAI
 
 # LangChain Imports
@@ -26,8 +24,8 @@ from langchain_community.callbacks.manager import get_openai_callback
 from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 
 from src.utils import timing_decorator
-from src.core.prompts import (prompts, output_formats, review_function, normalizing_function, prompt_inicial_para_cache,
-                                formatted_initial_analysis, try_convert_to_pydantic_format, merge_parts_into_model, return_parse_prompt)
+from src.core.prompts import (prompts, output_formats, review_function, normalizing_function,
+                                formatted_initial_analysis, try_convert_to_pydantic_format, return_parse_prompt)
 
 # Configuração do Logger
 # (Assume que LoggerSetup já foi inicializado em run.py)

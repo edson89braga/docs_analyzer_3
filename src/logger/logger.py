@@ -3,7 +3,7 @@ start_time = perf_counter()
 print(f"{start_time:.4f}s - Iniciando logger.py")
 
 import os, shutil, logging, re
-from time import time, sleep
+from time import sleep
 
 from pathlib import Path
 from logging.handlers import RotatingFileHandler

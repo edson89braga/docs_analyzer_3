@@ -5,7 +5,6 @@ start_time = perf_counter()
 print(f"{start_time:.4f}s - Iniciando router.py")
 
 import flet as ft
-import re
 from typing import Optional, Dict, Callable, Any
 from pathlib import Path
 

@@ -4,7 +4,7 @@ print(f"{start_time:.4f}s - Iniciando cloud_logger_handler.py")
 
 import logging, atexit, os, re
 from threading import Thread, Lock, Event
-from typing import Any, List, Optional
+from typing import List, Optional
 from datetime import datetime
 from pathlib import Path
 from time import sleep
