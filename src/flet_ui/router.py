@@ -5,6 +5,7 @@ start_time = perf_counter()
 print(f"{start_time:.4f}s - Iniciando router.py")
 
 import flet as ft
+import threading
 from typing import Optional, Dict, Callable, Any
 from pathlib import Path
 
@@ -12,69 +13,53 @@ from src.settings import UPLOAD_TEMP_DIR
 
 from .theme import COLOR_WARNING, COLOR_ERROR, PADDING_L 
 from .layout import create_app_bar, _find_nav_index_for_route, icones_navegacao
-from .components import show_snackbar
-
-from .views.login_view import create_login_view
-from .views.signup_view import create_signup_view 
-from .views.home_view import create_home_view2
-from .views.profile_view import create_profile_view
-from .views.proxy_settings_view import create_proxy_settings_content
-from .views.llm_settings_view import create_llm_settings_view
-from .views.nc_analyze_view import create_analyze_pdf_content
-from .views.others_view import create_chat_pdf_content
 
 from src.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
 
+#from .views.login_view import create_login_view
+#from .views.signup_view import create_signup_view 
+#from .views.home_view import create_home_view2
+#from .views.profile_view import create_profile_view
+#from .views.proxy_settings_view import create_proxy_settings_content
+#from .views.llm_settings_view import create_llm_settings_view
+#from .views.nc_analyze_view import create_analyze_pdf_content
+#from .views.others_view import create_chat_pdf_content
 
-def create_placeholder_content(page: ft.Page, module_name: str) -> ft.Control:
-    logger.info(f"Acessando conteúdo placeholder para: {module_name}")
-    show_snackbar(
-        page,
-        f"{module_name}: Módulo ainda não programado.",
-        color=COLOR_WARNING,
-        duration=3000
-    )
-    return ft.Column( # Retorna um Column para consistência com outras content_creators
-        [
-            ft.Text(f"{module_name}", style=ft.TextThemeStyle.HEADLINE_MEDIUM),
-            ft.Text("Esta funcionalidade será implementada em versões futuras."),
-            ft.Icon(ft.icons.CONSTRUCTION, size=50, opacity=0.5)
-        ],
-        alignment=ft.MainAxisAlignment.CENTER,
-        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        expand=True,
-        spacing=20
-    )
+## Mapeamento de rotas para funções que criam o *conteúdo* (não a View inteira)
+## route_content_mapping
+#_content_creators = {
+#    "/login": create_login_view,
+#    "/signup": create_signup_view, 
+#    "/home": create_home_view2,
+#    "/profile": create_profile_view,
+#    "/settings/proxy": create_proxy_settings_content,
+#    "/settings/llm": create_llm_settings_view,
+#    "/analyze_pdf": create_analyze_pdf_content, 
+#    "/chat_pdf": create_chat_pdf_content, 
+#    "/knowledge_base": create_knowledge_base_content,    
+#    "/wiki_rotinas": create_wiki_rotinas_content,
+#    "/correicao_processos": create_correicao_processos_content,
+#    "/roteiro_investigacoes": create_roteiro_investigacoes_content,
+#}
+_content_creators = {}
 
-def create_knowledge_base_content(page: ft.Page) -> ft.Control:
-    return create_placeholder_content(page, "Banco de Pareceres")
-
-def create_wiki_rotinas_content(page: ft.Page) -> ft.Control:
-    return create_placeholder_content(page, "Wiki PF - Rotinas")
-
-def create_correicao_processos_content(page: ft.Page) -> ft.Control:
-    return create_placeholder_content(page, "Correição de Flagrantes e IPLs")
-
-def create_roteiro_investigacoes_content(page: ft.Page) -> ft.Control:
-    return create_placeholder_content(page, "Roteiros de Investigações")
-
-# Mapeamento de rotas para funções que criam o *conteúdo* (não a View inteira)
-# route_content_mapping
-_content_creators = {
-    "/login": create_login_view,
-    "/signup": create_signup_view, 
-    "/home": create_home_view2,
-    "/profile": create_profile_view,
-    "/settings/proxy": create_proxy_settings_content,
-    "/settings/llm": create_llm_settings_view,
-    "/analyze_pdf": create_analyze_pdf_content, 
-    "/chat_pdf": create_chat_pdf_content, 
-    "/knowledge_base": create_knowledge_base_content,    
-    "/wiki_rotinas": create_wiki_rotinas_content,
-    "/correicao_processos": create_correicao_processos_content,
-    "/roteiro_investigacoes": create_roteiro_investigacoes_content,
+# Em vez disso, vamos mapear as rotas para o CAMINHO do módulo e o NOME da função.
+_view_module_map = {
+    "/login": ("src.flet_ui.views.login_view", "create_login_view"),
+    "/signup": ("src.flet_ui.views.signup_view", "create_signup_view"),
+    "/home": ("src.flet_ui.views.home_view", "create_home_view2"),
+    "/profile": ("src.flet_ui.views.profile_view", "create_profile_view"),
+    "/settings/proxy": ("src.flet_ui.views.proxy_settings_view", "create_proxy_settings_content"),
+    "/settings/llm": ("src.flet_ui.views.llm_settings_view", "create_llm_settings_view"),
+    "/analyze_pdf": ("src.flet_ui.views.nc_analyze_view", "create_analyze_pdf_content"),
+    "/chat_pdf": ("src.flet_ui.views.others_view", "create_chat_pdf_content"),
+    "/knowledge_base": ("src.flet_ui.views.others_view", "create_knowledge_base_content"),
+    "/wiki_rotinas": ("src.flet_ui.views.others_view", "create_wiki_rotinas_content"),
+    "/correicao_processos": ("src.flet_ui.views.others_view", "create_correicao_processos_content"),
+    "/roteiro_investigacoes": ("src.flet_ui.views.others_view", "create_roteiro_investigacoes_content"),
 }
+
 
 # Mapeamento para rotas parametrizadas (se houver)
 _parameterized_content_creators: Dict[str, Callable[[ft.Page, Any], Any]] = {
@@ -187,7 +172,7 @@ def app_router(page: ft.Page, route: str):
     
     page.update()
 
-def route_change_content_only(
+def OLD_route_change_content_only(
     page: ft.Page,
     app_bar: ft.AppBar,
     navigation_rail: ft.NavigationRail,
@@ -287,6 +272,133 @@ def route_change_content_only(
 
     page.update() # Atualiza a página inteira com a nova estrutura e conteúdo
 
+def route_change_content_only(
+    page: ft.Page,
+    app_bar: ft.AppBar,
+    navigation_rail: ft.NavigationRail,
+    content_container_for_main_layout: ft.Container,
+    route: str
+):
+    """
+    Gerencia a navegação com carregamento assíncrono de conteúdo.
+
+    Esta função atualiza a UI imediatamente com um indicador de progresso e,
+    em uma thread de background, carrega o módulo da view e suas dependências.
+    Quando o conteúdo real está pronto, ele substitui o indicador.
+    """
+    logger.info(f"Router (content_only): Navegando para rota '{route}'")
+
+    # --- 1. Validações e Redirecionamento ---
+    upload_dir_base_url_path = f"/{Path(UPLOAD_TEMP_DIR).name}/"
+    if route.startswith(upload_dir_base_url_path):
+        logger.info(f"Router: Rota de arquivo '{route}'. Deixando Flet servir o arquivo.")
+        return
+
+    authenticated = is_user_authenticated(page)
+    if not authenticated and route not in PUBLIC_ROUTES:
+        logger.warning(f"Usuário não autenticado tentando acessar '{route}'. Redirecionando para /login.")
+        page.go("/login")
+        return
+    if authenticated and route in PUBLIC_ROUTES:
+        logger.info(f"Usuário já autenticado na página '{route}'. Redirecionando para /home.")
+        page.go("/home")
+        return
+
+    # Obtém o lock global. Se não existir, a operação não será protegida.
+    update_lock = page.data.get("global_update_lock")
+
+    def _execute_ui_update(update_callable: Callable):
+        """Função auxiliar para executar atualizações de UI de forma segura com lock."""
+        if update_lock:
+            with update_lock:
+                update_callable()
+                page.update()
+        else:
+            # Fallback se o lock não for encontrado
+            update_callable()
+            page.update()
+
+    # --- 2. Atualização Imediata da Estrutura da UI ---
+    def _setup_layout_and_placeholder():
+        page.controls.clear()
+        placeholder = ft.Column(
+            [ft.ProgressRing(), ft.Container(height=10), ft.Text("1º Carregamento...", style=ft.TextThemeStyle.BODY_LARGE)],
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True
+        )
+
+        if route in ROUTES_WITHOUT_NAV_RAIL:
+            page.appbar = None
+            page.add(placeholder)
+        else:
+            page.appbar = app_bar
+            page.appbar.visible = True
+            navigation_rail.visible = True
+            current_nav_index = _find_nav_index_for_route(route)
+            if navigation_rail.selected_index != current_nav_index:
+                navigation_rail.selected_index = current_nav_index
+            
+            content_container_for_main_layout.content = placeholder
+            content_container_for_main_layout.padding = 0  # Centraliza o placeholder
+            
+            page.add(
+                ft.Row(
+                    [navigation_rail, ft.VerticalDivider(width=1), content_container_for_main_layout],
+                    expand=True
+                )
+            )
+
+    _execute_ui_update(_setup_layout_and_placeholder)
+
+    # --- 3. Carregamento do Conteúdo Real em Background ---
+    def _load_and_set_view(page_ref: ft.Page, target_route: str):
+        logger.info(f"Thread: Iniciando carregamento do conteúdo para a rota '{target_route}'.")
+        final_content: Optional[ft.Control] = None
+
+        try:
+            # --- LÓGICA DE IMPORTAÇÃO DINÂMICA ---
+            if target_route in _view_module_map:
+                import importlib
+                module_path, function_name = _view_module_map[target_route]
+                
+                # O import pesado acontece aqui!
+                view_module = importlib.import_module(module_path)
+                creator_func = getattr(view_module, function_name)
+                
+                final_content = creator_func(page_ref)
+            else:
+                raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
+            
+            #creator_func = _content_creators.get(target_route)
+            #if creator_func:
+            #    final_content = creator_func(page_ref)
+            #else:
+            #    raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
+
+        except Exception as e:
+            # ... (código de tratamento de erro para final_content) ...
+            logger.error(f"Erro ao criar conteúdo para rota '{target_route}': {e}", exc_info=True)
+            final_content = ft.Column(...) # Conteúdo de erro
+
+        def _update_ui_with_new_content():
+            """
+            Função que será executada na thread da UI para substituir o placeholder.
+            Esta função é agora protegida pelo lock em _execute_ui_update.
+            """
+            logger.info(f"Thread: Conteúdo para '{target_route}' carregado. Atualizando UI.")
+            if target_route in ROUTES_WITHOUT_NAV_RAIL:
+                page_ref.controls.clear()
+                page_ref.add(final_content)
+            else:
+                content_container_for_main_layout.content = final_content
+                content_container_for_main_layout.padding = PADDING_L
+        
+        # Agenda a atualização da UI na thread principal
+        page_ref.run_thread(lambda: _execute_ui_update(_update_ui_with_new_content))
+
+    # Inicia a thread de carregamento
+    threading.Thread(target=_load_and_set_view, args=(page, route), daemon=True).start()
 
 
 execution_time = perf_counter() - start_time

@@ -582,7 +582,8 @@ class PDFDocumentAnalyzer:
     def get_similarity_and_tfidf_score_docs(self, all_texts_for_analysis_list: List[str], 
                                             model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: np_array = None, preprocess_text_advanced: bool = False, 
                                             ) -> Dict[str, Dict[str, Any]]:
-        assert model_embedding in ['all-MiniLM-L6-v2', 'tfidf_vectorizer'], "Modelo de embeddings inválido. Deve ser 'all-MiniLM-L6-v2' ou 'tfidf_vectorizer'."
+        
+        assert model_embedding in ['all-MiniLM-L6-v2', 'tfidf_vectorizer', 'text-embedding-3-small'], "Modelo de embeddings inválido. Deve ser 'all-MiniLM-L6-v2' ou 'tfidf_vectorizer'."
         
         if preprocess_text_advanced:
             all_texts_for_analysis_list = [function_preprocess_text_advanced(text) for text in all_texts_for_analysis_list]

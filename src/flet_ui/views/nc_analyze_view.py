@@ -20,32 +20,43 @@ from src.flet_ui.components import (
 )
 from src.flet_ui import theme
 
-from src.services.firebase_client import FirebaseClientFirestore
 
 from src.settings import (APP_VERSION , UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR, cotacao_dolar_to_real,
                           KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, 
                           FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_LOADED_LLM_PROVIDERS,
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST)
 
+from src.services.firebase_client import FirebaseClientFirestore
+
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
                         get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l)
 
-from src.core.prompts import formatted_initial_analysis
+# Outros imports pesados aqui:
+from src.core.prompts import (
+    formatted_initial_analysis,
+    tipos_doc, origens_doc, tipos_locais,
+    areas_de_atribuição, tipos_a_autuar, assuntos_re,
+    lista_delegacias_especializadas, materias_prometheus, 
+    lista_delegacias_interior, lista_corregedorias
+)
+destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
 
-# Removendo imports pesados daqui
-# import src.core.ai_orchestrator as ai_orchestrator
-# from src.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
-# from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
-# 
-# from src.core.prompts import (
-#     tipos_doc, origens_doc, tipos_locais,
-#     areas_de_atribuição, tipos_a_autuar, assuntos_re,
-#     lista_delegacias_especializadas, materias_prometheus, 
-#     lista_delegacias_interior, lista_corregedorias
-# )
-# destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
-# from src.core import prompts as core_prompts
+from src.utils import _initialize_heavy_utils
+_initialize_heavy_utils()
 
+from src.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
+import src.core.ai_orchestrator as ai_orchestrator 
+from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
+from src.core import prompts as core_prompts
+
+# Antecipando, sob load_progressing_gui, outros imports que serão utilizados em utils.py:
+import unicodedata
+import pdfplumber, fitz
+from unidecode import unidecode
+from sentence_transformers import SentenceTransformer
+
+ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
+municipios_list = get_municipios_por_uf_cached()
 
 from src.logger.logger import LoggerSetup
 _logger = LoggerSetup.get_logger(__name__)
@@ -63,11 +74,13 @@ def get_user_cache(page: ft.Page) -> dict:
     return _SERVER_SIDE_CACHE[session_id]
 
 def clear_user_cache(page: ft.Page):
-    """Limpa o cache para a sessão do usuário atual."""
+    """Limpa o cache do lado do servidor para a sessão do usuário atual."""
     session_id = page.session_id
     if session_id in _SERVER_SIDE_CACHE:
         del _SERVER_SIDE_CACHE[session_id]
         _logger.info(f"Cache do lado do servidor limpo para a sessão {session_id}.")
+    else:
+        _logger.debug(f"Nenhum cache do lado do servidor encontrado para a sessão {session_id} para limpar.")
         
 # Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
 KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
@@ -143,8 +156,6 @@ class AnalyzePDFViewContent(ft.Column):
         self.managed_file_picker: Optional[ManagedFilePicker] = None
         self.global_file_picker_instance: Optional[ft.FilePicker] = None
 
-        from src.core.pdf_processor import PDFDocumentAnalyzer
-        from src.core.doc_generator import DocxExporter
         self.pdf_analyzer = PDFDocumentAnalyzer()
         self.docx_exporter = DocxExporter()
 
@@ -286,9 +297,9 @@ class AnalyzePDFViewContent(ft.Column):
         self.llm_result_container = ft.Container(
             content=ft.Column( # Usar Stack para sobrepor o balão e o resultado
                 [
-                   #self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON],
-                   #self.gui_controls[CTL_LLM_RESULT_TEXT], # Fallback
-                   #self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY] # Novo
+                   self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON],
+                   self.gui_controls[CTL_LLM_RESULT_TEXT], 
+                   self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY] 
                 ]
             ),
             padding=10,
@@ -354,7 +365,6 @@ class AnalyzePDFViewContent(ft.Column):
 
     def _create_prompt_display_layout(self) -> ft.Container:
         """Cria o layout para exibir os prompts estruturados."""
-        from src.core import prompts as core_prompts
         _logger.info("Criando layout de visualização do prompt.")
 
         prompt_variables_to_display = [                       
@@ -502,7 +512,7 @@ class AnalyzePDFViewContent(ft.Column):
                     self._reset_processing_and_llm_results()
                 else:
                     # Se todos os uploads falharam, apenas atualiza a UI sem resetar os dados
-                    self._update_ui_from_state()
+                    self._update_gui_from_state()
 
             self.managed_file_picker = ManagedFilePicker(
                 page=self.page,
@@ -727,10 +737,13 @@ class AnalyzePDFViewContent(ft.Column):
         # Animação suave da borda ou sombra
         if self._is_drawer_open:
             self.settings_drawer_container.border = ft.border.only(left=ft.border.BorderSide(2, theme.PRIMARY))
+            self.gui_controls[CTL_SETTINGS_BTN].bgcolor = ft.Colors.with_opacity(0.40, theme.COLOR_ERROR)
         else:
             self.settings_drawer_container.border = None # Remove a borda ao fechar
+            self.gui_controls[CTL_SETTINGS_BTN].bgcolor = None
 
         self.settings_drawer_container.update()
+        self.gui_controls[CTL_SETTINGS_BTN].update()
         _logger.info(f"Drawer de configurações {'aberto' if self._is_drawer_open else 'fechado'}.")
 
     def _toggle_prompt_view(self, e: ft.ControlEvent):
@@ -1018,86 +1031,80 @@ class AnalyzePDFViewContent(ft.Column):
             result_data: Os dados do resultado da LLM (string ou FormatAnaliseInicial).
                          Ignorado se show_balloon for True.
         """
-        # Limpa visibilidade de todos os containers de resultado primeiro
-        def only_one_visible(control):
-            self.gui_controls[control].visible = True  
-            self.llm_result_container.content.controls = [self.gui_controls[control]]
-            for ctl in [CTL_LLM_RESULT_INFO_BALLOON, CTL_LLM_RESULT_TEXT, CTL_LLM_STRUCTURED_RESULT_DISPLAY]:
-                if ctl != control:
-                    self.gui_controls[ctl].visible = False    
-            if self.llm_result_container.page and self.llm_result_container.uid:
-                self.llm_result_container.update()        
-        
+        balloon = self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON]
+        text_result = self.gui_controls[CTL_LLM_RESULT_TEXT]
+        structured_result = self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY]
+
+        # Esconde todos por padrão
+        balloon.visible = False
+        text_result.visible = False
+        structured_result.visible = False
+
         if show_balloon:
-            only_one_visible(CTL_LLM_RESULT_INFO_BALLOON)
+            balloon.visible = True
         elif isinstance(result_data, formatted_initial_analysis):
-            structured_display = self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY]
-            if isinstance(structured_display, LLMStructuredResultDisplay): # Verifica o tipo
-                only_one_visible(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
-                structured_display.update_data(result_data, is_new_llm_response=is_initial_llm_response)
-                structured_display.visible = True
-                scrollable_row_for_structured_display = ft.Row(
-                    [structured_display], scroll=ft.ScrollMode.ADAPTIVE, expand=True 
-                )
-                self.llm_result_container.content.controls = [scrollable_row_for_structured_display]
-                self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON].visible = False 
-                self.gui_controls[CTL_LLM_RESULT_TEXT].visible = False 
-            else: # Fallback se o controle não for o esperado
+            if isinstance(structured_result, LLMStructuredResultDisplay):
+                structured_result.update_data(result_data, is_new_llm_response=is_initial_llm_response)
+                structured_result.visible = True
+            else:
                 _logger.error("Controle CTL_LLM_STRUCTURED_RESULT_DISPLAY não é uma instância de LLMStructuredResultDisplay.")
-                self.gui_controls[CTL_LLM_RESULT_TEXT].value = "Erro interno ao exibir resultado estruturado."
-                only_one_visible(CTL_LLM_RESULT_TEXT)
-        elif isinstance(result_data, str): # Fallback para string
-            self.gui_controls[CTL_LLM_RESULT_TEXT].value = result_data
-            only_one_visible(CTL_LLM_RESULT_TEXT)
+                text_result.value = "Erro interno ao exibir resultado estruturado."
+                text_result.visible = True
+        elif isinstance(result_data, str):
+            text_result.value = result_data
+            text_result.visible = True
         else: # Caso padrão, mostra balão
-            only_one_visible(CTL_LLM_RESULT_INFO_BALLOON)
-            _logger.warning(f"Tipo de result_data inesperado para _show_info_balloon_or_result: {type(result_data)}")
+            balloon.visible = True
+            _logger.warning(f"Tipo de result_data inesperado: {type(result_data)}")
         
-        for ctl in [CTL_LLM_STRUCTURED_RESULT_DISPLAY, CTL_LLM_RESULT_TEXT, CTL_LLM_RESULT_INFO_BALLOON]:
-            if ctl in self.gui_controls and self.gui_controls[ctl].page and self.gui_controls[ctl].uid:
-                #self.gui_controls[ctl].update()
-                self.page.update(self.gui_controls[ctl])        
+        # Atualiza o container que contém o Stack
+        if self.llm_result_container.page and self.llm_result_container.uid:
+            self.llm_result_container.update()  
 
     def _reset_processing_and_llm_results(self):
         """Limpa os resultados do processamento PDF e da análise LLM."""
         # NOVO MÉTODO (a ser usado quando a lista de arquivos muda)
         _logger.debug("Resetando resultados de processamento e LLM.")
         
-        self.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = None
-        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = None
-        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL] = None
-        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = None
+        self.user_cache = get_user_cache(self.page)
+        self.user_cache.pop(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, None)
+        self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE, None)
+        self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL, None)
+        self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK, None)
         
         keys_to_clear = [
             KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA,
-            KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS          
+            KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
+            "has_analyzer_data", "has_llm_response"     
         ]
         for key in keys_to_clear:
             self._remove_data_session(key)
         
         # Atualiza a GUI para refletir o estado limpo
-        self._update_ui_from_state()
+        self._update_gui_from_state()
 
     def _reset_llm_results(self):
         """Limpa apenas os resultados da análise LLM."""
         # NOVO MÉTODO (a ser usado quando uma nova análise LLM é solicitada)
         _logger.debug("Resetando resultados da LLM.")
         
-        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = None
-        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL] = None
-        self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = None
+        self.user_cache = get_user_cache(self.page)
+        self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE, None)
+        self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL, None)
+        self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK, None)
 
         keys_to_clear = [
             KEY_SESSION_LLM_METADATA,
             KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
+            "has_llm_response"
         ]
         for key in keys_to_clear:
             self._remove_data_session(key)
             
         # Atualiza a UI para refletir o estado limpo
-        self._update_ui_from_state()
+        self._update_gui_from_state()
 
-    def _update_ui_from_state(self):
+    def _update_gui_from_state(self):
         """
         Atualiza toda a GUI da view com base no estado atual salvo na sessão.
         Este método centraliza todas as chamadas de atualização da GUI.
@@ -1114,12 +1121,17 @@ class AnalyzePDFViewContent(ft.Column):
         self._update_processing_metadata_display()
         self._update_llm_metadata_display()
 
+        self.user_cache = get_user_cache(self.page)
         # 3. Decide qual conteúdo de resultado LLM exibir
         llm_response_to_show = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL) or \
                                self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
         
+        is_initial_response = self.page.session.get("is_new_llm_response_flag") or False
+        if is_initial_response:
+            self.page.session.remove("is_new_llm_response_flag")
+
         if llm_response_to_show:
-            is_initial_response = not bool(self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL))
+            #is_initial_response = not bool(self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL))
             self._show_info_balloon_or_result(False, llm_response_to_show, is_initial_response)
         else:
             self._show_info_balloon_or_result(True)
@@ -1128,7 +1140,12 @@ class AnalyzePDFViewContent(ft.Column):
         self._update_button_states()
 
         # 5. Renderiza todas as alterações na página de uma só vez
-        self.page.update()
+        # threading.Timer(0.1, lambda: self.page.update()).start()
+        # Adquire o Lock global antes de chamar page.go()
+        update_lock = self.page.data.get("global_update_lock")
+        with update_lock:
+            self.page.update()
+
         _logger.info("Atualização da GUI a partir do estado concluída.")
         
     # --- Gerenciamento de Estado e Limpeza ---
@@ -1144,7 +1161,7 @@ class AnalyzePDFViewContent(ft.Column):
             self.settings_drawer_manager._load_settings_into_drawer_controls(FALLBACK_ANALYSIS_SETTINGS)
 
         # Chama o método central que lê a sessão e atualiza TODOS os componentes da UI
-        self._update_ui_from_state()
+        self._update_gui_from_state()
 
     def _clear_all_data_and_gui(self):
         """Limpa todos os dados da sessão e reseta a UI para o estado inicial."""
@@ -1172,7 +1189,8 @@ class AnalyzePDFViewContent(ft.Column):
              self.managed_file_picker.clear_upload_directory()
 
         # Chama o método central para atualizar toda a UI para o estado limpo
-        self._update_ui_from_state()
+        self._update_gui_from_state()
+        #self._show_info_balloon_or_result(show_balloon=True)
 # 
 # --- Classes Internas para Gerenciamento ---
 class InternalFileListManager:
@@ -1338,6 +1356,7 @@ class InternalAnalysisController:
         self.parent_view = parent_view # Referência à view principal
         self.pdf_analyzer = parent_view.pdf_analyzer # Usa o da view
         self.firestore_client = FirebaseClientFirestore()
+        self.user_cache = get_user_cache(self.page)
 
     def _get_current_analysis_settings(self) -> Dict[str, Any]:
         """Busca as configurações de análise atuais da sessão."""
@@ -1400,9 +1419,6 @@ class InternalAnalysisController:
             batch_name: Nome do lote de arquivos.
             analyze_llm_after: Se True, inicia a análise LLM após o processamento.
         """
-        import src.core.ai_orchestrator as ai_orchestrator 
-        from src.core.pdf_processor import PdfPlumberExtractor
-
         current_analysis_settings = self._get_current_analysis_settings()
         _logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
         pdf_extractor = current_analysis_settings.get("pdf_extractor", FALLBACK_ANALYSIS_SETTINGS["pdf_extractor"])
@@ -1446,7 +1462,7 @@ class InternalAnalysisController:
 
                 loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
                 ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
-                                                                                     all_texts_to_storage, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
+                                                                                     all_texts_to_loop, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
 
             embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.pdf_analyzer.get_similarity_and_tfidf_score_docs(
                                                                             all_texts_to_loop, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
@@ -1483,7 +1499,8 @@ class InternalAnalysisController:
 
             aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(processed_page_data_combined, relevant_ordered_indices, token_limit_pref)
             
-            self.parent_view.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = aggregated_info
+            self.user_cache = get_user_cache(self.page)
+            self.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = aggregated_info
             self.page.session.set("has_analyzer_data", True)
             
             pages_agg_indices, _, tokens_antes_agg, tokens_final_agg = aggregated_info
@@ -1526,7 +1543,7 @@ class InternalAnalysisController:
             else: # Só processou, não vai para LLM agora
                 hide_loading_overlay(self.page)
                 # Se não vai para a LLM, a UI precisa ser atualizada agora com os resultados do processamento.
-                self.page.run_thread(self.parent_view._update_ui_from_state)
+                self.page.run_thread(self.parent_view._update_gui_from_state)
                 self.page.run_thread(show_snackbar, self.page, f"Conteúdo de '{batch_name}' processado. Pronto para análise LLM.", theme.COLOR_SUCCESS)
         
         except Exception as ex_proc:
@@ -1562,7 +1579,7 @@ class InternalAnalysisController:
         current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
         default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
         
-        llm_response_obj = self.parent_view.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
+        llm_response_obj = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
 
         if llm_response_obj and isinstance(llm_response_obj, formatted_initial_analysis):
             fields_to_log = [
@@ -1622,10 +1639,11 @@ class InternalAnalysisController:
                 # Registrar essa informação para o feedback_metric
                 self.page.session.set(KEY_SESSION_LLM_REANALYSIS, is_reanalysis)
                 
-                self.parent_view.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = llm_response_data
+                self.user_cache = get_user_cache(self.page)
+                self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = llm_response_data
                 self.page.session.set("has_llm_response", True)
-
-                self.page.run_thread(self.parent_view._show_info_balloon_or_result, False, llm_response_data, True)
+                # A flag 'is_new_llm_response' será passada para a sessão para ser usada por _update_ui_from_state
+                self.page.session.set("is_new_llm_response_flag", True)
                 
                 llm_meta_for_gui = token_usage_info if token_usage_info else {} 
                 llm_meta_for_gui.update({
@@ -1636,7 +1654,7 @@ class InternalAnalysisController:
                 
                 self.parent_view._analysis_requested = True
                 self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_for_gui)
-                self.page.run_thread(self.parent_view._update_ui_from_state)
+                self.page.run_thread(self.parent_view._update_gui_from_state)
                 self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
                 self.page.run_thread(self._update_status_callback,  "", False, True)
 
@@ -1646,14 +1664,14 @@ class InternalAnalysisController:
                     self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
 
             else:
-                self.page.run_thread(self.parent_view._update_ui_from_state) # Atualiza a UI para mostrar o balão de falha
+                self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
                 self.page.run_thread(self._update_status_callback,  "Análise LLM: Falha ao obter resposta da IA.", True, True)
                 self.page.run_thread(show_snackbar, self.page, "Erro na consulta à LLM.", theme.COLOR_ERROR)
                 self.parent_view._analysis_requested = False
         except Exception as ex_llm:
             _logger.error(f"Thread: Erro na análise LLM para '{batch_name}': {ex_llm}", exc_info=True)
             self.parent_view._analysis_requested = False
-            self.page.run_thread(self.parent_view._update_ui_from_state) # Atualiza a UI para mostrar o balão de falha
+            self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
             self.page.run_thread(self._update_status_callback,  f"Erro na consulta à LLM: {ex_llm}", True, True)
         finally:
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
@@ -1705,7 +1723,6 @@ class InternalExportManager:
     Lida com a interação com o FilePicker para salvar arquivos e utiliza o DocxExporter
     para gerar os documentos nos formatos simples ou usando templates.
     """
-    from src.core.doc_generator import DocxExporter
     def __init__(self, parent_view: AnalyzePDFViewContent, docx_exporter: DocxExporter, global_file_picker: Optional[ft.FilePicker]):
         """
         Inicializa o gerenciador de exportação.
@@ -1917,8 +1934,6 @@ class InternalExportManager:
             original_filename: O nome original do arquivo.
             is_web_upload_temp: Indica se o arquivo de origem é um temporário de upload web.
         """
-        from src.core.doc_generator import TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
-
         templates_dir = os.path.join(ASSETS_DIR_ABS, DOCX_TEMPLATES_SUBDIR)
         os.makedirs(templates_dir, exist_ok=True)
         destination_path = os.path.join(templates_dir, original_filename)
@@ -2066,7 +2081,7 @@ class SettingsDrawerManager:
         # ], value=current_analysis_settings.get("pdf_extractor"), width=default_width)
         
         self.gui_controls_drawer["proc_vectorization_dd"]  = ft.Dropdown(label="Modelo de Vetorização", options=[
-            ft.dropdown.Option("tfidf_vectorizer", "TF-IDF Vectorizer"),
+            ft.dropdown.Option("tfidf_vectorizer", "Tf-Idf Vectorizer"),
             ft.dropdown.Option("all-MiniLM-L6-v2", "all-MiniLM-L6-v2"),
             ft.dropdown.Option("text-embedding-3-small", "OpenAI text-embedding-3-small"),
         ], value=current_analysis_settings.get("vectorization_model"), width=default_width)
@@ -2444,10 +2459,6 @@ class LLMStructuredResultDisplay(ft.Column):
         self.dropdown_uf_fato: Optional[ft.Dropdown] = None
         self.dropdown_municipio_fato: Optional[ft.Dropdown] = None
 
-        # Listas de referência (carregadas uma vez)
-        self.ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
-        self.municipios_list = get_municipios_por_uf_cached()
-
         self.user_cache = get_user_cache(self.page)
 
     def _create_justificativa_icon(self, justificativa: Optional[str]) -> ft.IconButton:
@@ -2479,7 +2490,7 @@ class LLMStructuredResultDisplay(ft.Column):
         if self.dropdown_uf_origem and self.dropdown_municipio_origem:
             selected_uf = self.dropdown_uf_origem.value
             if selected_uf:
-                municipios = self.municipios_list[selected_uf]
+                municipios = municipios_list[selected_uf]
                 self.dropdown_municipio_origem.options = [ft.dropdown.Option(m) for m in municipios]
                 # Tenta manter o valor se ainda for válido, ou reseta
                 current_municipio_val = self.dropdown_municipio_origem.value
@@ -2502,7 +2513,7 @@ class LLMStructuredResultDisplay(ft.Column):
         if self.dropdown_uf_fato and self.dropdown_municipio_fato:
             selected_uf = self.dropdown_uf_fato.value
             if selected_uf:
-                municipios = self.municipios_list[selected_uf]
+                municipios = municipios_list[selected_uf]
                 self.dropdown_municipio_fato.options = [ft.dropdown.Option(m) for m in municipios]
                 current_municipio_val = self.dropdown_municipio_fato.value
                 if current_municipio_val not in [opt.key for opt in self.dropdown_municipio_fato.options]:
@@ -2525,15 +2536,6 @@ class LLMStructuredResultDisplay(ft.Column):
             is_new_llm_response: True se data_to_display_in_ui é uma resposta fresca da LLM,
                                  False caso contrário (ex: restauração de sessão).
         """
-        from src.core.prompts import (
-            formatted_initial_analysis,
-            tipos_doc, origens_doc, tipos_locais,
-            areas_de_atribuição, tipos_a_autuar, assuntos_re,
-            lista_delegacias_especializadas, materias_prometheus, 
-            lista_delegacias_interior, lista_corregedorias
-        )
-        destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
-
         # data aqui é o objeto FormatAnaliseInicial como recebido (após parsing inicial da resposta da LLM)
         _logger.info(f"LLMStructuredResultDisplay.update_data chamado. is_new_llm_response={is_new_llm_response}, data_is_none={data_to_display_in_gui is None}")
         
@@ -2553,6 +2555,7 @@ class LLMStructuredResultDisplay(ft.Column):
         self.data = data_to_display_in_gui
 
         # 2. Gerencia o original_llm_data_snapshot
+        self.user_cache = get_user_cache(self.page)
         if is_new_llm_response:
             # É uma resposta fresca da LLM, este é o nosso "original" definitivo.
             self.original_llm_data_snapshot = data_to_display_in_gui.model_copy(deep=True)
@@ -2591,13 +2594,13 @@ class LLMStructuredResultDisplay(ft.Column):
                                                       width=480, dense=True) # Removido expand=True
 
         self.dropdown_uf_origem = ft.Dropdown(
-            label="UF de Origem", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
-            value=self.data.uf_origem if self.data.uf_origem in self.ufs_list else "",
+            label="UF de Origem", options=[ft.dropdown.Option(uf) for uf in ufs_list],
+            value=self.data.uf_origem if self.data.uf_origem in ufs_list else "",
             on_change=self._atualizar_municipios_origem, width=145, dense=True
         )
         self.gui_fields["uf_origem"] = self.dropdown_uf_origem # Adiciona ao ui_fields
 
-        municipios_origem_init = self.municipios_list[self.data.uf_origem] if self.data.uf_origem else []
+        municipios_origem_init = municipios_list[self.data.uf_origem] if self.data.uf_origem else []
         municipio_origem = self.data.municipio_origem
         self.dropdown_municipio_origem = ft.Dropdown(
             label="Município de Origem",
@@ -2629,13 +2632,13 @@ class LLMStructuredResultDisplay(ft.Column):
         self.gui_fields["resumo_fato"] = ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, width=1600)
         
         self.dropdown_uf_fato = ft.Dropdown(
-            label="UF do Fato", options=[ft.dropdown.Option(uf) for uf in self.ufs_list],
-            value=self.data.uf_fato if self.data.uf_fato in self.ufs_list else "",
+            label="UF do Fato", options=[ft.dropdown.Option(uf) for uf in ufs_list],
+            value=self.data.uf_fato if self.data.uf_fato in ufs_list else "",
             on_change=self._atualizar_municipios_fato, width=145, dense=True
         )
         self.gui_fields["uf_fato"] = self.dropdown_uf_fato
 
-        municipios_fato_init = self.municipios_list[self.data.uf_fato] if self.data.uf_fato else []
+        municipios_fato_init = municipios_list[self.data.uf_fato] if self.data.uf_fato else []
         municipio_fato = self.data.municipio_fato
         self.dropdown_municipio_fato = ft.Dropdown(
             label="Município do Fato",
@@ -2829,6 +2832,7 @@ class LLMStructuredResultDisplay(ft.Column):
             _logger.info("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
 
             # Atualiza também a sessão com a representação mais recente (objeto Pydantic)
+            self.user_cache = get_user_cache(self.page)
             self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL] = self.data
             _logger.info("KEY_SESSION_PDF_LLM_RESPONSE atualizado na sessão com os dados da UI.")
             return self.data
@@ -3124,7 +3128,8 @@ class FeedbackWorkflowManager:
             return
 
         # Só pede feedback se houver uma análise LLM anterior
-        if not self.parent_view.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE):
+        user_cache = get_user_cache(self.page)
+        if not user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE):
             _logger.info(f"FeedbackWorkflowManager: Nenhuma análise LLM anterior para '{action_context_name}'. Prosseguindo com ação primária.")
             primary_action_callable()
             return
@@ -3146,6 +3151,9 @@ class FeedbackWorkflowManager:
 
                     if self.firestore_client.save_feedback_data(user_id, user_token, collected_feedback_data, llm_metadata_session, reanalysis_occurrence, related_batch_name):
                         self.page.session.set(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, True)
+                    else: 
+                        _logger.error("Falha ao salvar feedback no Firestore. A flag de 'feedback coletado' não será setada para esta sessão de análise.")
+                        show_snackbar(self.page, "Erro: Não foi possível registrar sua avaliação.", theme.COLOR_ERROR)
 
                 primary_action_callable()
             

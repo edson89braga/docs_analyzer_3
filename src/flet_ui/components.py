@@ -40,7 +40,11 @@ def show_snackbar(page: ft.Page, message: str, color: str = theme.COLOR_INFO, du
     snackbar_instance.duration = duration
     snackbar_instance.open = True
     #threading.Timer(0.1, page.update).start()
-    page.update() # Atualiza para efetivamente mostrar
+    
+    update_lock = page.data.get("global_update_lock")
+    if update_lock:
+        with update_lock: page.update()
+    else: page.update()
 
 ### Dialog in Overlay: ---------------------------------------------------------------------------------------
 
@@ -57,8 +61,11 @@ def show_confirmation_dialog(
 
     def close_dialog(e):
         confirm_dialog.open = False
-        page.update()
         page.overlay.remove(confirm_dialog) # Remove do overlay ao fechar
+        update_lock = page.data.get("global_update_lock")
+        if update_lock:
+            with update_lock: page.update()
+        else: page.update()
         if hasattr(e.control, 'data') and e.control.data == "confirm" and on_confirm:
             on_confirm() # Chama o callback de confirmação
 
@@ -75,7 +82,10 @@ def show_confirmation_dialog(
 
     page.overlay.append(confirm_dialog) # Adiciona ao overlay
     confirm_dialog.open = True
-    page.update() # Abre o diálogo
+    update_lock = page.data.get("global_update_lock")
+    if update_lock:
+        with update_lock: page.update()
+    else: page.update()
 
 ### SelectionDialog: ---------------------------------------------------------------------------------------
 
@@ -255,7 +265,10 @@ class DataTableWrapper(ft.Column):
         self.next_button.disabled = self.current_page == total_pages
 
         if self.page:
-            self.update()
+            update_lock = self.page.data.get("global_update_lock")
+            if update_lock:
+                with update_lock: self.page.update()
+            else: self.page.update()
 
     # --- Métodos restantes (filtros, handlers, update_data) ---
     # A busca agora usa as chaves originais fornecidas
@@ -337,7 +350,10 @@ def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."
 
     loading_text_instance.value = message
     loading_overlay_instance.visible = True
-    page.update()
+    update_lock = page.data.get("global_update_lock")
+    if update_lock:
+        with update_lock: page.update()
+    else: page.update()
 
 def hide_loading_overlay(page: ft.Page):
     loading_overlay_instance = page.data.get("global_loading_overlay")
@@ -347,7 +363,10 @@ def hide_loading_overlay(page: ft.Page):
 
     if loading_overlay_instance.visible: # Só atualiza se estiver visível
         loading_overlay_instance.visible = False
-        page.update()
+        update_lock = page.data.get("global_update_lock")
+        if update_lock:
+            with update_lock: page.update()
+        else: page.update()
 
 ### ValidatedTextField: ---------------------------------------------------------------------------------------
 
@@ -427,7 +446,10 @@ class ValidatedTextField(ft.Column):
         if hasattr(self, 'text_field') and self.text_field:
             self.text_field.disabled = value
             if self.page:
-                self.text_field.update()
+                update_lock = self.page.data.get("global_update_lock")
+                if update_lock:
+                    with update_lock: self.page.update()
+                else: self.page.update()
 
     def _handle_change(self, e: ft.ControlEvent):
         self.validate()
@@ -687,7 +709,12 @@ class ManagedFilePicker:
                     if self.on_upload_progress: self.on_upload_progress(file_name, 0.0)
                     
                     self.file_picker.upload([ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)])
-                    self.page.update()
+                    
+                    update_lock = self.page.data.get("global_update_lock")
+                    if update_lock:
+                        with update_lock: self.page.update()
+                    else: self.page.update()
+                    
                     logger.info(f"page.update() chamado após file_picker.upload() para '{file_name}'.")
                 except Exception as ex:
                     logger.error(f"Erro ao preparar/iniciar upload para '{file_name}': {ex}", exc_info=True)
@@ -914,7 +941,11 @@ def reopen_parent_dialog(
              page.overlay.append(parent_dialog)
 
         parent_dialog.open = True
-        page.update() # Atualiza a página inteira para garantir que o pai e quaisquer mudanças sejam renderizadas.
+        # Atualiza a página inteira para garantir que o pai e quaisquer mudanças sejam renderizadas:
+        update_lock = page.data.get("global_update_lock")
+        if update_lock:
+            with update_lock: page.update()
+        else: page.update()
 
     threading.Timer(delay, _reopen_parent_action).start()
 
@@ -1413,7 +1444,11 @@ class SearchableDropdown(ft.Column):
             ])
 
         if self.page:
-            self.page.update() # Atualiza a página para mostrar o overlay
+            # Atualiza a página para mostrar o overlay
+            update_lock = self.page.data.get("global_update_lock")
+            if update_lock:
+                with update_lock: self.page.update()
+            else: self.page.update()
 
     def _close_dropdown_list(self):
         if not self._is_open: return
@@ -1426,7 +1461,11 @@ class SearchableDropdown(ft.Column):
             self.page.overlay.remove(self.dropdown_container)
 
         if self.page:
-            self.page.update() # Atualiza para remover/esconder o overlay
+            # Atualiza para remover/esconder o overlay
+            update_lock = self.page.data.get("global_update_lock")
+            if update_lock:
+                with update_lock: self.page.update()
+            else: self.page.update()
 
     def _toggle_dropdown_list(self, e: ft.ControlEvent):
         if self._is_open:
@@ -1599,7 +1638,10 @@ class ProgressSteps(ft.Row):
                 self.controls.append(ft.Row([connector], expand=True, alignment=ft.MainAxisAlignment.CENTER)) # Para centralizar
 
         if self.page:
-            self.update()
+            update_lock = self.page.data.get("global_update_lock")
+            if update_lock:
+                with update_lock: self.page.update()
+            else: self.page.update()
 
     def _handle_step_click(self, e: ft.ControlEvent):
         clicked_index = e.control.data["index"]
@@ -1757,7 +1799,10 @@ class ManagedAlertDialog(ft.AlertDialog):
                 logger.error(f"ManagedAlertDialog: Erro ao executar on_dialog_fully_closed: {e}", exc_info=True)
                 show_snackbar(self.page_ref, "Ocorreu um erro após fechar o diálogo.", color=theme.COLOR_ERROR)
         elif self in self.page_ref.overlay: # Se foi removido e não há callback, um update pode ser necessário
-             self.page_ref.update()
+            update_lock = self.page_ref.data.get("global_update_lock")
+            if update_lock:
+                with update_lock: self.page_ref.update()
+            else: self.page_ref.update()
 
 
     def show(self):
@@ -1765,7 +1810,11 @@ class ManagedAlertDialog(ft.AlertDialog):
         if self not in self.page_ref.overlay:
             self.page_ref.overlay.append(self)
         self.open = True
-        self.page_ref.update() # Atualiza para mostrar/trazer para frente
+        # Atualiza para mostrar/trazer para frente
+        update_lock = self.page_ref.data.get("global_update_lock")
+        if update_lock:
+            with update_lock: self.page_ref.update()
+        else: self.page_ref.update()
         logger.info(f"ManagedAlertDialog '{self.title.value if isinstance(self.title, ft.Text) else ''}' ABERTO.")
 
     # Método para fechar programaticamente sem passar por um botão (ex: de um callback interno)

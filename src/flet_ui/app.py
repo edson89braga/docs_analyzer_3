@@ -89,9 +89,9 @@ def load_default_analysis_settings(page: ft.Page):
                 for embedding_map_fs in embeddings_array_fs:
                     if "mapValue" in embedding_map_fs:
                         embedding_dict = _from_firestore_value(embedding_map_fs)
-                        if isinstance(embedding_dict, dict) and "name" in embedding_dict and "coust_per_million" in embedding_dict:
+                        if isinstance(embedding_dict, dict) and "name" in embedding_dict and "cost_per_million" in embedding_dict:
                             try: # Garante que o custo seja float
-                                embedding_dict["coust_per_million"] = float(embedding_dict["coust_per_million"])
+                                embedding_dict["cost_per_million"] = float(embedding_dict["cost_per_million"])
                                 loaded_embeddings_list.append(embedding_dict)
                             except (ValueError, TypeError):
                                 logger.warning(f"Custo inválido para embedding '{embedding_dict.get('name')}'. Pulando.")
@@ -370,7 +370,9 @@ def main(page: ft.Page, dev_mode: bool = False):
 
     if page.data is None:
         page.data = {}
-        
+    
+    page.data["global_update_lock"] = threading.Lock()
+    
     # Adiciona ao overlay uma única vez.
     page_file_picker = ft.FilePicker()
     page.overlay.append(page_file_picker)

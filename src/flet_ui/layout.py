@@ -211,8 +211,15 @@ def create_navigation_rail(page: ft.Page, selected_route: str) -> ft.NavigationR
         target_index = e.control.selected_index
         # Obtém a rota para o item selecionado
         target_route = icones_navegacao[target_index]["route"]
-        # Navega para a rota selecionada
-        page.go(target_route)
+        # Navega para a rota selecionada:
+        # Adquire o Lock global antes de chamar page.go()
+        update_lock = page.data.get("global_update_lock")
+        if update_lock:
+            with update_lock:
+                page.go(target_route)
+        else:
+            # Fallback se o lock não for encontrado
+            page.go(target_route)
 
     # Cria a NavigationRail com base nos dados de icones_navegacao
     # e configura o evento de mudança para a função navigate

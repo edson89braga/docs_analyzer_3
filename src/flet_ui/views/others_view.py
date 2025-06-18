@@ -3,14 +3,15 @@ import flet as ft
 from src.flet_ui.components import show_snackbar
 from src.flet_ui import theme # Para COLOR_WARNING
 
-from src.flet_ui.views.nc_analyze_view import KEY_SESSION_CURRENT_BATCH_NAME
+from src.flet_ui.theme import COLOR_WARNING
 
+from src.flet_ui.views.nc_analyze_view import KEY_SESSION_CURRENT_BATCH_NAME
 from src.logger.logger import LoggerSetup
-_logger = LoggerSetup.get_logger(__name__)
+logger = LoggerSetup.get_logger(__name__)
 
 
 def create_chat_pdf_content(page: ft.Page) -> ft.Control:
-    _logger.info("Criando conteúdo da view Chat com PDF.")
+    logger.info("Criando conteúdo da view Chat com PDF.")
 
     current_pdf_name = page.session.get(KEY_SESSION_CURRENT_BATCH_NAME)
     processed_text_for_chat = None
@@ -117,9 +118,8 @@ def create_chat_pdf_content(page: ft.Page) -> ft.Control:
     
     return main_content
 
-
-def create_knowledge_base_content(page: ft.Page) -> ft.Control:
-    _logger.info("Acessando conteúdo placeholder para Banco de Pareceres.")
+def OLD_create_knowledge_base_content(page: ft.Page) -> ft.Control:
+    logger.info("Acessando conteúdo placeholder para Banco de Pareceres.")
 
     # Exibe o snackbar imediatamente ao carregar o conteúdo desta "view"
     # O show_snackbar já chama page.update()
@@ -153,3 +153,35 @@ def create_knowledge_base_content(page: ft.Page) -> ft.Control:
         spacing=20
     )
     return main_content
+
+def create_placeholder_content(page: ft.Page, module_name: str) -> ft.Control:
+    logger.info(f"Acessando conteúdo placeholder para: {module_name}")
+    show_snackbar(
+        page,
+        f"{module_name}: Módulo ainda não programado.",
+        color=COLOR_WARNING,
+        duration=3000
+    )
+    return ft.Column( # Retorna um Column para consistência com outras content_creators
+        [
+            ft.Text(f"{module_name}", style=ft.TextThemeStyle.HEADLINE_MEDIUM),
+            ft.Text("Esta funcionalidade será implementada em versões futuras."),
+            ft.Icon(ft.icons.CONSTRUCTION, size=50, opacity=0.5)
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        expand=True,
+        spacing=20
+    )
+
+def create_knowledge_base_content(page: ft.Page) -> ft.Control:
+    return create_placeholder_content(page, "Banco de Pareceres")
+
+def create_wiki_rotinas_content(page: ft.Page) -> ft.Control:
+    return create_placeholder_content(page, "Wiki PF - Rotinas")
+
+def create_correicao_processos_content(page: ft.Page) -> ft.Control:
+    return create_placeholder_content(page, "Correição de Flagrantes e IPLs")
+
+def create_roteiro_investigacoes_content(page: ft.Page) -> ft.Control:
+    return create_placeholder_content(page, "Roteiros de Investigações")

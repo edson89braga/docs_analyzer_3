@@ -250,9 +250,13 @@ def get_embeddings_from_api(
     """
     global client_openai
 
-    assert type(pages_texts) == list
-    assert type(pages_texts[0]) == str
+    if not pages_texts:
+        logger.info("get_embeddings_from_api: Recebeu uma lista de textos vazia. Retornando resultados vazios.")
+        return [], 0, 0
 
+    if not isinstance(pages_texts, list) or not isinstance(pages_texts[0], str):
+        logger.warning(f"Erro de tipo em get_embeddings_from_api. Esperado List[str], mas recebeu {type(pages_texts)} com tipos interno {type(pages_texts[0])}.")
+        
     if model_embedding != 'text-embedding-3-small': # Atualmente, focando neste modelo
         raise ValueError(f"Modelo de embedding '{model_embedding}' não é 'text-embedding-3-small' e não é suportado por esta implementação focada.")
 
