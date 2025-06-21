@@ -475,7 +475,9 @@ def main(page: ft.Page, dev_mode: bool = False):
         logger.info(f"{perf_counter() - local_start_time:.4f}s - Analysis settings carregado.")
         # Opcional: notificar a UI principal que os dados estão prontos, se necessário.
         # Ex: page.pubsub.send_all("settings_loaded")
-
+    
+    page.data["load_settings_func"] = threaded_load_settings
+    
     # --- Lógica de Inicialização Principal ---
     def initialize_app_flow():
         """Função que executa a lógica de inicialização, incluindo chamadas de rede."""
@@ -511,7 +513,7 @@ def main(page: ft.Page, dev_mode: bool = False):
         # Dispara a navegação inicial
         logger.info(f"Disparando navegação inicial para: {final_route}")
         logger.info(f"{perf_counter() - app_start_time:.4f}s - Navegação inicial page.go() será chamada.")
-        page.go(final_route)
+        page.go(final_route)  
 
     if dev_mode:
         logger.info("DEV_MODE: Populando page.session com dados mockados.")

@@ -118,6 +118,7 @@ CTL_LLM_RESULT_INFO_BALLOON = "llm_result_info_balloon"
 CTL_LLM_METADATA_PANEL = "llm_metadata_panel"
 CTL_LLM_METADATA_PANEL_TITLE = "llm_metadata_panel_title"
 CTL_LLM_METADATA_CONTENT = "llm_metadata_content"
+CTL_LLM_AI_WARNING_BALLOON = "llm_ai_warning_balloon"
 
 # Enum para operações do FilePicker
 class ExportOperation(Enum):
@@ -267,6 +268,39 @@ class AnalyzePDFViewContent(ft.Column):
                                             ft.Text("Resultado da Análise LLM:", 
                                                 style=ft.TextThemeStyle.TITLE_MEDIUM, 
                                                 weight=ft.FontWeight.BOLD)], visible=False)
+        
+        def close_ai_warning_balloon(e):
+            e.control.parent.parent.visible = False
+            e.control.parent.parent.update()
+
+        self.gui_controls[CTL_LLM_AI_WARNING_BALLOON] = ft.Container(
+            content=ft.Row(
+                [
+                    ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=theme.COLOR_WARNING, size=24),
+                    ft.Text(
+                        "Atenção: Todos os campos, classificações e resumos a seguir foram gerados por inteligência artificial e devem ser tratados como uma sugestão inicial.\n"
+                        "Revise e valide cuidadosamente cada informação antes de prosseguir com qualquer ato administrativo ou encaminhamento oficial.",
+                        expand=True, italic=True, size=13,
+                        #color=ft.colors.with_opacity(0.9, theme.COLOR_WARNING)
+                    ),
+                    ft.IconButton(
+                        ft.Icons.CLOSE_ROUNDED,
+                        on_click=close_ai_warning_balloon,
+                        icon_size=18,
+                        tooltip="Fechar Aviso"
+                    )
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.START,
+                spacing=10,
+            ),
+            padding=12,
+            border_radius=8,
+            border=ft.border.all(1, theme.COLOR_WARNING),
+            bgcolor=ft.colors.with_opacity(0.05, theme.COLOR_WARNING),
+            visible=False,  # Começa invisível
+            #margin=ft.margin.only(bottom=10)
+        )
+
         self.gui_controls[CTL_LLM_STATUS_INFO] = ft.Text("Aguardando para exibir os resultados...", italic=True, size=14, expand=True)
         self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON] = ft.Container(
             content=ft.Row(
@@ -327,6 +361,7 @@ class AnalyzePDFViewContent(ft.Column):
                 self.gui_controls[CTL_PROC_METADATA_PANEL],
                 ft.Column([
                     self.llm_result_title,
+                    self.gui_controls[CTL_LLM_AI_WARNING_BALLOON],
                     self.llm_result_container], expand=True, spacing=6,
                     ),
                 self.gui_controls[CTL_LLM_METADATA_PANEL]
@@ -513,6 +548,10 @@ class AnalyzePDFViewContent(ft.Column):
                 else:
                     # Se todos os uploads falharam, apenas atualiza a UI sem resetar os dados
                     self._update_gui_from_state()
+                    
+                update_lock = self.page.data.get("global_update_lock")
+                with update_lock:
+                    self.page.update()
 
             self.managed_file_picker = ManagedFilePicker(
                 page=self.page,
@@ -848,9 +887,10 @@ class AnalyzePDFViewContent(ft.Column):
 
         # Força atualização dos botões
         llm_btns = [CTL_LLM_STATUS_INFO, CTL_LLM_STRUCTURED_RESULT_DISPLAY]
-        for btn_key in barra_main_btns+llm_btns:
+        for btn_key in barra_main_btns + llm_btns:
             if btn_key in self.gui_controls and self.gui_controls[btn_key].page and self.gui_controls[btn_key].uid:
                 self.gui_controls[btn_key].update()
+
         _logger.info("[DEBUG] Estados dos botões atualizados.")
 
     def _update_processing_metadata_display(self, proc_meta: Optional[Dict[str, Any]] = None):
@@ -952,6 +992,9 @@ class AnalyzePDFViewContent(ft.Column):
                         padding=ft.padding.only(left=20, bottom=10)
                     )
                 )
+        
+        if content_area.page and content_area.uid:
+            content_area.update()
 
     def _update_llm_metadata_display(self, llm_meta: Optional[Dict[str, Any]] = None):
         """
@@ -1016,9 +1059,12 @@ class AnalyzePDFViewContent(ft.Column):
                     # Você pode passar key_style e value_style personalizados se desejar
                 )
                 content_area.controls.append(ft.Container(metadata_table, padding=ft.padding.only(left=30, bottom=10)))
+            
+            if self.gui_controls[CTL_LLM_METADATA_PANEL].page and self.gui_controls[CTL_LLM_METADATA_PANEL].uid:
+                self.gui_controls[CTL_LLM_METADATA_PANEL].update()
 
-                if content_area.page and content_area.uid:
-                    content_area.update()
+        if content_area.page and content_area.uid:
+            content_area.update()
 
     def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, formatted_initial_analysis]] = None, 
                                      is_initial_llm_response: bool = False):
@@ -1034,11 +1080,13 @@ class AnalyzePDFViewContent(ft.Column):
         balloon = self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON]
         text_result = self.gui_controls[CTL_LLM_RESULT_TEXT]
         structured_result = self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY]
+        warning_balloon = self.gui_controls[CTL_LLM_AI_WARNING_BALLOON]
 
         # Esconde todos por padrão
         balloon.visible = False
         text_result.visible = False
         structured_result.visible = False
+        warning_balloon.visible = False
 
         if show_balloon:
             balloon.visible = True
@@ -1046,6 +1094,7 @@ class AnalyzePDFViewContent(ft.Column):
             if isinstance(structured_result, LLMStructuredResultDisplay):
                 structured_result.update_data(result_data, is_new_llm_response=is_initial_llm_response)
                 structured_result.visible = True
+                warning_balloon.visible = True
             else:
                 _logger.error("Controle CTL_LLM_STRUCTURED_RESULT_DISPLAY não é uma instância de LLMStructuredResultDisplay.")
                 text_result.value = "Erro interno ao exibir resultado estruturado."
@@ -1053,6 +1102,7 @@ class AnalyzePDFViewContent(ft.Column):
         elif isinstance(result_data, str):
             text_result.value = result_data
             text_result.visible = True
+            warning_balloon.visible = True
         else: # Caso padrão, mostra balão
             balloon.visible = True
             _logger.warning(f"Tipo de result_data inesperado: {type(result_data)}")
@@ -1060,6 +1110,10 @@ class AnalyzePDFViewContent(ft.Column):
         # Atualiza o container que contém o Stack
         if self.llm_result_container.page and self.llm_result_container.uid:
             self.llm_result_container.update()  
+
+        # Atualiza o balão de aviso separadamente, pois ele está fora do result_container
+        if warning_balloon.page and warning_balloon.uid:
+            warning_balloon.update()
 
     def _reset_processing_and_llm_results(self):
         """Limpa os resultados do processamento PDF e da análise LLM."""
@@ -1142,9 +1196,9 @@ class AnalyzePDFViewContent(ft.Column):
         # 5. Renderiza todas as alterações na página de uma só vez
         # threading.Timer(0.1, lambda: self.page.update()).start()
         # Adquire o Lock global antes de chamar page.go()
-        update_lock = self.page.data.get("global_update_lock")
-        with update_lock:
-            self.page.update()
+        # update_lock = self.page.data.get("global_update_lock")
+        # with update_lock:
+        #     self.page.update()
 
         _logger.info("Atualização da GUI a partir do estado concluída.")
         
@@ -2614,7 +2668,7 @@ class LLMStructuredResultDisplay(ft.Column):
 
         id_doc_card_content = ft.Column([
             self.gui_fields["descricao_geral"],
-            ft.Row([
+            ft.ResponsiveRow([
                 self.gui_fields["tipo_documento_origem"],
                 self._create_justificativa_icon(self.data.justificativa_tipo_documento_origem),
                 self.gui_fields["orgao_origem"],

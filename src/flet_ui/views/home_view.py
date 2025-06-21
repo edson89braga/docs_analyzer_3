@@ -201,16 +201,32 @@ def create_home_view2(page: ft.Page) -> ft.Control:
             welcome_title,
             ft.Container(height=8),
             intro_text,
-            ft.Container(height=25),
+            ft.Container(height=18),
             feature_cards_row,
+            ft.Container(height=25),
+            ft.Container(
+                content=ft.Text(
+                    "Uso Responsável da IA: Este sistema utiliza Inteligência Artificial como ferramenta de auxílio.\n"
+                    "As informações geradas são preliminares e devem ser verificadas por um analista humano.\n"
+                    "A responsabilidade final pela correção e uso dos dados é inteiramente do usuário.",
+                    size=13,
+                    italic=True,
+                    text_align=ft.TextAlign.CENTER,
+                    color=ft.colors.with_opacity(0.9, ft.colors.ON_SURFACE)
+                ),
+                width=800, # Limita a largura do aviso
+                # padding=ft.padding.only(bottom=20)
+                padding=20, border_radius=8,
+                # bgcolor=ft.Colors.with_opacity(0.05, theme.COLOR_INFO),
+            ),
             ft.Container(height=25, expand=True), # Espaçador flexível para empurrar a versão para baixo
             version_text,
             ft.Container(height=50)
         ],
         alignment=ft.MainAxisAlignment.CENTER, # Tenta centralizar, mas o expand do Container acima ajuda
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        expand=True,
-        spacing=5
+        expand=True, spacing=5,
+        scroll=ft.ScrollMode.ADAPTIVE
     )
 
     # Container principal para permitir scroll se o conteúdo for muito grande

@@ -122,6 +122,48 @@ def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
         # page.appbar.bgcolor = ... # Se o tema não atualizar automaticamente
         page.update()
 
+    def show_terms_dialog(e):
+        terms_dialog = None
+
+        def close_dialog(e):
+            terms_dialog.open = False
+            page.update()
+            page.overlay.remove(terms_dialog)
+
+        # Usando ft.Markdown para melhor formatação dos itens
+        terms_text = """
+### Diretrizes de Uso e Limitações da IA
+
+Ao utilizar esta aplicação, você concorda e compreende os seguintes pontos:
+
+*   **Ferramenta de Suporte**: A IA é um assistente para otimizar a análise preliminar de documentos. Ela não substitui a expertise, o julgamento crítico e a decisão final do analista humano.
+*   **Verificação Obrigatória**: É de sua inteira responsabilidade verificar, corrigir e validar todas as informações extraídas, classificadas e resumidas pela IA. Os resultados podem conter imprecisões, omissões ou erros.
+*   **Alucinações e Vieses**: Modelos de linguagem podem gerar informações que parecem factuais, mas não estão presentes no documento original (alucinações) ou refletir vieses contidos em seus dados de treinamento. Redobre a atenção em dados críticos como nomes, datas, valores e tipificações.
+*   **Responsabilidade**: Todas as ações, decisões e documentos oficiais gerados a partir do uso desta ferramenta são de responsabilidade exclusiva do usuário que os executa e subscreve.
+*   O sistema registra métricas de uso para fins de auditoria e aprimoramento.
+*   As tipificações penais e classificações sugeridas pela IA são baseadas em padrões e não constituem parecer jurídico formal. A decisão final sobre o enquadramento legal cabe à autoridade competente.
+"""
+        terms_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Termos de Uso e Responsabilidade"),
+            content=ft.Container(
+                content=ft.Markdown(
+                    terms_text,
+                    selectable=True,
+                    extension_set=ft.MarkdownExtensionSet.COMMON_MARK,
+                ),
+                width=600, # Controla a largura para melhor leitura
+            ),
+            actions=[
+                ft.TextButton("Fechar", on_click=close_dialog),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        page.overlay.append(terms_dialog)
+        terms_dialog.open = True
+        page.update()
+
     # Recupera o nome do usuário para exibir na AppBar, se logado
     user_display_name = page.session.get("auth_display_name") or \
                         (page.client_storage.get("auth_display_name") if page.client_storage else None)
@@ -165,6 +207,7 @@ def create_app_bar(page: ft.Page, app_title) -> ft.AppBar:
                 ft.PopupMenuItem(text="Perfil", icon=ft.Icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")), # Rota de perfil
                 ft.PopupMenuItem(text="Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=lambda _: page.go("/settings/proxy")),
                 ft.PopupMenuItem(text="Provedores LLM", icon=ft.Icons.MODEL_TRAINING_OUTLINED, on_click=lambda _: page.go("/settings/llm")), # Rota de perfil
+                ft.PopupMenuItem(text="Termos de Uso", icon=ft.Icons.POLICY_OUTLINED, on_click=show_terms_dialog),
                 ft.PopupMenuItem(),  # Divisor
                 ft.PopupMenuItem(text="Sair", icon=ft.Icons.LOGOUT, on_click=lambda _: handle_logout(page)) # Ação de Logout
             ]

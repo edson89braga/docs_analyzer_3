@@ -1,7 +1,7 @@
 # src/flet_ui/views/login_view.py
 
 import flet as ft
-import time
+import time, threading
 from typing import Optional, Dict, Any
 
 from src.services.firebase_client import FbManagerAuth # Ajuste o caminho se FbManagerAuth estiver em outro lugar
@@ -133,9 +133,15 @@ def create_login_view(page: ft.Page) -> ft.View:
                 elif remember_me_checkbox.value and not page.client_storage:
                     _logger.warning("Opção 'Lembrar de mim' ativa, mas client_storage não está disponível (app não é Web/Desktop?).")
 
+                # Chama a função de carregamento de configurações em uma thread
+                load_settings_func = page.data.get("load_settings_func")
+                if load_settings_func:
+                    _logger.info("Disparando carregamento de configurações de usuário em background após login.")
+                    threading.Thread(target=load_settings_func, args=(page,), daemon=True).start()
+                else:
+                    _logger.error("Função 'load_settings_func' não encontrada em page.data! As configurações do usuário podem não ser carregadas.")
 
                 LoggerSetup.set_cloud_user_context(id_token, user_id)
-
                 # TENTA ADICIONAR CLOUD LOGGING AQUI
                 try:
                     if not LoggerSetup._active_cloud_handler_instance:
@@ -201,7 +207,6 @@ def create_login_view(page: ft.Page) -> ft.View:
             _logger.error(f"Erro ao solicitar redefinição de senha para {email_val}: {ex_reset}", exc_info=True)
             show_snackbar(page, "Ocorreu um erro ao solicitar a redefinição.", color=theme.COLOR_ERROR)
 
-
     forgot_password_button = ft.TextButton(
         "Esqueci minha senha",
         on_click=handle_forgot_password_click
@@ -225,7 +230,7 @@ def create_login_view(page: ft.Page) -> ft.View:
             email_field,
             password_field,
             ft.Row([remember_me_checkbox], alignment=ft.MainAxisAlignment.START),
-            ft.Container(height=10),
+            ft.Container(height=15),
             ft.Row([login_button], alignment=ft.MainAxisAlignment.CENTER),
             ft.Container(height=10),
             ft.Row([forgot_password_button], alignment=ft.MainAxisAlignment.CENTER),
@@ -233,7 +238,7 @@ def create_login_view(page: ft.Page) -> ft.View:
         ],
         width=400, # Largura do card de login
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
-        spacing=10
+        spacing=10, scroll=ft.ScrollMode.ADAPTIVE
     )
 
     login_card = ft.Card(
