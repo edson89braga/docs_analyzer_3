@@ -1,9 +1,8 @@
 ======================================================================================
 # TODO: Próximas Tarefas:
 
-> Melhorias na responsividade do LLMStructuredResultDisplay;
-
-> padrão: gpt-Mini; Contas somente @pg.gov.br
+> padrões fixos? perfil adm?
+> Contas somente @pg.gov.br
 > Fix: CreateUser: Tratar erro "message": "EMAIL_EXISTS"
 
 > revisar sistemática do logging em nuvem;

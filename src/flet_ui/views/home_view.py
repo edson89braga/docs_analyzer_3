@@ -219,9 +219,9 @@ def create_home_view2(page: ft.Page) -> ft.Control:
                 padding=20, border_radius=8,
                 # bgcolor=ft.Colors.with_opacity(0.05, theme.COLOR_INFO),
             ),
-            ft.Container(height=25, expand=True), # Espaçador flexível para empurrar a versão para baixo
+            ft.Container(height=20, expand=True), # Espaçador flexível para empurrar a versão para baixo
             version_text,
-            ft.Container(height=50)
+            #ft.Container(height=20, expand=True)
         ],
         alignment=ft.MainAxisAlignment.CENTER, # Tenta centralizar, mas o expand do Container acima ajuda
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
