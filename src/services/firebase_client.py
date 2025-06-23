@@ -1387,7 +1387,6 @@ class FbManagerAuth:
             return True
         return False
     
-
 # --- Imports para a Função de Teste ---
 import getpass
 from src.services import credentials_manager # Para simular criptografia de API key

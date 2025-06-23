@@ -27,7 +27,7 @@ from langchain_community.callbacks.manager import get_openai_callback
 from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 
 from src.utils import timing_decorator
-from src.core.prompts import (prompts, output_formats, review_function, normalizing_function,
+from src.core.prompts import (output_formats, review_function, normalizing_function, # prompts
                                 formatted_initial_analysis, try_convert_to_pydantic_format, return_parse_prompt)
 
 MODEL_FOR_COUNT_TOKENS = "gpt-4o"
@@ -389,7 +389,7 @@ def convert_pydantic_to_json_schema(formatted_initial_pydantic: Any) -> Dict[str
     }
     return response_format
 
-def _get_prompt_to_cache(key_prompt: str, placeholder_str: str, input_processed_text: str) -> Tuple[List[Dict[str, str]], int]:
+def _get_prompt_to_cache(prompts, key_prompt: str, placeholder_str: str, input_processed_text: str) -> Tuple[List[Dict[str, str]], int]:
     """
     Prepara um prompt para cache, substituindo um placeholder e contando os tokens.
 
@@ -482,6 +482,7 @@ def _get_token_usage_info(dados_segmentados: List[Any], waited_cached_tokens: in
 @timing_decorator()
 def analyze_text_with_llm(
         prompt_name: str,
+        prompts: Dict[str, List],
         processed_text: str,
         provider: str = DEFAULT_LLM_PROVIDER,
         model_name: Optional[str] = DEFAULT_LLM_MODEL,
@@ -554,7 +555,7 @@ def analyze_text_with_llm(
             elif prompt_name == "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS":
                 logger.info(f"Prompt_name recebido: {prompt_name}")
 
-                prompt_inicial_para_cache, main_tokens_count = _get_prompt_to_cache("prompt_inicial_para_cache", "{input_text}", processed_text)
+                prompt_inicial_para_cache, main_tokens_count = _get_prompt_to_cache(prompts, "prompt_inicial_para_cache", "{input_text}", processed_text)
 
                 dados_segmentados = []
                 for prompt_group in prompts[prompt_name]:

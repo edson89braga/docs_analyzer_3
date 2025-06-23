@@ -8,7 +8,7 @@ start_time = perf_counter()
 logger.debug(f"{start_time:.4f}s - Iniciando nc_analyze_view.py")
 
 import flet as ft
-import threading, os, shutil
+import threading, os, shutil, json
 from typing import Optional, Dict, Any, List, Union, Tuple, Callable
 from time import time, sleep, perf_counter
 from datetime import datetime
@@ -27,22 +27,16 @@ from src.flet_ui import theme
 from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR, cotacao_dolar_to_real,
                           KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, 
                           FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_LOADED_LLM_PROVIDERS,
-                          KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST)
+                          KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST,
+                          PROMPTS_COLLECTION, PROMPTS_DOCUMENT_ID)
 
-from src.services.firebase_client import FirebaseClientFirestore
+from src.services.firebase_client import FirebaseClientFirestore, _from_firestore_value
 
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
                         get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l)
 
 # Outros imports pesados aqui:
-from src.core.prompts import (
-    formatted_initial_analysis,
-    tipos_doc, origens_doc, tipos_locais,
-    areas_de_atribuição, tipos_a_autuar, assuntos_re,
-    lista_delegacias_especializadas, materias_prometheus, 
-    lista_delegacias_interior, lista_corregedorias
-)
-destinacoes_completas = lista_delegacias_especializadas + lista_delegacias_interior + lista_corregedorias
+from src.core.prompts import (formatted_initial_analysis, get_prompts_for_initial_analysis)
 
 from src.utils import _initialize_heavy_utils
 _initialize_heavy_utils()
@@ -50,7 +44,6 @@ _initialize_heavy_utils()
 from src.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
 import src.core.ai_orchestrator as ai_orchestrator 
 from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
-from src.core import prompts as core_prompts
 
 # Antecipando, sob load_progressing_gui, outros imports que serão utilizados em utils.py:
 import unicodedata
@@ -132,6 +125,76 @@ class FeedbackDialogAction(Enum):
     SKIP_AND_CONTINUE = "skip_and_continue"
     CANCELLED_OR_ERROR = "cancelled_or_error" 
 
+KEY_SESSION_PROMPTS1 = "app_prompts_from_firestore_1"
+KEY_SESSION_PROMPTS2 = "app_prompts_from_firestore_2"
+KEY_SESSION_LIST_TO_PROMPTS = "app_list_to_prompts_from_firestore"
+
+def load_prompts_from_firestore(page: ft.Page):
+    """
+    Carrega os componentes base de prompts (ALL_lists, ALL_prompts) do Firestore,
+    constrói os pipelines de prompts finais e os armazena no cache do servidor.
+    """
+    logger.info("Carregando componentes base de prompt...")
+    firestore_client = FirebaseClientFirestore()
+    user_token = page.session.get("auth_id_token")
+    user_id = page.session.get("auth_user_id")
+    user_cache = get_user_cache(page)
+
+    prompts_path = os.path.join(ASSETS_DIR_ABS, 'dict_prompts.json')
+    os.makedirs(os.path.dirname(prompts_path), exist_ok=True)
+
+    loaded_components = None
+
+    if user_token:
+        prompts_doc_path = f"{PROMPTS_COLLECTION}/{PROMPTS_DOCUMENT_ID}"
+        try:
+            response = firestore_client._make_firestore_request("GET", user_token, prompts_doc_path)
+            if response.status_code == 200:
+                prompts_data = response.json()
+                fields = prompts_data.get("fields", {})
+                if fields:
+                    loaded_components = {k: _from_firestore_value(v) for k, v in fields.items()}
+                    logger.info("Componentes base de prompt carregados com sucesso do Firestore.")
+                    # Salva uma cópia local ao baixar com sucesso
+                    with open(prompts_path, 'w', encoding='utf-8') as f:
+                        json.dump(loaded_components, f, ensure_ascii=False, indent=4)
+                        logger.info(f"Cópia local dos prompts salva em: {prompts_path}")
+        except Exception as e:
+            logger.error(f"Exceção ao carregar componentes de prompts do Firestore: {e}", exc_info=True)
+
+    # É esperado trabalhar somente com prompts baixados ou versão local em assets; 
+    # prompts hardocoded em prompts.py serão descontinuados
+    if not loaded_components: 
+        if os.path.exists(prompts_path):
+            with open(prompts_path, 'r', encoding='utf-8') as f:
+                loaded_components = json.load(f)
+                logger.info("Fallback: Componentes de prompts carregados localmente.")
+    
+    if not loaded_components:
+        msg_erro = "Nenhum componente de prompt carregado localmente."
+        logger.critical(msg_erro)
+        raise Exception(msg_erro)
+
+    user_cache = get_user_cache(page)
+    # Agora, construa os prompts finais usando os componentes carregados (do Firestore ou fallback)
+    try:
+        # Passa os componentes carregados para a função de construção
+        final_prompts, prompts_dict = get_prompts_for_initial_analysis(
+            loaded_components["ALL_lists"],
+            loaded_components["ALL_prompts"]
+        )
+        # Armazena o resultado final no cache do servidor
+        user_cache[KEY_SESSION_PROMPTS1] = final_prompts
+        user_cache[KEY_SESSION_PROMPTS2] = prompts_dict
+        user_cache[KEY_SESSION_LIST_TO_PROMPTS] = loaded_components["ALL_lists"]
+        logger.info("Pipelines de prompts finais construídos e armazenados no cache do servidor.")
+    except Exception as e:
+        logger.error(f"Falha ao construir pipelines de prompts finais: {e}", exc_info=True)
+        # Em caso de erro, armazena um dicionário vazio para evitar falhas posteriores
+        user_cache[KEY_SESSION_PROMPTS1] = {}
+        user_cache[KEY_SESSION_PROMPTS2] = {}
+        user_cache[KEY_SESSION_LIST_TO_PROMPTS] = {}
+     
 class AnalyzePDFViewContent(ft.Column):
     """
     Conteúdo principal da view de Análise de Notícias-Crime e Outros Documentos.
@@ -176,6 +239,8 @@ class AnalyzePDFViewContent(ft.Column):
         self.feedback_workflow_manager: Optional[FeedbackWorkflowManager] = None
         
         self.user_cache = get_user_cache(self.page)
+
+        load_prompts_from_firestore(self.page)
 
         self._build_gui_structure()
         self.feedback_workflow_manager = FeedbackWorkflowManager(self.page, self)
@@ -425,39 +490,17 @@ class AnalyzePDFViewContent(ft.Column):
         Returns:
             ft.Container: Um container Flet contendo os TextFields com os prompts.
         """
+        self.user_cache = get_user_cache(self.page)
+        prompts = self.user_cache.get(KEY_SESSION_PROMPTS2)
+
         logger.debug("Criando layout de visualização do prompt.")
 
-        prompt_variables_to_display = [                       
-            ("System_prompt", core_prompts.system_prompt_A0),
-            #("Instruction_prompt", core_prompts.general_instruction_B1_1),
-            ("Instruction_prompt", core_prompts.general_instruction_B1_2),
-            ("Start_prompt", core_prompts.start_action_B2),
-            ("Prompt_C0", core_prompts.prompt_C0),
-            #("Prompt_C2", core_prompts.prompt_C2),
-            #("Prompt_C3", core_prompts.prompt_C3),
-            #("Prompt_C4", core_prompts.prompt_C4),
-            ("Prompt_D0", core_prompts.prompt_D0),
-            #("Prompt_D2", core_prompts.prompt_D2),
-            #("Prompt_D3", core_prompts.prompt_D3),
-            #("Prompt_D4", core_prompts.prompt_D4),
-            ("Prompt_F0", core_prompts.prompt_F0),
-            #("Prompt_F2", core_prompts.prompt_F2),
-            #("Prompt_F3", core_prompts.prompt_F3),
-            #("Prompt_F4", core_prompts.prompt_F4),
-            ("Prompt_G1", core_prompts.prompt_G1),
-            ("Prompt_G2", core_prompts.prompt_G2),
-            ("Prompt_H1", core_prompts.prompt_H1),
-            ("Prompt_I1", core_prompts.prompt_I1),
-            ("Prompt_I2", core_prompts.prompt_I2),
-            ("Prompt_J0", core_prompts.prompt_J0),
-            #("Prompt_J2", core_prompts.prompt_J2),
-            ("Prompt_K0", core_prompts.prompt_K0),
-            #("Prompt_K2", core_prompts.prompt_K2),
-            #("Prompt_K3", core_prompts.prompt_K3),
-            #("Prompt_K4", core_prompts.prompt_K4),
-            #("Final_prompt", core_prompts.final_action_L0),
-        ]
-
+        prompt_variables_to_display = ["system_prompt_A0", "general_instruction_B1_2", "start_action_B2", 
+                                        "prompt_C0", "prompt_D0", "prompt_F0", "prompt_G1", "prompt_G2",
+                                        "prompt_H1", "prompt_I1", "prompt_I2", "prompt_J0", "prompt_K0"]
+        
+        prompt_variables_to_display = [(key_prompt, prompts[key_prompt]) for key_prompt in prompt_variables_to_display]
+        
         prompt_text_fields = [ft.Container(height=1)]
         for name_str, prompt_dict_obj in prompt_variables_to_display:
             content_value = prompt_dict_obj.get("content", "Conteúdo não encontrado")
@@ -1822,11 +1865,14 @@ class InternalAnalysisController:
  
         logger.debug(f"mode_prompt: {mode_prompt}")  ,
  
- 
         if mode_prompt == "sequential_prompts":
-            selected_prompts = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
+            key_prompt_group = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
         else: # if mode_prompt == "prompt_unico":
-            selected_prompts = "PROMPT_UNICO_for_INITIAL_ANALYSIS"
+            key_prompt_group = "PROMPT_UNICO_for_INITIAL_ANALYSIS"
+
+        self.user_cache = get_user_cache(self.page)
+        loaded_prompts = self.user_cache.get(KEY_SESSION_PROMPTS1)
+
         try:
             logger.info(f"Thread: Iniciando análise LLM para '{batch_name}'...")
             self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
@@ -1840,7 +1886,7 @@ class InternalAnalysisController:
  
             loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
  
-            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(selected_prompts, aggregated_text,
+            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(key_prompt_group, loaded_prompts, aggregated_text,
                                                                                                  provider, model_name, temperature,
                                                                                                  decrypted_api_key, loaded_llm_providers)
  
@@ -1849,7 +1895,6 @@ class InternalAnalysisController:
                 # Registrar essa informação para o feedback_metric
                 self.page.session.set(KEY_SESSION_LLM_REANALYSIS, is_reanalysis)
                 
-                self.user_cache = get_user_cache(self.page)
                 self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = llm_response_data
                 self.page.session.set("has_llm_response", True)
                 # A flag 'is_new_llm_response' será passada para a sessão para ser usada por _update_ui_from_state
@@ -2833,6 +2878,28 @@ class LLMStructuredResultDisplay(ft.Column):
         # data aqui é o objeto FormatAnaliseInicial como recebido (após parsing inicial da resposta da LLM)
         logger.info(f"LLMStructuredResultDisplay.update_data chamado. is_new_llm_response={is_new_llm_response}, data_is_none={data_to_display_in_gui is None}")
         
+        self.user_cache = get_user_cache(self.page)
+        lists_to_prompts = self.user_cache.get(KEY_SESSION_LIST_TO_PROMPTS)
+
+        key_lists = ['tipos_doc', 'origens_doc', 'tipos_locais',
+        'areas_de_atribuição', 'tipos_a_autuar', 'assuntos_re',
+        'materias_prometheus', 'destinacoes_completas']
+
+        for k in key_lists:
+            if k not in lists_to_prompts:
+                msg_erro = "Chave(s) ausente(s) nas referências de Lista para composição de prompts."
+                logger.erro(msg_erro)
+                raise Exception(msg_erro)
+
+        tipos_doc = lists_to_prompts['tipos_doc']
+        origens_doc = lists_to_prompts['origens_doc']
+        tipos_locais = lists_to_prompts['tipos_locais']
+        areas_de_atribuição = lists_to_prompts['areas_de_atribuição']
+        tipos_a_autuar = lists_to_prompts['tipos_a_autuar']
+        assuntos_re = lists_to_prompts['assuntos_re']
+        materias_prometheus = lists_to_prompts['materias_prometheus']
+        destinacoes_completas = lists_to_prompts['destinacoes_completas']
+
         if data_to_display_in_gui is None:
             logger.warning("LLMStructuredResultDisplay.update_data: data_to_display_in_gui é None. Limpando display e snapshots.")
             self.original_llm_data_snapshot = None

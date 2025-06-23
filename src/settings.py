@@ -83,6 +83,9 @@ USER_LLM_PREFERENCES_COLLECTION = "user_llm_preferences"
 LLM_EMBEDDINGS_CONFIG_COLLECTION = "llm_providers_config" # Pode ser a mesma coleção dos provedores
 LLM_EMBEDDINGS_DEFAULT_DOC_ID = "model_embeddings_list" # Documento com a lista de custos
 
+PROMPTS_COLLECTION = "prompt_templates"
+PROMPTS_DOCUMENT_ID = "initial_analysis_v1"
+
 # Chaves de sessão relacionadas ao Firebase
 KEYRING_SERVICE_FIREBASE = f"{APP_NAME}_Firebase"
 KEYRING_USER_ENCRYPTION_KEY = "encryption_key" # Chave Fernet

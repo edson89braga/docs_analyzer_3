@@ -9,7 +9,7 @@ logger.debug(f"{start_time:.4f}s - Iniciando app.py")
 
 import flet as ft
 import time, os, threading
-from typing import Dict, Any, Optional
+from typing import Optional
 
 from ..settings import (APP_TITLE, APP_VERSION, FLET_SECRET_KEY,
                         APP_DEFAULT_SETTINGS_COLLECTION, ANALYZE_PDF_DEFAULTS_DOC_ID,
@@ -196,7 +196,7 @@ def load_default_analysis_settings(page: ft.Page):
 
     page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, final_analysis_settings)
     logger.info(f"Configurações finais de análise (KEY_SESSION_ANALYSIS_SETTINGS) definidas na sessão: {final_analysis_settings}")
-
+   
 def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False) -> bool:
     """
     Verifica se o ID token precisa ser atualizado e tenta atualizá-lo.
@@ -585,7 +585,6 @@ def main(page: ft.Page, dev_mode: bool = False):
     else:
         # Inicia o fluxo de inicialização. Ele cuidará da navegação.
         initialize_app_flow()  
-
 
 
 execution_time = perf_counter() - start_time
