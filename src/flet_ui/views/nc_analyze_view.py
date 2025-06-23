@@ -1348,6 +1348,9 @@ class InternalFileListManager:
             self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
             # Apenas reseta os resultados, a UI será atualizada pelo método de reset
             self.parent_view._reset_processing_and_llm_results()
+            update_lock = self.page.data.get("global_update_lock")
+            with update_lock:
+                self.page.update()
                     
         if self.parent_view.feedback_workflow_manager:
             self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
@@ -1380,6 +1383,10 @@ class InternalFileListManager:
                 self.parent_view._clear_all_data_and_gui() # Limpa tudo
             else: # Apenas reseta os resultados do processamento
                 self.parent_view._reset_processing_and_llm_results()
+            
+            update_lock = self.page.data.get("global_update_lock")
+            with update_lock:
+                self.page.update()
 
         if self.parent_view.feedback_workflow_manager:
             self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(

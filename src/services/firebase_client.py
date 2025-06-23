@@ -72,7 +72,6 @@ def _from_firestore_value(fs_value: Dict[str, Any]) -> Any:
     current_logger.warning(f"Tipo de valor Firestore não reconhecido para conversão: {list(fs_value.keys())}")
     return None
 
-
 class FirebaseClientStorage:
     """
     Gerencia operações no Firebase Storage utilizando a API REST e token de ID do usuário.
@@ -169,7 +168,7 @@ class FirebaseClientStorage:
             self.logger.error(f"Erro inesperado em _make_storage_request para {object_path}: {e}", exc_info=True)
             raise
 
-    def upload_text_user(self, user_token: str, user_id: str, text_content: str, storage_path_suffix: str) -> bool:
+    def upload_text_user(self, user_token: str, user_id: str, text_content: str, full_storage_path: str) -> bool:
         """
         Faz upload de um conteúdo de texto para o Firebase Storage no caminho do usuário.
 
@@ -177,8 +176,7 @@ class FirebaseClientStorage:
             user_token (str): Token de ID do Firebase do usuário.
             user_id (str): ID único do usuário (para construir o caminho).
             text_content (str): Conteúdo de texto a ser enviado.
-            storage_path_suffix (str): Caminho relativo dentro do diretório do usuário
-                                       (ex: "logs/session1/app.log").
+            full_storage_path (str): Caminho completo do objeto no bucket (ex: "logs/2024/01/01/1234_uid.log").
 
         Returns:
             bool: True se o upload for bem-sucedido, False caso contrário.
@@ -188,12 +186,11 @@ class FirebaseClientStorage:
             self.logger.error(f"Não autorizado: O token verificado (UID: {verified_uid}) não corresponde ao UID da solicitação ({user_id}).")
             return False
         
-        if not all([user_token, user_id, storage_path_suffix]):
-            self.logger.error("upload_text_user: Argumentos inválidos (token, user_id ou path suffix faltando).")
+        if not all([user_token, user_id, full_storage_path]):
+            self.logger.error("upload_text_user: Argumentos inválidos (token, user_id ou full_storage_path faltando).")
             return False
 
         # Constrói o caminho completo no bucket, isolando por usuário
-        full_storage_path = f"users/{user_id}/{storage_path_suffix.lstrip('/')}"
         self.logger.debug(f"Tentando upload de texto para Storage: {full_storage_path}")
 
         try:
@@ -256,7 +253,6 @@ class FirebaseClientStorage:
             return None
 
     # Outros métodos como delete_file_user, list_files_user podem ser adicionados aqui seguindo o mesmo padrão.
-
 
 class FirebaseClientFirestore:
     """
@@ -724,9 +720,7 @@ class FirebaseClientFirestore:
         except Exception as e:
             self.logger.error(f"Erro ao salvar dados de feedback detalhado: {e}", exc_info=True)
         return False
-
-    
-
+  
 class FbManagerAuth:
     """
     Gerencia a autenticação de usuários com o Firebase Authentication

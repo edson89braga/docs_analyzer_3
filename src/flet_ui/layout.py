@@ -180,6 +180,15 @@ Para mais detalhes, consulte:
         terms_dialog.open = True
         page.update()
 
+    def show_history_placeholder(e):
+        # Import local para evitar dependência circular no topo do arquivo
+        from src.flet_ui.components import show_snackbar
+        show_snackbar(
+            page, 
+            "Visualização do Histórico de Uso ainda não implementada.",
+            color=theme.COLOR_WARNING
+        )
+        
     # Recupera o nome do usuário para exibir na AppBar, se logado
     user_display_name = page.session.get("auth_display_name") or \
                         (page.client_storage.get("auth_display_name") if page.client_storage else None)
@@ -221,9 +230,10 @@ Para mais detalhes, consulte:
             padding = ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
             items=[
                 ft.PopupMenuItem(text="Perfil", icon=ft.Icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")), # Rota de perfil
-                ft.PopupMenuItem(text="Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=lambda _: page.go("/settings/proxy")),
+                ft.PopupMenuItem(text="Histórico de Uso", icon=ft.Icons.HISTORY, on_click=show_history_placeholder),
                 ft.PopupMenuItem(text="Provedores LLM", icon=ft.Icons.MODEL_TRAINING_OUTLINED, on_click=lambda _: page.go("/settings/llm")), # Rota de perfil
-                ft.PopupMenuItem(text="Termos de Uso", icon=ft.Icons.POLICY_OUTLINED, on_click=show_terms_dialog),
+                ft.PopupMenuItem(text="Configs. Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=lambda _: page.go("/settings/proxy")),
+                ft.PopupMenuItem(text="Termos e Condições", icon=ft.Icons.POLICY_OUTLINED, on_click=show_terms_dialog),
                 ft.PopupMenuItem(),  # Divisor
                 ft.PopupMenuItem(text="Sair", icon=ft.Icons.LOGOUT, on_click=lambda _: handle_logout(page)) # Ação de Logout
             ]

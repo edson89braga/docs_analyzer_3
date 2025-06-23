@@ -300,16 +300,9 @@ def create_login_view(page: ft.Page) -> ft.View:
 
     welcome_title = ft.Text(
         f"Bem-vindo à {APP_TITLE}",
-        style=ft.TextThemeStyle.HEADLINE_LARGE, text_align=ft.TextAlign.CENTER,
+        style=ft.TextThemeStyle.HEADLINE_SMALL, text_align=ft.TextAlign.CENTER,
         weight=ft.FontWeight.BOLD, color=theme.PRIMARY
     )
-    intro_text = ft.Text(
-        "Plataforma de Agentes de IA especializados e Chats inteligentes\n"
-        "para análise de documentos e procedimentos da Polícia Federal.\n",
-        style=ft.TextThemeStyle.TITLE_MEDIUM, text_align=ft.TextAlign.CENTER,
-        color=ft.colors.with_opacity(0.85, ft.colors.ON_SURFACE)
-    )
-
     version_text = ft.Text(
         f"Versão: {APP_VERSION}",
         style=ft.TextThemeStyle.BODY_MEDIUM,
@@ -317,15 +310,12 @@ def create_login_view(page: ft.Page) -> ft.View:
         italic=True,
         color=ft.colors.with_opacity(0.6, ft.colors.ON_SURFACE)
     )
-
     header_section = ft.Column(
         [
             department_logo,
             ft.Container(height=15),
             welcome_title,
             ft.Container(height=5),
-            intro_text,
-            version_text
         ],
         alignment=ft.MainAxisAlignment.CENTER,
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -366,7 +356,8 @@ def create_login_view(page: ft.Page) -> ft.View:
             header_section,
             ft.Container(height=30),
             login_card,
-            ft.Container(expand=True), # Espaçador inferior
+            ft.Container(height=40, expand=True), # Espaçador inferior
+            version_text
         ],
         expand=True,
         alignment=ft.MainAxisAlignment.CENTER,

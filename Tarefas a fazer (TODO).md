@@ -1,10 +1,8 @@
 ======================================================================================
 # TODO: Próximas Tarefas:
 
+> revisar sistemática do logging;
 > Subir prompts para firestore
-
-> revisar sistemática do logging em nuvem;
-
 > pyinstaller e testes na rede;
 
 -------------------

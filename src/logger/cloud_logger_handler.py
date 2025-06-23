@@ -5,7 +5,7 @@ print(f"{start_time:.4f}s - Iniciando cloud_logger_handler.py")
 import logging, atexit, os, re
 from threading import Thread, Lock, Event
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from time import sleep
 
@@ -18,7 +18,7 @@ from abc import ABC, abstractmethod
 
 class LogUploaderStrategy(ABC):
     @abstractmethod
-    def upload_logs(self, logs_batch: List[str], base_log_folder: Path, log_filename: str) -> bool:
+    def upload_logs(self, logs_batch: List[str], full_cloud_path: str) -> bool:
         """
         Tenta fazer upload de um lote de logs.
         Retorna True em sucesso, False em falha.
@@ -60,20 +60,21 @@ class ClientLogUploader(LogUploaderStrategy):
             self.logger.warning(f"ClientLogUploader: Erro ao obter log existente: {e}")
             return ""
 
-    def upload_logs(self, logs_batch: List[str], base_log_folder: Path, log_filename: str) -> bool:
+    def upload_logs(self, logs_batch: List[str], full_cloud_path: str) -> bool:
         if not self.client_storage or not self._current_user_token or not self._current_user_id:
             self.logger.warning("ClientLogUploader: Contexto de usuário ou cliente ausente para upload.")
             return False
 
-        path_suffix = (base_log_folder / log_filename).as_posix()
-        existing_data = self.get_existing_logs(base_log_folder, log_filename)
-        if existing_data and not existing_data.endswith("\n"):
-            existing_data += "\n"
+        # Removemos get_existing_logs porque mudamos a estratégia de salvar um grande arquivo por dia 
+        # para salvar múltiplos arquivos pequenos e únicos ao longo do dia.
+        #existing_data = self.get_existing_logs(base_log_folder, log_filename)
+        #if existing_data and not existing_data.endswith("\n"):
+        #    existing_data += "\n" # log_data_to_upload = existing_data + "\n".join(logs_batch) + "\n"
         
-        log_data_to_upload = existing_data + "\n".join(logs_batch) + "\n"
+        log_data_to_upload = "\n".join(logs_batch) + "\n"
 
         return self.client_storage.upload_text_user(
-            self._current_user_token, self._current_user_id, log_data_to_upload, path_suffix
+            self._current_user_token, self._current_user_id, log_data_to_upload, full_cloud_path
         )
 
 class AdminLogUploader(LogUploaderStrategy):
@@ -90,20 +91,19 @@ class AdminLogUploader(LogUploaderStrategy):
             self.logger.warning(f"AdminLogUploader: Erro ao obter log existente ({cloud_path}): {e}")
             return ""
 
-    def upload_logs(self, logs_batch: List[str], base_log_folder: Path, log_filename: str) -> bool:
+    def upload_logs(self, logs_batch: List[str], full_cloud_path: str) -> bool:
         if not self.admin_storage: return False
         
-        cloud_path = (base_log_folder / log_filename).as_posix()
-        existing_data = self.get_existing_logs(base_log_folder, log_filename)
-        if existing_data and not existing_data.endswith("\n"):
-             existing_data += "\n"
+        #existing_data = self.get_existing_logs(full_cloud_path)
+        #if existing_data and not existing_data.endswith("\n"):
+        #    existing_data += "\n"
 
-        log_data_to_upload = existing_data + "\n".join(logs_batch) + "\n"
+        log_data_to_upload = "\n".join(logs_batch) + "\n"
         try:
-            self.admin_storage.upload_text(log_data_to_upload, cloud_path)
+            self.admin_storage.upload_text(log_data_to_upload, full_cloud_path)
             return True
         except Exception as e:
-            self.logger.error(f"AdminLogUploader: Falha no upload para {cloud_path}: {e}")
+            self.logger.error(f"AdminLogUploader: Falha no upload para {full_cloud_path}: {e}")
             return False
 
 class CloudLogHandler(logging.Handler):
@@ -143,8 +143,7 @@ class CloudLogHandler(logging.Handler):
                 atexit.register(CloudLogHandler._force_upload_on_exit_static, self) # Passa a instância
                 CloudLogHandler._atexit_registered = True
                 logger.info("CloudLogHandler: Método de cleanup global registrado no atexit.")
-                
-
+             
     def emit(self, record: logging.LogRecord):
         """Adiciona um registro formatado ao buffer e sinaliza para upload se cheio."""
         # Ignora logs do próprio handler para evitar recursão (opcional)
@@ -214,21 +213,30 @@ class CloudLogHandler(logging.Handler):
         if not logs_batch: return True
 
         # --- Construção do Path (comum) ---
-        try:
-            username_pc = os.getlogin()
-        except OSError:
-            username_pc = "unknown_pc"
+        try: username_pc = os.getlogin()
+        except OSError: username_pc = "unknown_pc"
         
-        username_full = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', username_pc)
-        username_full = re.sub(r'[^\w\s\d_\-\.]', '', username_full).strip()
-        username_full = re.sub(r'\s+', '_', username_full).strip('_') or "default_user"
+        # Limpeza do nome do PC
+        username_pc_safe = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', username_pc)
+        username_pc_safe = re.sub(r'[^\w\s\d_\-\.]', '', username_pc_safe).strip()
+        username_pc_safe = re.sub(r'\s+', '_', username_pc_safe).strip('_') or "default_user"
          # Correção regex para múltiplos underscores/hífens/pontos
-        username_full = re.sub(r'[_.-]+', '_', username_full)
+        username_pc_safe = re.sub(r'[_.-]+', '_', username_pc_safe)
 
-        base_log_folder_in_cloud = Path(CLOUD_LOGGER_FOLDER) / username_full / APP_VERSION
-        log_filename_in_cloud = f"{username_full}_{datetime.now().strftime('%Y-%m-%d')}.txt"
+        # Determina o user_id para o nome do arquivo. Usa "anonymous" se não autenticado.
+        user_id_for_filename = "anonymous_user"
+        if isinstance(self.uploader, ClientLogUploader) and self.uploader._current_user_id:
+            user_id_for_filename = self.uploader._current_user_id
         
-        full_cloud_path_info_for_backup = (base_log_folder_in_cloud / log_filename_in_cloud).as_posix()
+        # Estrutura de pasta baseada em data
+        now = datetime.now(timezone.utc)
+        base_log_folder_in_cloud = Path(CLOUD_LOGGER_FOLDER) / now.strftime('%Y/%m/%d')
+        
+        # Novo padrão de nome de arquivo
+        log_filename_in_cloud = f"{username_pc_safe}_{now.strftime('%H%M%S')}_{user_id_for_filename}.log"
+        
+        # Caminho completo do objeto no Storage
+        full_cloud_path = (base_log_folder_in_cloud / log_filename_in_cloud).as_posix()
 
         success = False
         initial_upload_attempt_failed_gracefully = False
@@ -250,16 +258,16 @@ class CloudLogHandler(logging.Handler):
                     upload_successful_this_attempt = False
                     if isinstance(self.uploader, ClientLogUploader):
                         if can_attempt_client_upload:
-                            upload_successful_this_attempt = self.uploader.upload_logs(logs_batch, base_log_folder_in_cloud, log_filename_in_cloud)
+                            upload_successful_this_attempt = self.uploader.upload_logs(logs_batch, full_cloud_path)
                         # else: não tenta, já tratado por initial_upload_attempt_failed_gracefully
                     elif isinstance(self.uploader, AdminLogUploader): # Se for AdminUploader, sempre tenta
-                        upload_successful_this_attempt = self.uploader.upload_logs(logs_batch, base_log_folder_in_cloud, log_filename_in_cloud)
+                        upload_successful_this_attempt = self.uploader.upload_logs(logs_batch, full_cloud_path)
                     else: # Estratégia desconhecida
                         self.logger.error(f"CloudLogHandler: Estratégia de uploader desconhecida: {self.uploader.__class__.__name__}")
                         break # Sai do loop de retentativas
 
                     if upload_successful_this_attempt:
-                        self.logger.info(f"CloudLogHandler: Lote de {len(logs_batch)} logs enviado via {self.uploader.__class__.__name__} para pasta base {base_log_folder_in_cloud}")
+                        self.logger.info(f"CloudLogHandler: Lote de {len(logs_batch)} logs enviado via {self.uploader.__class__.__name__} para pasta base {full_cloud_path}")
                         success = True
                         break
                     else:
@@ -273,7 +281,7 @@ class CloudLogHandler(logging.Handler):
         # Só faz backup se a tentativa de upload realmente falhou (não se foi adiada por falta de contexto do cliente)
         if not success and not initial_upload_attempt_failed_gracefully:
             self.logger.error(f"CloudLogHandler: Falha final no upload para CloudStorage via {self.uploader.__class__.__name__}.")
-            self._backup_logs_local(logs_batch, full_cloud_path_info_for_backup)
+            self._backup_logs_local(logs_batch, full_cloud_path)
         elif initial_upload_attempt_failed_gracefully and not success:
             self.logger.info("CloudLogHandler: Upload via cliente adiado, logs permanecem no buffer.")
             pass

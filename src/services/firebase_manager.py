@@ -173,7 +173,6 @@ class FbManagerStorage:
             blobs = self.bucket.list_blobs(prefix=prefix)
             return [blob.name for blob in blobs]
     
-
 class FbManagerFirestore:
     """
     Gerencia operações no Firebase Firestore.
@@ -333,7 +332,6 @@ class FbManagerFirestore:
             self.logger.error(f"Erro ao obter settings do Firestore para {user_id}: {e}", exc_info=True)
             return None
         
-
 # No arquivo src/services/firebase_manager.py, após a classe FbManagerFirestore, adicione:
 
 class FbManagerAdminAuth:
@@ -390,7 +388,6 @@ class FbManagerAdminAuth:
             self.logger.error(f"Erro ao definir custom claim para {user_email}: {e}", exc_info=True)
             return False
         
-
 from rich.prompt import Confirm        
 def sync_local_and_storage_files(
     storage_manager: FbManagerStorage,

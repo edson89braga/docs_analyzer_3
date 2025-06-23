@@ -8,7 +8,7 @@ from time import sleep
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from rich.logging import RichHandler
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any, TYPE_CHECKING
 
 from .cloud_logger_handler import CloudLogHandler, ClientLogUploader, AdminLogUploader
@@ -243,7 +243,7 @@ class LoggerSetup:
             print(f"Erro ao rotacionar arquivo de log: \n{e}")
 
         # --- Limit the number of dated log files ---
-        cls._cleanup_old_log_files(PATH_LOGS, safe_routine_name, days_to_keep=7)  # Keep only 7 days of logs
+        cls._cleanup_old_log_files(PATH_LOGS, days_to_keep=7)  # Keep only 7 days of logs
 
         # Cria o file_handler com o nome do arquivo de log
         file_handler = cls._create_file_handler(
@@ -399,19 +399,101 @@ class LoggerSetup:
         return logger
     
     @classmethod
-    def _cleanup_old_log_files(cls, log_dir: Path, routine_name: str, days_to_keep: int):
-        """Removes dated log files older than `days_to_keep`."""
-        today = datetime.today()
-        cutoff_date = today - timedelta(days=days_to_keep)
-        for file in log_dir.glob(f"{routine_name}_*.log"):
-            try:
-                file_date_str = file.stem.split("_")[-1]  # Extract YYYY-MM-DD
-                file_date = datetime.strptime(file_date_str, "%Y-%m-%d")
-                if file_date < cutoff_date:
-                    file.unlink()  # Delete the old file
-            except (ValueError, IndexError):
-                pass  # Skip files that don't match the date pattern
+    def _cleanup_old_log_files(cls, log_dir: Path, days_to_keep: int):
+        """
+        Remove recursivamente arquivos .log e .txt mais antigos que 'days_to_keep'
+        do diretório de logs especificado.
+        """
+        if not log_dir.is_dir():
+            print(f"Diretório de logs '{log_dir}' não encontrado para limpeza.")
+            return
 
+        cutoff_date = datetime.now() - timedelta(days=days_to_keep)
+        files_removed_count = 0
+        logger = cls.get_logger(__name__) # Usa o próprio logger para registrar a ação
+        
+        logger.info(f"Iniciando limpeza de logs antigos (mais de {days_to_keep} dias) em '{log_dir}'...")
+
+        # Usa rglob para encontrar arquivos em subdiretórios também
+        for file_path in log_dir.rglob('*'):
+            # Verifica se é um arquivo e tem a extensão desejada
+            if file_path.is_file() and file_path.suffix.lower() in ['.log', '.txt']:
+                try:
+                    file_mod_time = datetime.fromtimestamp(file_path.stat().st_mtime)
+                    if file_mod_time < cutoff_date:
+                        file_path.unlink()
+                        #logger.info(f"Arquivo de log antigo removido: {file_path}")
+                        files_removed_count += 1
+                except FileNotFoundError:
+                    # O arquivo pode ter sido removido por outro processo entre o rglob e o stat/unlink
+                    logger.debug(f"Arquivo '{file_path}' não encontrado durante a limpeza (concorrência?).")
+                except Exception as e:
+                    logger.error(f"Erro ao tentar remover o arquivo de log antigo '{file_path}': {e}", exc_info=False)
+        
+        logger.info(f"Limpeza de logs antigos concluída. {files_removed_count} arquivo(s) removido(s).")
+
+    @classmethod
+    def cleanup_cloud_logs(cls, storage_manager: FbManagerStorage, days_to_keep: int, dry_run: bool = False):
+        """
+        Remove ou lista logs do Firebase Storage de forma recursiva a partir do prefixo CLOUD_LOGGER_FOLDER,
+        deletando arquivos mais antigos que 'days_to_keep'.
+        """
+        logger = cls.get_logger(__name__)
+        
+        if not CLOUD_LOGGER_FOLDER.endswith('/'):
+            cloud_log_prefix = f"{CLOUD_LOGGER_FOLDER}/"
+        else:
+            cloud_log_prefix = CLOUD_LOGGER_FOLDER
+
+        logger.info(f"Iniciando verificação de logs antigos na nuvem (prefixo: '{cloud_log_prefix}', retenção: {days_to_keep} dias)...")
+        
+        try:
+            # list_blobs com um prefixo já itera por todos os objetos que começam com esse prefixo,
+            # efetivamente fazendo uma listagem recursiva.
+            blobs_iterator = storage_manager.bucket.list_blobs(prefix=cloud_log_prefix)
+            
+            # A data/hora do blob.updated é 'timezone-aware' (UTC). Precisamos comparar com UTC.
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
+            
+            files_to_remove = []
+            
+            for blob in blobs_iterator:
+                # Ignora "pastas vazias" que o Firebase Storage pode criar.
+                # São blobs de 0 bytes cujo nome termina com '/'.
+                if blob.name.endswith('/') and blob.size == 0:
+                    continue
+
+                if blob.updated and blob.updated < cutoff_date:
+                    files_to_remove.append(blob)
+            
+            if not files_to_remove:
+                logger.info("Nenhum log antigo encontrado para remover na nuvem.")
+                return
+
+            logger.warning(f"Encontrados {len(files_to_remove)} logs antigos para remover:")
+            for blob in files_to_remove:
+                # Formata a data para melhor legibilidade no log
+                mod_time_str = blob.updated.strftime('%Y-%m-%d %H:%M:%S %Z')
+                logger.warning(f"  - A REMOVER: {blob.name} (Última modificação: {mod_time_str})")
+
+            if dry_run:
+                logger.info("DRY RUN concluído. Nenhuma ação de deleção foi executada.")
+                return
+
+            logger.info("Prosseguindo com a deleção real dos arquivos na nuvem...")
+            files_removed_count = 0
+            for blob in files_to_remove:
+                try:
+                    storage_manager.delete_file(blob.name)
+                    files_removed_count += 1
+                except Exception as e_del:
+                    logger.error(f"Erro ao tentar remover o log da nuvem '{blob.name}': {e_del}")
+            
+            logger.info(f"Deleção concluída. {files_removed_count} de {len(files_to_remove)} arquivo(s) removido(s) com sucesso.")
+
+        except Exception as e:
+            logger.error(f"Falha geral ao executar a limpeza de logs da nuvem: {e}", exc_info=True)
+            
 # ======================================================================
 # Função de Teste Manual para Cloud Logging (Somente para Devs)
 # ======================================================================
