@@ -1,6 +1,9 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando firebase_manager.py")
+logger.debug(f"{start_time:.4f}s - Iniciando firebase_manager.py")
 
 import os, json
 import firebase_admin
@@ -14,9 +17,6 @@ from src.services import credentials_manager
 from src.settings import FB_STORAGE_BUCKET
 
 from typing import Optional, Dict, Any, List, Set
-
-import logging
-logger = logging.getLogger(__name__)
 
 @with_proxy()
 def inicializar_firebase():
@@ -100,7 +100,7 @@ class FbManagerStorage:
         with self.lock:
             blob = self.bucket.blob(storage_path)
             blob.upload_from_filename(local_file_path)
-            print(f"{os.path.basename(local_file_path)}: Arquivo enviado para: {storage_path}")
+            logger.debug(f"{os.path.basename(local_file_path)}: Arquivo enviado para: {storage_path}")
 
     def upload_text(self, text, storage_path):
         """
@@ -128,7 +128,7 @@ class FbManagerStorage:
         with self.lock:
             blob = self.bucket.blob(storage_path)
             blob.download_to_filename(local_file_path)
-            print(f"{storage_path}: Arquivo baixado para: {os.path.basename(local_file_path)}")
+            logger.debug(f"{storage_path}: Arquivo baixado para: {os.path.basename(local_file_path)}")
 
     def get_text(self, storage_path):
         """
@@ -154,10 +154,9 @@ class FbManagerStorage:
         with self.lock:
             blob = self.bucket.blob(storage_path)
             if blob.exists():
-                blob.delete()
-                print(f"Arquivo {storage_path} removido.")
+                logger.debug(f"Arquivo {storage_path} removido.")
             else:
-                print(f"Arquivo {storage_path} não encontrado.")
+                logger.warning(f"Arquivo {storage_path} não encontrado.")
 
     def list_files(self,  prefix=None):
         """
@@ -451,7 +450,7 @@ def sync_local_and_storage_files(
     logger.info(f"Arquivos sincronizados (presentes em local e no bucket): {len(files_in_sync)}")
 
     if files_in_bucket_only:
-        print('\n') # Para rich.Confirm
+        # print('\n') # Para rich.Confirm - Remover print de formatação
         if Confirm.ask(f"Deseja baixar para '{local_path}' os {len(files_in_bucket_only)} arquivo(s) que constam somente no bucket?", default=True):
             for file_rel_path in files_in_bucket_only:
                 storage_full_path = bucket_prefix + file_rel_path
@@ -460,7 +459,7 @@ def sync_local_and_storage_files(
                 storage_manager.download_file(storage_full_path, local_full_path)
 
     if files_in_local_only:
-        print('\n') # Para rich.Confirm
+        # print('\n') # Para rich.Confirm - Remover print de formatação
         if Confirm.ask(f"Deseja realizar uploads dos {len(files_in_local_only)} arquivo(s) que constam somente na pasta local '{local_path}'?", default=True):
             for file_rel_path in files_in_local_only:
                 local_full_path = os.path.join(local_path, file_rel_path.replace('/', os.sep))
@@ -482,4 +481,4 @@ def sync_local_and_storage_files(
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado FIREBASE_MANAGER em {execution_time:.4f}s")
+logger.debug(f"Carregado FIREBASE_MANAGER em {execution_time:.4f}s")

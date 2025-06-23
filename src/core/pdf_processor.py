@@ -1,10 +1,12 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando pdf_processor.py")
+logger.debug(f"{start_time:.4f}s - Iniciando pdf_processor.py")
 
 DEBUG_MODE = False
 
-from rich import print
 from src.utils import timing_decorator
 
 ### nltk_initializer:
@@ -67,12 +69,33 @@ class PdfPlumberExtractor(PDFTextExtractorStrategy):
     """Estratégia de extração de texto usando pdfplumber."""
 
     def get_total_pages(self, pdf_path: str) -> int:
+        """
+        Retorna o número total de páginas do PDF usando pdfplumber.
+
+        Args:
+            pdf_path (str): Caminho do arquivo PDF.
+
+        Returns:
+            int: Número total de páginas.
+        """
         import pdfplumber
         with pdfplumber.open(pdf_path) as pdf:
             return len(pdf.pages)
 
     @timing_decorator()
     def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
+        """
+        Extrai textos de páginas específicas de um PDF usando pdfplumber.
+
+        Args:
+            pdf_path (str): Caminho do arquivo PDF.
+            page_indices (Optional[List[int]]): Índices das páginas a serem extraídas (base 0).
+                                                 Se None, todas as páginas são processadas.
+            check_inteligible (bool): Se True, verifica a inteligibilidade do texto extraído.
+
+        Returns:
+            List[Tuple[int, str]]: Lista de tuplas, onde cada tupla contém o índice da página (base 0) e seu texto.
+        """
         import pdfplumber
         content_by_page = []
         try:
@@ -96,24 +119,42 @@ class PdfPlumberExtractor(PDFTextExtractorStrategy):
 
             return content_by_page
         except Exception as e:
-            # Idealmente, o logger viria daqui ou seria injetado.
-            # Por simplicidade, relançamos a exceção para ser tratada pelo chamador.
-            # logger.error(f"Erro ao extrair textos do PDF {os.path.basename(pdf_path)} com PdfPlumber: {str(e)}")
+            logger.error(f"Erro ao extrair textos do PDF {os.path.basename(pdf_path)} com PdfPlumber: {str(e)}", exc_info=True)
             raise RuntimeError(f"PdfPlumber extraction error for {pdf_path}: {e}")
 
 class PyPdfExtractor(PDFTextExtractorStrategy):
     """Estratégia de extração de texto usando pypdf """
 
     def get_total_pages(self, pdf_path: str) -> int:
+        """
+        Retorna o número total de páginas do PDF usando pypdf.
+
+        Args:
+            pdf_path (str): Caminho do arquivo PDF.
+
+        Returns:
+            int: Número total de páginas.
+        """
         from PyPDF2 import PdfReader
         try:
             reader = PdfReader(pdf_path)
             return len(reader.pages)
-            #raise NotImplementedError("PyPdfExtractor.get_total_pages não implementado neste exemplo.")
         except Exception as e:
             raise RuntimeError(f"PyPdf extraction error (get_total_pages) for {pdf_path}: {e}")
 
     def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
+        """
+        Extrai textos de páginas específicas de um PDF usando pypdf.
+
+        Args:
+            pdf_path (str): Caminho do arquivo PDF.
+            page_indices (Optional[List[int]]): Índices das páginas a serem extraídas (base 0).
+                                                 Se None, todas as páginas são processadas.
+            check_inteligible (bool): Se True, verifica a inteligibilidade do texto extraído.
+
+        Returns:
+            List[Tuple[int, str]]: Lista de tuplas, onde cada tupla contém o índice da página (base 0) e seu texto.
+        """
         from PyPDF2 import PdfReader
         content_by_page = []
         try:
@@ -135,20 +176,40 @@ class PyPdfExtractor(PDFTextExtractorStrategy):
             return content_by_page
         except Exception as e:
             raise RuntimeError(f"PyPdf extraction error for {pdf_path}: {e}")
-        #raise NotImplementedError("PyPdfExtractor.extract_texts_from_pages não implementado neste exemplo. Descomente e instale pypdf para usar.")
 
 class FitzExtractor(PDFTextExtractorStrategy):
     """Estratégia de extração de texto usando Docling"""
 
     def get_total_pages(self, pdf_path: str) -> int:
+        """
+        Retorna o número total de páginas do PDF usando fitz (PyMuPDF).
+
+        Args:
+            pdf_path (str): Caminho do arquivo PDF.
+
+        Returns:
+            int: Número total de páginas.
+        """
         import fitz
         try:
             doc = fitz.open(pdf_path)
             return len(doc)
         except Exception as e:
-            raise RuntimeError(f"PyPdf extraction error (get_total_pages) for {pdf_path}: {e}")
+            raise RuntimeError(f"PyMuPDF extraction error (get_total_pages) for {pdf_path}: {e}")
 
     def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
+        """
+        Extrai textos de páginas específicas de um PDF usando fitz (PyMuPDF).
+
+        Args:
+            pdf_path (str): Caminho do arquivo PDF.
+            page_indices (Optional[List[int]]): Índices das páginas a serem extraídas (base 0).
+                                                 Se None, todas as páginas são processadas.
+            check_inteligible (bool): Se True, verifica a inteligibilidade do texto extraído.
+
+        Returns:
+            List[Tuple[int, str]]: Lista de tuplas, onde cada tupla contém o índice da página (base 0) e seu texto.
+        """
         import fitz
         content_by_page = []
         try:
@@ -162,13 +223,13 @@ class FitzExtractor(PDFTextExtractorStrategy):
             for p_idx in indices_to_process:
                 text = doc[p_idx].get_text() or ""
                 content_by_page.append((p_idx, text))
-
+ 
             if check_inteligible:
                 print_text_intelligibility(content_by_page)
-
+ 
             return content_by_page
         except Exception as e:
-            raise RuntimeError(f"PyPdf extraction error for {pdf_path}: {e}")
+            raise RuntimeError(f"PyMuPDF extraction error for {pdf_path}: {e}")
         
 ### text_processing_utils: #########################################################################################
 import re
@@ -239,7 +300,7 @@ def is_text_intelligible(text: str, cid_threshold: float = 0.7) -> bool:
     estimated_cid_chars_length = cid_occurrences * 6 # Uma estimativa conservadora
 
     if len(cleaned_text) > 0 and estimated_cid_chars_length / len(cleaned_text) > cid_threshold:
-        #logger.debug(f"Texto considerado ininteligível devido à alta proporção de (cid:N) (>{cid_threshold*100}%).") # Adicione logger se disponível
+        logger.debug(f"Texto considerado ininteligível devido à alta proporção de (cid:N) (>{cid_threshold*100}%).")
         return False
 
     try:
@@ -249,10 +310,10 @@ def is_text_intelligible(text: str, cid_threshold: float = 0.7) -> bool:
             return False
             
         lang = detect(text_for_langdetect)
-        # logger.debug(f"Idioma detectado para o texto (sem cids): '{lang}'") # Adicione logger
+        logger.debug(f"Idioma detectado para o texto (sem cids): '{lang}'")
         return lang in allowed_langs if lang else False
     except LangDetectException:
-        # logger.debug("LangDetectException, texto considerado ininteligível.") # Adicione logger
+        logger.debug("LangDetectException, texto considerado ininteligível.")
         return False
 
 def count_tokens(text: str, model_name: str) -> int:
@@ -273,6 +334,15 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 _sentence_model = None
 
 def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
+    """
+    Carrega e retorna uma instância do modelo SentenceTransformer, usando cache.
+
+    Args:
+        model_name (str): O nome do modelo SentenceTransformer a ser carregado.
+
+    Returns:
+        SentenceTransformer: A instância do modelo carregado.
+    """
     from sentence_transformers import SentenceTransformer
     global _sentence_model
     if _sentence_model is None:
@@ -280,8 +350,18 @@ def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
     return _sentence_model
 
 @timing_decorator()
-def get_vectors(pages_texts, model_embedding: str = 'all-MiniLM-L6-v2'):
-    print('\n', f'[DEBUG]: Modelo embeddings: {model_embedding}', '\n')
+def get_vectors(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2') -> np_ndarray:
+    """
+    Gera vetores de embedding para uma lista de textos usando um modelo SentenceTransformer.
+
+    Args:
+        pages_texts (List[str]): Lista de textos para os quais gerar embeddings.
+        model_embedding (str): Nome do modelo de embedding a ser usado.
+
+    Returns:
+        np_ndarray: Um array NumPy contendo os vetores de embedding.
+    """
+    logger.info(f'Modelo embeddings: {model_embedding}')
     model = get_sentence_transformer_model(model_embedding)
     vectors_combined = model.encode(pages_texts)
 
@@ -296,7 +376,17 @@ def get_vectors(pages_texts, model_embedding: str = 'all-MiniLM-L6-v2'):
     assert len(vectors_combined) == len(pages_texts), f"Quantidade de vetores ({len(vectors_combined)}) difere da quantidade de textos ({len(pages_texts)})."
     return vectors_combined
 
-def get_similarity_matrix(vectors_combined, normalizer: bool = True):
+def get_similarity_matrix(vectors_combined: np_ndarray, normalizer: bool = True) -> np_ndarray:
+    """
+    Calcula a matriz de similaridade de cosseno entre vetores.
+
+    Args:
+        vectors_combined (np_ndarray): Um array NumPy de vetores.
+        normalizer (bool): Se True, normaliza os vetores antes de calcular a similaridade.
+
+    Returns:
+        np_ndarray: A matriz de similaridade de cosseno.
+    """
     if normalizer: # vetores provenientes do tfidf são arrays de 1D e não podem ser normalizados
         vectors_combined = sk_normalize(vectors_combined)
     similarity_matrix = cosine_similarity(vectors_combined)
@@ -385,24 +475,22 @@ from typing import Dict, Any
 # )
 # Supondo que as funções de src.utils existem
 from src.utils import timing_decorator, reduce_text_to_limit, get_string_intervalos
-# Supondo que src.logger.logger existe
-import logging
-logger = logging.getLogger(__name__)
-
-# Importa o inicializador do NLTK para garantir que os dados sejam baixados
-# import src.core.nltk_initializer (se fosse arquivo separado)
 
 def print_text_intelligibility(texts_normalized: list[tuple[int, str]]):
-    print('\n')
+    """
+    Imprime informações sobre a inteligibilidade do texto de cada página.
+
+    Args:
+        texts_normalized (list[tuple[int, str]]): Lista de tuplas (índice da página, texto normalizado).
+    """
     for p_idx, text in texts_normalized:
-        is_intelligible = is_text_intelligible(text) 
+        is_intelligible = is_text_intelligible(text)
         if not is_intelligible:
             try:
                 lang = detect(text)
-                logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
+                logger.warning(f'Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
             except LangDetectException:
-                logger.warning(f'[red]Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
-    print('\n')
+                logger.warning(f'Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
 
 import networkx as nx
 
@@ -412,6 +500,12 @@ class PDFDocumentAnalyzer:
     Orquestra a extração de texto, pré-processamento, análise e classificação de páginas.
     """
     def __init__(self, extractor_strategy: PDFTextExtractorStrategy = FitzExtractor()):
+        """
+        Inicializa o PDFDocumentAnalyzer com uma estratégia de extração de PDF.
+
+        Args:
+            extractor_strategy (PDFTextExtractorStrategy): A estratégia de extração a ser usada.
+        """
         self.extractor = extractor_strategy
 
     def get_pdf_page_count(self, pdf_path: str) -> int:
@@ -490,9 +584,8 @@ class PDFDocumentAnalyzer:
         return ", ".join(output_parts) if output_parts else "Nenhuma"
 
     ### ======================================================================================
-
     @timing_decorator()
-    def extract_texts_and_preprocess_files(self, pdf_paths_ordered: List[str], clean_spaces=True, lowercase=False
+    def extract_texts_and_preprocess_files(self, pdf_paths_ordered: List[str], clean_spaces: bool = True, lowercase: bool = False
                                            ) -> Tuple[List[Tuple[int, str]], List[List[int]], List[Dict[int, str]], List[str]]:
         """
         Extrai textos de um lote de PDFs ordenados e os pré-processa.
@@ -984,12 +1077,12 @@ class PDFDocumentAnalyzer:
 
         print("\n")
         if set(relevant_page_ordered_indices) == set(keys_of_included_texts):
-            logger.info("[DEBUG] Índices relevantes integra os mesmos índices do texto final agregado.\n")
+            logger.debug("Índices relevantes integram os mesmos índices do texto final agregado.\n")
         else:
-            logger.info(f"[DEBUG] Índices relevantes NÃO integra os mesmos índices do texto final agregado.\n {set(keys_of_included_texts)-set(relevant_page_ordered_indices)}\n")
+            logger.debug(f"Índices relevantes NÃO integram os mesmos índices do texto final agregado.\n {set(keys_of_included_texts)-set(relevant_page_ordered_indices)}\n")
 
         return keys_of_included_texts, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
 
 execution_time = perf_counter() - start_time
-print(f"Carregado PDF_PROCESSOR em {execution_time:.4f}s")
+logger.debug(f"Carregado PDF_PROCESSOR em {execution_time:.4f}s")
 

@@ -1,23 +1,30 @@
 # src/core/doc_generator.py
 
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando doc_generator.py")
+logger.debug(f"{start_time:.4f}s - Iniciando doc_generator.py")
 
 import os
-from typing import List, Tuple
+from typing import List, Tuple, Any
 from docx import Document
 
 from src.core.prompts import formatted_initial_analysis # Para type hinting e acesso aos campos
 from src.settings import ASSETS_DIR_ABS # Para acessar a pasta de assets
 
-import logging
-logger = logging.getLogger(__name__)
-
 TEMPLATES_SUBDIR = "templates_docx"
 
 class DocxExporter:
+    """
+    Classe responsável por exportar dados de análise para documentos DOCX,
+    seja criando um novo documento simples ou preenchendo um template existente.
+    """
     def __init__(self):
+        """
+        Inicializa o DocxExporter, configurando o diretório de templates.
+        """
         self.templates_dir = os.path.join(ASSETS_DIR_ABS, TEMPLATES_SUBDIR)
         os.makedirs(self.templates_dir, exist_ok=True) # Garante que o diretório exista
 
@@ -180,21 +187,16 @@ class DocxExporter:
 
             placeholders_found_in_template = set()
 
-            # Função auxiliar para substituir texto em parágrafos e tabelas
-            # def replace_text_in_element(element, placeholder, replacement_text):
-            #    if hasattr(element, 'text'):
-            #        if placeholder in element.text:
-            #            placeholders_found_in_template.add(placeholder.strip("<>"))
-            #            # A substituição em 'runs' é mais robusta para manter a formatação
-            #            for run in element.runs:
-            #                if placeholder in run.text:
-            #                    run.text = run.text.replace(placeholder, replacement_text)
-            #    # Se for um parágrafo, verifica os 'runs'
-            #    if hasattr(element, 'paragraphs'):
-            #        for p in element.paragraphs:
-            #            replace_text_in_element(p, placeholder, replacement_text)
+            def replace_text_in_element(paragraph: Any, field_name: str, value: Any):
+                """
+                Substitui um placeholder em um parágrafo por um valor dado.
+                Lida com placeholders que podem estar divididos entre múltiplos 'runs'.
 
-            def replace_text_in_element(paragraph, field_name, value):
+                Args:
+                    paragraph (Any): O objeto parágrafo do docx.
+                    field_name (str): O nome do campo correspondente ao placeholder.
+                    value (Any): O valor a ser inserido no lugar do placeholder.
+                """
                 placeholder = f"<{field_name}>" # Formato do placeholder: <nome_do_campo>
                 placeholder_found = False
                 inline = paragraph.runs
@@ -296,5 +298,5 @@ class DocxExporter:
             return False, ["Erro interno durante a exportação."]
 
 execution_time = perf_counter() - start_time
-print(f"Carregado DOC_GENERATOR em {execution_time:.4f}s")
+logger.debug(f"Carregado DOC_GENERATOR em {execution_time:.4f}s")
 

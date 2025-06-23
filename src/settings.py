@@ -1,15 +1,19 @@
-# src/config/settings.py
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando settings.py")
+# O logger é inicializado logo abaixo, então esta mensagem será logada após a inicialização.
+# Para garantir que seja logado, o logger precisa ser configurado antes.
+# Por enquanto, manteremos o print e o converteremos para logger.debug após a inicialização do logger.
+# logger.debug(f"{start_time:.4f}s - Iniciando settings.py")
 
 import os
 import sys
 from pathlib import Path
 
 # --- Configuração Básica ---
-import logging
-logger = logging.getLogger(__name__)
+logger.debug(f"{start_time:.4f}s - Iniciando settings.py") # Agora o logger está disponível
 
 # --- Variáveis de Teste/Exemplo (Remover em produção) ---
 # TODO: DELETE:
@@ -127,12 +131,15 @@ K_PROXY_USERNAME = "username_proxy"
 K_PROXY_PASSWORD = "password_proxy"
 
 def show_data_k():
+    """
+    Função de depuração para exibir dados de proxy armazenados no Keyring.
+    ATENÇÃO: Esta função é apenas para fins de depuração e não deve ser usada em produção.
+    """
     keyring = None
-    print(keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED))
-    print(keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_IP_URL))
-    print(keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME))
-    print(keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD))
-    #keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED, 'false')
+    logger.debug(f"Proxy Enabled: {keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED)}")
+    logger.debug(f"Proxy IP URL: {keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_IP_URL)}")
+    logger.debug(f"Proxy Username: {keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME)}")
+    logger.debug(f"Proxy Password: *** ") # {keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD)}
 
 
 # --- Configurações de Cloud Logger ---
@@ -144,4 +151,4 @@ CLOUD_LOGGER_RETRY_DELAY = 12        # Tempo de espera entre as tentativas (segu
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado em {execution_time:.4f}s")
+logger.debug(f"Carregado em {execution_time:.4f}s")

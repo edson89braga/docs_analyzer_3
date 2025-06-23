@@ -25,6 +25,10 @@ from src.settings import (USER_LLM_PREFERENCES_COLLECTION,
 
 
 class LLMConfigCard(CardWithHeader):
+    """
+    Representa um card de configuração para um provedor de LLM específico,
+    permitindo ao usuário gerenciar a chave API associada.
+    """
     def __init__(
         self,
         page: ft.Page,
@@ -32,6 +36,18 @@ class LLMConfigCard(CardWithHeader):
         firestore_manager: FirebaseClientFirestore,
         on_key_status_change: Optional[callable] = None # Callback para notificar a view principal
     ):
+        """
+        Inicializa um LLMConfigCard.
+
+        Args:
+            page (ft.Page): A página Flet atual.
+            provider_data (Dict[str, Any]): Dicionário contendo os dados do provedor LLM,
+                                             incluindo 'name_display', 'system_name', 'api_url' e 'models'.
+            firestore_manager (FirebaseClientFirestore): Instância do gerenciador Firestore para
+                                                         interagir com o banco de dados.
+            on_key_status_change (Optional[callable]): Callback a ser chamado quando o status
+                                                       da chave API do provedor mudar.
+        """
         super().__init__( # Chama o __init__ de CardWithHeader
              title=provider_data.get('name_display', 'Provedor Desconhecido'), # Título do card
              content=ft.Column([], spacing=10), # Conteúdo será preenchido abaixo
@@ -76,10 +92,21 @@ class LLMConfigCard(CardWithHeader):
         )
 
     def did_mount(self):
-        #_logger.info(f"[DEBUG] LLMConfigCard para {self.system_name} did_mount. Carregando status da chave API.")
+        logger.debug(f"LLMConfigCard para {self.system_name} did_mount. Carregando status da chave API.")
         self.load_api_key_status()
 
     def update_card_content_status(self, status_msg: str, status_color: str, key_icon: str, key_icon_color: str, key_icon_tooltip: str, api_key_hint: str):
+        """
+        Atualiza o conteúdo visual do card de status da chave API.
+
+        Args:
+            status_msg (str): Mensagem de status a ser exibida.
+            status_color (str): Cor da mensagem de status (ex: ft.colors.RED, theme.COLOR_SUCCESS).
+            key_icon (str): Nome do ícone Flet para o status da chave (ex: ft.icons.CHECK_CIRCLE_OUTLINE).
+            key_icon_color (str): Cor do ícone de status da chave.
+            key_icon_tooltip (str): Texto de dica para o ícone de status.
+            api_key_hint (str): Texto de dica para o campo de entrada da chave API.
+        """
         self.status_text.value = status_msg
         self.status_text.color = status_color
         self.key_configured_icon.name = key_icon
@@ -94,9 +121,22 @@ class LLMConfigCard(CardWithHeader):
             self.api_key_field.update()
 
     def _get_session_key_for_decrypted_api_key(self) -> str:
+        """
+        Gera a chave de sessão usada para armazenar a chave API descriptografada.
+
+        Returns:
+            str: A chave de sessão única para a chave API descriptografada.
+        """
         return f"decrypted_api_key_{self.system_name}" # Simplificado, system_name já deve ser único
 
     def _get_current_user_context(self) -> Optional[tuple[str, str]]:
+        """
+        Obtém o token de ID e o ID do usuário da sessão, garantindo que o token esteja atualizado.
+
+        Returns:
+            Optional[tuple[str, str]]: Uma tupla contendo (id_token, user_id) se o usuário estiver
+                                       autenticado e o token for válido, caso contrário, None.
+        """
         from src.flet_ui.app import check_and_refresh_token_if_needed
         if not check_and_refresh_token_if_needed(self.page):
             return None
@@ -109,6 +149,10 @@ class LLMConfigCard(CardWithHeader):
         return None
 
     def load_api_key_status(self):
+        """
+        Carrega o status da chave API para o provedor atual, verificando a sessão e o Firestore.
+        Atualiza a UI do card com o status correspondente.
+        """
         logger.info(f"Carregando status da chave API salva para {self.system_name}...")
         self.update_card_content_status("Verificando...", theme.COLOR_INFO, ft.icons.HOURGLASS_EMPTY, theme.COLOR_INFO, "Verificando status...", "Aguarde...")
 
@@ -173,7 +217,14 @@ class LLMConfigCard(CardWithHeader):
             )
             if self.on_key_status_change: self.on_key_status_change(self.system_name, False)
             
-    def _handle_save_api_key(self, e):
+    def _handle_save_api_key(self, e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão "Salvar Chave".
+        Criptografa a chave API fornecida e a salva no Firestore para o usuário atual.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         new_api_key_value = self.api_key_field.value
         if not new_api_key_value:
             show_snackbar(self.page, "O campo da Chave API está vazio.", color=theme.COLOR_WARNING)
@@ -229,7 +280,14 @@ class LLMConfigCard(CardWithHeader):
             show_snackbar(self.page, "Ocorreu um erro inesperado ao salvar a chave.", color=theme.COLOR_ERROR)
             self.load_api_key_status()
 
-    def _handle_clear_api_key(self, e):
+    def _handle_clear_api_key(self, e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão "Limpar Chave".
+        Remove a chave API do provedor atual do Firestore e da sessão.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info(f"Tentando limpar chave API para {self.system_name}.")
         context = self._get_current_user_context()
         if not context: return
@@ -267,7 +325,17 @@ class LLMConfigCard(CardWithHeader):
             self.load_api_key_status()
 
 class LLMSettingsViewContent(ft.Column):
+    """
+    Conteúdo principal da view de configurações de LLM, incluindo gerenciamento
+    de chaves API e preferências de provedor/modelo padrão.
+    """
     def __init__(self, page: ft.Page):
+        """
+        Inicializa o conteúdo da view de configurações de LLM.
+
+        Args:
+            page (ft.Page): A página Flet atual.
+        """
         super().__init__(spacing=20, width=WIDTH_CONTAINER_CONFIGS,
                          horizontal_alignment=ft.CrossAxisAlignment.CENTER) # expand=True, scroll=ft.ScrollMode.ADAPTIVE
         self.page = page
@@ -339,12 +407,29 @@ class LLMSettingsViewContent(ft.Column):
         ]
 
     def _get_loaded_providers(self) -> List[Dict[str, Any]]:
+        """
+        Obtém a lista de provedores LLM carregados da sessão da página.
+
+        Returns:
+            List[Dict[str, Any]]: Uma lista de dicionários, onde cada dicionário
+                                  representa um provedor LLM configurado.
+        """
         return self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
 
     def _get_user_preferences(self) -> Dict[str, Any]:
+        """
+        Obtém as preferências de LLM do usuário da sessão da página.
+
+        Returns:
+            Dict[str, Any]: Um dicionário contendo as preferências do usuário,
+                            como o provedor e modelo padrão.
+        """
         return self.page.session.get(KEY_SESSION_USER_LLM_PREFERENCES) or {}
     
     def _update_status_preferences_display(self):
+        """
+        Atualiza o texto de status que exibe as preferências de LLM padrão salvas.
+        """
         user_preferences = self._get_user_preferences()
         if user_preferences.get("default_provider_system_name") and user_preferences.get("default_model_id"):
             provider_key = user_preferences["default_provider_system_name"]
@@ -372,6 +457,10 @@ class LLMSettingsViewContent(ft.Column):
             self.status_preferences_text.update()
 
     def did_mount(self):
+        """
+        Método chamado quando o controle LLMSettingsViewContent é montado na página.
+        Carrega os dados dos provedores e preferências da sessão e atualiza a UI.
+        """
         logger.info("LLMSettingsViewContent did_mount. Carregando dados dos provedores e preferências da sessão.")
         # Os dados já devem ter sido carregados para a sessão por app.py
         self._update_provider_cards_from_session()
@@ -380,11 +469,23 @@ class LLMSettingsViewContent(ft.Column):
         #self.load_providers_and_preferences()
     
     def _handle_key_status_change(self, provider_system_name: str, is_configured: bool):
+        """
+        Callback chamado quando o status da chave API de um provedor muda.
+        Atualiza o estado do botão de salvar preferências.
+
+        Args:
+            provider_system_name (str): O nome do sistema do provedor cuja chave mudou.
+            is_configured (bool): True se a chave estiver configurada, False caso contrário.
+        """
         self.save_preferences_button.disabled = self._are_preferences_unchanged()
-        if self.page and self.save_preferences_button.uid : 
+        if self.page and self.save_preferences_button.uid :
             self.save_preferences_button.update()
 
     def _update_provider_cards_from_session(self): # Renomeado
+        """
+        Atualiza os cards de configuração de provedores LLM com base nos dados da sessão.
+        Cria um LLMConfigCard para cada provedor carregado.
+        """
         self.cards_container.controls.clear()
         self.provider_cards_map.clear()
         loaded_providers = self._get_loaded_providers()
@@ -402,6 +503,10 @@ class LLMSettingsViewContent(ft.Column):
         if self.page: self.cards_container.update()
 
     def _update_preference_dropdowns_from_session(self): # Renomeado
+        """
+        Atualiza os dropdowns de seleção de provedor e modelo padrão com base
+        nos dados dos provedores carregados e nas preferências do usuário da sessão.
+        """
         loaded_providers = self._get_loaded_providers()
         user_preferences = self._get_user_preferences()
 
@@ -435,6 +540,12 @@ class LLMSettingsViewContent(ft.Column):
             self.save_preferences_button.update()
 
     def _populate_models_for_selected_provider(self, update_ui: bool = True):
+        """
+        Popula o dropdown de modelos com os modelos disponíveis para o provedor selecionado.
+
+        Args:
+            update_ui (bool): Se True, força a atualização da UI dos dropdowns.
+        """
         selected_provider_key = self.default_provider_dropdown.value
         self.default_model_dropdown.options = []
         # self.default_model_dropdown.value = None # Não reseta o valor aqui ainda
@@ -464,18 +575,38 @@ class LLMSettingsViewContent(ft.Column):
             self.default_model_dropdown.update()
 
     def _handle_default_provider_change(self, e: ft.ControlEvent):
+        """
+        Manipula a mudança de seleção no dropdown de provedor padrão.
+        Popula os modelos para o provedor selecionado e atualiza o estado do botão de salvar.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         self._populate_models_for_selected_provider()
         # Habilita o botão salvar se a seleção mudou
         self.save_preferences_button.disabled = self._are_preferences_unchanged()
         if self.page: self.save_preferences_button.update()
 
     def _handle_model_change(self, e: ft.ControlEvent):
+        """
+        Manipula a mudança de seleção no dropdown de modelo padrão.
+        Atualiza o estado do botão de salvar preferências.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         # Habilita o botão salvar se a seleção mudou
         self.save_preferences_button.disabled = self._are_preferences_unchanged()
         if self.page: self.save_preferences_button.update()
 
     def _are_preferences_unchanged(self) -> bool:
-        """Verifica se as preferências na UI são diferentes das salvas."""
+        """
+        Verifica se as preferências de provedor e modelo selecionadas na UI
+        são as mesmas que as preferências salvas na sessão do usuário.
+
+        Returns:
+            bool: True se as preferências na UI forem idênticas às salvas, False caso contrário.
+        """
         current_provider_ui = self.default_provider_dropdown.value
         current_model_ui = self.default_model_dropdown.value
         user_preferences = self._get_user_preferences()
@@ -484,7 +615,17 @@ class LLMSettingsViewContent(ft.Column):
         return current_provider_ui == saved_provider and current_model_ui == saved_model
 
     def _get_dropdown_option_text(self, dropdown: ft.Dropdown, key_value: Optional[str]) -> str:
-        """Retorna o texto de uma opção do dropdown com base na sua chave (valor)."""
+        """
+        Retorna o texto de exibição de uma opção de dropdown com base na sua chave (valor).
+
+        Args:
+            dropdown (ft.Dropdown): A instância do dropdown a ser pesquisada.
+            key_value (Optional[str]): A chave (valor) da opção desejada.
+
+        Returns:
+            str: O texto da opção correspondente, "N/A" se a chave for None,
+                 ou a própria chave se o texto não for encontrado.
+        """
         if key_value is None:
             return "N/A"
         for option in dropdown.options:
@@ -493,6 +634,14 @@ class LLMSettingsViewContent(ft.Column):
         return str(key_value) # Retorna a chave se o texto não for encontrado (fallback)
     
     def _handle_save_preferences(self, e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão "Salvar Preferências".
+        Salva as preferências de provedor e modelo LLM padrão do usuário no Firestore
+        e as atualiza na sessão.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info("Salvando preferências de LLM do usuário...")
         self._last_pref_error_message = ""
         from src.flet_ui.app import check_and_refresh_token_if_needed
@@ -587,7 +736,16 @@ class LLMSettingsViewContent(ft.Column):
             show_snackbar(self.page, "Não foi possível salvar suas preferências de LLM.", theme.COLOR_ERROR)
 
 
-def create_llm_settings_view(page: ft.Page) -> ft.Control: # Mudou de ft.View para ft.Control
+def create_llm_settings_view(page: ft.Page) -> ft.Control:
+    """
+    Cria e retorna o conteúdo da view de Configurações de LLM.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo principal da view de Configurações de LLM.
+    """
     logger.info("Criando o conteúdo da view de Configurações LLM.")
 
     if not page.session.get("auth_id_token"):

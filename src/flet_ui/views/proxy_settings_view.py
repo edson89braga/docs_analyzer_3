@@ -22,12 +22,30 @@ logger = logging.getLogger(__name__)
 
 # --- Funções de Validação (podem ser movidas para um local comum se usadas em mais lugares) ---
 def host_validator(value: str) -> Optional[str]:
+    """
+    Valida o valor de um host (IP ou nome de domínio).
+
+    Args:
+        value (str): O valor do host a ser validado.
+
+    Returns:
+        Optional[str]: Uma mensagem de erro se o host for inválido, caso contrário, None.
+    """
     if not value:
         return "O host não pode estar vazio se o proxy estiver habilitado."
     # Validação mais robusta de IP/hostname pode ser adicionada aqui se necessário
     return None
 
 def port_validator(value: str) -> Optional[str]:
+    """
+    Valida o valor de uma porta de rede.
+
+    Args:
+        value (str): O valor da porta a ser validado.
+
+    Returns:
+        Optional[str]: Uma mensagem de erro se a porta for inválida, caso contrário, None.
+    """
     if not value:
         return "A porta não pode estar vazia se o proxy estiver habilitado."
     if not value.isdigit() or not (1 <= int(value) <= 65535):
@@ -36,7 +54,17 @@ def port_validator(value: str) -> Optional[str]:
 
 # --- Elementos da UI e Lógica ---
 class ProxySettingsContent(ft.Column):
+    """
+    Conteúdo principal da view de configurações de proxy, permitindo ao usuário
+    habilitar/desabilitar, configurar e salvar as definições de proxy.
+    """
     def __init__(self, page: ft.Page):
+        """
+        Inicializa o conteúdo da view de configurações de proxy.
+
+        Args:
+            page (ft.Page): A página Flet atual.
+        """
         super().__init__(spacing=20, width=WIDTH_CONTAINER_CONFIGS, horizontal_alignment=ft.CrossAxisAlignment.CENTER) # expand=True, scroll=ft.ScrollMode.ADAPTIVE
         self.page = page
 
@@ -147,6 +175,13 @@ class ProxySettingsContent(ft.Column):
         ]
 
     def _toggle_fields_enabled(self, e: Optional[ft.ControlEvent] = None):
+        """
+        Alterna o estado de habilitação/desabilitação dos campos de entrada do proxy
+        com base no estado do switch 'Habilitar Proxy'.
+
+        Args:
+            e (Optional[ft.ControlEvent]): O evento de controle que disparou a função (opcional).
+        """
         is_enabled = self.proxy_enabled_switch.value
         self.proxy_host_field.disabled = not is_enabled
         self.proxy_port_field.disabled = not is_enabled
@@ -166,7 +201,10 @@ class ProxySettingsContent(ft.Column):
         self.save_password_checkbox.update()
 
     def _load_settings_to_ui(self):
-        """Carrega as configurações do config_manager para os campos da UI."""
+        """
+        Carrega as configurações de proxy salvas (do config_manager) para os campos da UI.
+        Atualiza o estado dos campos e a UI.
+        """
         self.current_settings = get_proxy_settings()
         self.proxy_enabled_switch.value = self.current_settings.get(K_PROXY_ENABLED, False)
         self.proxy_host_field.value = self.current_settings.get(K_PROXY_IP_URL, PROXY_URL_DEFAULT)
@@ -178,6 +216,13 @@ class ProxySettingsContent(ft.Column):
         self.update() # Atualiza toda a coluna (ProxySettingsContent)
 
     def _handle_save_settings(self, e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão "Salvar Configurações".
+        Valida os campos de proxy e salva as configurações no sistema.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info("Tentando salvar configurações de proxy.")
         is_enabled = self.proxy_enabled_switch.value
         host_valid = True
@@ -217,6 +262,13 @@ class ProxySettingsContent(ft.Column):
             show_snackbar(self.page, "Erro ao salvar configurações de proxy.", color=theme.COLOR_ERROR)
 
     def _handle_delete_settings(self, e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão "Remover Tudo".
+        Limpa todas as configurações de proxy salvas e atualiza a UI.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info("Tentando remover todas as configurações de proxy.")
         # Define configurações para desabilitar e limpar tudo
         settings_to_delete = {
@@ -239,6 +291,12 @@ class ProxySettingsContent(ft.Column):
 def create_proxy_settings_content(page: ft.Page) -> ft.Control:
     """
     Cria e retorna o conteúdo principal para a view de configurações de proxy.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo principal da view de configurações de proxy.
     """
     logger.info("View Configurações de Proxy: Iniciando criação.")
     

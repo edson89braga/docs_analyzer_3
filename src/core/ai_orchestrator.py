@@ -3,10 +3,13 @@
 Módulo responsável por orquestrar a interação com os modelos de linguagem (LLMs)
 usando LangChain.
 """
+# Configuração do Logger
+import logging
+logger = logging.getLogger(__name__)
 
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando ai_orchestrator.py")
+logger.debug(f"{start_time:.4f}s - Iniciando ai_orchestrator.py")
 
 import os
 from typing import Optional, Dict, Any, List, Tuple, Union
@@ -26,10 +29,6 @@ from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPER
 from src.utils import timing_decorator
 from src.core.prompts import (prompts, output_formats, review_function, normalizing_function,
                                 formatted_initial_analysis, try_convert_to_pydantic_format, return_parse_prompt)
-
-# Configuração do Logger
-import logging
-logger = logging.getLogger(__name__)
 
 MODEL_FOR_COUNT_TOKENS = "gpt-4o"
 
@@ -106,7 +105,7 @@ def calc_costs_embedding_process(tokens_count, embedding_model_id, loaded_embedd
 
     # Se não houver tokens, o custo é zero.
     if tokens_count == 0:
-        logger.info(
+        logger.debug(
             f"Nenhum token processado para o modelo '{embedding_model_id}'. "
             "Custo de embedding: U$ 0.00"
         )
@@ -124,8 +123,17 @@ def calc_costs_embedding_process(tokens_count, embedding_model_id, loaded_embedd
 def calc_costs_llm_analysis(input_tokens, cached_tokens, output_tokens, provider_used_raw, model_used_raw, loaded_llm_providers):
     """
     Calcula o custo estimado da análise LLM com base nos tokens e na configuração do modelo.
+
+    Args:
+        input_tokens (int): Número de tokens de entrada.
+        cached_tokens (int): Número de tokens em cache.
+        output_tokens (int): Número de tokens de saída.
+        provider_used_raw (str): Nome do provedor LLM utilizado.
+        model_used_raw (str): Nome do modelo LLM utilizado.
+        loaded_llm_providers (List[Dict]): Lista de configurações dos provedores LLM carregados.
+
     Returns:
-        O custo calculado em USD como float, ou 0.0 se o cálculo não puder ser realizado.
+        float: O custo calculado em USD como float, ou 0.0 se o cálculo não puder ser realizado.
     """
     calculated_cost_usd = 0.0
 
@@ -147,7 +155,7 @@ def calc_costs_llm_analysis(input_tokens, cached_tokens, output_tokens, provider
                 cost_cache = (cached_tokens / 1_000_000) * model_config.get("cache_coust_million", 0.0)
                 cost_output = (output_tokens / 1_000_000) * model_config.get("output_coust_million", 0.0)
                 calculated_cost_usd = cost_input + cost_cache + cost_output
-                logger.info(f"Custo calculado: Input=${cost_input:.6f}, Cache=${cost_cache:.6f}, Output=${cost_output:.6f} -> Total=${calculated_cost_usd:.6f}")
+                logger.debug(f"Custo calculado: Input=${cost_input:.6f}, Cache=${cost_cache:.6f}, Output=${cost_output:.6f} -> Total=${calculated_cost_usd:.6f}")
             else:
                 logger.warning(f"Configuração do modelo '{model_used_raw}' não encontrada para o provedor '{provider_used_raw}' para cálculo de custo.")
         else:
@@ -160,7 +168,17 @@ def calc_costs_llm_analysis(input_tokens, cached_tokens, output_tokens, provider
 
 import tiktoken
 
-def contar_tokens(texto, model_name):
+def contar_tokens(texto: Union[str, Any], model_name: str) -> int:
+    """
+    Conta o número de tokens em um texto usando o codificador tiktoken.
+
+    Args:
+        texto (Union[str, Any]): O texto a ser tokenizado. Será convertido para string se não for.
+        model_name (str): O nome do modelo para o qual o codificador tiktoken será obtido.
+
+    Returns:
+        int: O número de tokens no texto.
+    """
     codificador = tiktoken.encoding_for_model(model_name)
     texto = str(texto) if not isinstance(texto, str) else texto
     return len(codificador.encode(texto))
@@ -350,8 +368,16 @@ def get_embeddings_from_api(
 
     return lista_final_embeddings_ordenada, total_tokens_api, cost_usd
 
-def convert_pydantic_to_json_schema(formatted_initial_pydantic):
-    #Conversão para modelo em esquema JSON, se necessário:
+def convert_pydantic_to_json_schema(formatted_initial_pydantic: Any) -> Dict[str, Any]:
+    """
+    Converte um modelo Pydantic para um esquema JSON compatível com a API OpenAI.
+
+    Args:
+        formatted_initial_pydantic (Any): Uma instância de um modelo Pydantic.
+
+    Returns:
+        Dict[str, Any]: Um dicionário representando o esquema JSON para a API OpenAI.
+    """
     schema = formatted_initial_pydantic.model_json_schema()
     response_format = {
         "type": "json_schema",
@@ -363,33 +389,66 @@ def convert_pydantic_to_json_schema(formatted_initial_pydantic):
     }
     return response_format
 
-def _get_prompt_to_cache(key_prompt, placeholder_str, input_processed_text):
+def _get_prompt_to_cache(key_prompt: str, placeholder_str: str, input_processed_text: str) -> Tuple[List[Dict[str, str]], int]:
+    """
+    Prepara um prompt para cache, substituindo um placeholder e contando os tokens.
+
+    Args:
+        key_prompt (str): Chave para recuperar o prompt do dicionário `prompts`.
+        placeholder_str (str): O placeholder a ser substituído no prompt.
+        input_processed_text (str): O texto que substituirá o placeholder.
+
+    Returns:
+        Tuple[List[Dict[str, str]], int]: Uma tupla contendo:
+            - A lista de dicionários do prompt modificado.
+            - A contagem de tokens do prompt principal.
+    """
     prompt_inicial_para_cache = prompts[key_prompt]
     prompt_inicial_para_cache = [{key: value.replace(placeholder_str, input_processed_text) for key, value in msg_dict.items()} for msg_dict in prompt_inicial_para_cache]
     main_tokens_count = contar_tokens(prompt_inicial_para_cache, MODEL_FOR_COUNT_TOKENS)
     if main_tokens_count:
-        logger.info(f"Total_tokens contabilizado na parte principal: {main_tokens_count}")
+        logger.debug(f"Total_tokens contabilizado na parte principal: {main_tokens_count}")
     else:
         logger.warning("Placeholder [input_text] não encontrado ou não contabilizado na apuração do cache mínimo previsto!")
     return prompt_inicial_para_cache, main_tokens_count
 
-def _get_final_response(dados_segmentados, output_format):
-    # print(f"\n[DEBUG] Response: {response}")
-    # for response in dados_segmentados:
-    #    final_response = response.output_text
+def _get_final_response(dados_segmentados: List[Any], output_format: Any) -> Any:
+    """
+    Extrai a resposta final de uma lista de dados segmentados e tenta convertê-la
+    para o formato de saída especificado, se necessário.
+
+    Args:
+        dados_segmentados (List[Any]): Uma lista de objetos de resposta segmentados.
+        output_format (Any): O formato de saída esperado (e.g., um modelo Pydantic).
+
+    Returns:
+        Any: A resposta final, possivelmente convertida para o formato especificado.
+    """
     final_response = dados_segmentados[-1].output_text
     if not isinstance(final_response, output_format):
         final_response = try_convert_to_pydantic_format(final_response, output_format)
     return final_response
                 
-def _get_token_usage_info(dados_segmentados, waited_cached_tokens=0):
-    # Obter informações sobre o uso de tokens
+def _get_token_usage_info(dados_segmentados: List[Any], waited_cached_tokens: int = 0) -> Dict[str, Any]:
+    """
+    Calcula e retorna informações de uso de tokens a partir de dados segmentados.
+    Também loga informações sobre o aproveitamento de cache.
+
+    Args:
+        dados_segmentados (List[Any]): Uma lista de objetos de resposta segmentados,
+                                       cada um contendo informações de uso de tokens.
+        waited_cached_tokens (int): O número de tokens em cache esperados para verificação.
+
+    Returns:
+        Dict[str, Any]: Um dicionário contendo o total de input_tokens, cached_tokens,
+                        output_tokens e total_tokens.
+    """
     token_usage_info = {
         "input_tokens":  0,
         "cached_tokens": 0,
         "output_tokens": 0,
         "total_tokens":  0,
-    } 
+    }
     
     for response in dados_segmentados:
         cb = response.usage # callback
@@ -444,9 +503,9 @@ def analyze_text_with_llm(
                            Espera-se que retorne uma lista de tuplas (role, content_template).
 
     Returns:
-        (final_response: formatted_initial_analysis, 
-        token_usage_info:Dict[str, Any],
-        processing_time: float)
+        Tuple[Optional[Any], Optional[Dict[str, Any]]]: Uma tupla contendo:
+            - final_response: A resposta final do LLM, formatada conforme `output_formats`.
+            - token_usage_info: Um dicionário com informações detalhadas sobre o uso de tokens e custo.
     """
     global client_openai
 
@@ -479,7 +538,6 @@ def analyze_text_with_llm(
                     temperature=temperature,
                     text_format = output_formats[prompt_name]
                 )
-                #print(f"\n[DEBUG] Response: {response}")
                 final_response = response.output_text
 
                 # Obter informações sobre o uso de tokens
@@ -624,4 +682,4 @@ def analyze_text_with_llm(
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado AI_ORCHESTRATOR em {execution_time:.4f}s")
+logger.debug(f"Carregado AI_ORCHESTRATOR em {execution_time:.4f}s")

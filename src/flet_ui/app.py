@@ -1,8 +1,11 @@
 # src/flet_ui/app.py
 
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando app.py")
+logger.debug(f"{start_time:.4f}s - Iniciando app.py")
 
 import flet as ft
 import time, os, threading
@@ -26,18 +29,16 @@ error_color = theme.COLOR_ERROR if hasattr(theme, 'COLOR_ERROR') else ft.colors.
 
 from src.services.firebase_client import FbManagerAuth, FirebaseClientFirestore, _from_firestore_value
 
-# Importa o logger
-import logging
-logger = logging.getLogger(__name__)
-
 from src.logger.logger import LoggerSetup
-
 
 def load_default_analysis_settings(page: ft.Page):
     """
     Carrega as configurações padrão de análise do Firestore para a sessão,
     incluindo a lista de provedores LLM e as preferências do usuário,
     que podem sobrepor os defaults.
+
+    Args:
+        page: A instância da página Flet.
     """
     logger.info("Carregando configurações de LLM (provedores, defaults e preferências do usuário)...")
     firestore_client = FirebaseClientFirestore()
@@ -200,6 +201,13 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
     """
     Verifica se o ID token precisa ser atualizado e tenta atualizá-lo.
     Retorna True se o token estiver válido (ou foi atualizado), False caso contrário (ex: refresh falhou).
+
+    Args:
+        page: A instância da página Flet.
+        force_refresh: Se True, força a tentativa de refresh mesmo que o token não pareça expirado.
+
+    Returns:
+        True se o token estiver válido (ou foi atualizado), False caso contrário.
     """
     # _logger_app.debug("Verificando necessidade de refresh do token.") # Use o logger apropriado
     id_token = page.session.get("auth_id_token")
@@ -266,10 +274,15 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
 _token_refresh_thread_stop_event: Optional[threading.Event] = None
 _token_refresh_thread_instance: Optional[threading.Thread] = None
 
-def _proactive_token_refresh_loop(page_ref: ft.Page, stop_event: threading.Event, interval_seconds: int = 30 * 60): # a cada 30 minutos
+def _proactive_token_refresh_loop(page_ref: ft.Page, stop_event: threading.Event, interval_seconds: int = 30 * 60):
     """
     Loop que tenta renovar o token de ID proativamente.
     Executado em uma thread separada.
+
+    Args:
+        page_ref: Referência para a instância da página Flet.
+        stop_event: Evento de threading para sinalizar a parada do loop.
+        interval_seconds: Intervalo em segundos entre as verificações de refresh.
     """
     logger.info("Thread de renovação proativa de token iniciada.")
     
@@ -296,6 +309,9 @@ def load_auth_state_from_storage(page: ft.Page):
     """
     Carrega o estado de autenticação do client_storage (se "Lembrar de mim" foi usado)
     para a sessão Flet da página atual.
+
+    Args:
+        page: A instância da página Flet.
     """
     if page.client_storage and page.client_storage.contains_key("auth_id_token"):
         logger.info("Restaurando estado de autenticação do client_storage para a sessão Flet.")
@@ -343,7 +359,14 @@ def load_auth_state_from_storage(page: ft.Page):
         logger.info("Nenhum estado de autenticação persistente encontrado no client_storage.")
 
 
-def main(page: ft.Page, dev_mode: bool = False): 
+def main(page: ft.Page, dev_mode: bool = False):
+    """
+    Função principal que configura e inicia a aplicação Flet.
+
+    Args:
+        page: A instância da página Flet.
+        dev_mode: Se True, inicia a aplicação em modo de desenvolvimento com dados mockados.
+    """
     app_start_time = perf_counter()
     logger.info(f"{app_start_time:.4f}s - Função main() iniciada.")
 
@@ -445,6 +468,12 @@ def main(page: ft.Page, dev_mode: bool = False):
 
     # --- Limpeza ao Fechar ---
     def on_disconnect(e):
+        """
+        Lida com a desconexão do cliente Flet.
+
+        Limpa o contexto do logger de nuvem e sinaliza a parada da thread
+        de renovação proativa de token.
+        """
         logger.info("Cliente desconectado ou aplicação Flet fechando...")
         LoggerSetup.set_cloud_user_context(None, None)
         logger.info("Contexto do logger de nuvem limpo ao desconectar.")
@@ -465,10 +494,15 @@ def main(page: ft.Page, dev_mode: bool = False):
     page.on_disconnect = on_disconnect
 
     def threaded_load_settings(target_page: ft.Page):
-        """Função a ser executada em uma thread para carregar settings."""
+        """
+        Função a ser executada em uma thread separada para carregar as configurações
+        de análise padrão e de LLM para a sessão Flet.
+
+        Args:
+            target_page: A instância da página Flet para a qual as configurações serão carregadas.
+        """
         local_start_time = perf_counter()
-        logger.info(f"{local_start_time:.4f}s - Função Load_settings iniciada.")
-        logger.info("Thread de settings iniciada.")
+        logger.info(f"{local_start_time:.4f}s - Função threaded_load_settings iniciada.")
         load_default_analysis_settings(target_page)
         logger.info("Thread de settings concluída. Dados carregados na sessão.")
         logger.info(f"{perf_counter() - local_start_time:.4f}s - Analysis settings carregado.")
@@ -479,7 +513,13 @@ def main(page: ft.Page, dev_mode: bool = False):
     
     # --- Lógica de Inicialização Principal ---
     def initialize_app_flow():
-        """Função que executa a lógica de inicialização, incluindo chamadas de rede."""
+        """
+        Inicializa o fluxo principal da aplicação Flet.
+
+        Carrega o estado de autenticação, as configurações de análise e LLM,
+        e gerencia a navegação inicial com base no status de autenticação do usuário.
+        Também inicia a thread de renovação proativa de token se o usuário estiver autenticado.
+        """
         load_auth_state_from_storage(page)
         logger.info(f"{perf_counter() - app_start_time:.4f}s - Auth state carregado.")
         
@@ -512,7 +552,7 @@ def main(page: ft.Page, dev_mode: bool = False):
         # Dispara a navegação inicial
         logger.info(f"Disparando navegação inicial para: {final_route}")
         logger.info(f"{perf_counter() - app_start_time:.4f}s - Navegação inicial page.go() será chamada.")
-        page.go(final_route)  
+        page.go(final_route)
 
     if dev_mode:
         logger.info("DEV_MODE: Populando page.session com dados mockados.")
@@ -549,4 +589,4 @@ def main(page: ft.Page, dev_mode: bool = False):
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado APP.py em {execution_time:.4f}s")
+logger.debug(f"Carregado APP.py em {execution_time:.4f}s")

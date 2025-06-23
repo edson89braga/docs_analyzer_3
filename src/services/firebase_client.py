@@ -1,8 +1,11 @@
 # src/services/firebase_client.py
 
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando firebase_client.py")
+logger.debug(f"{start_time:.4f}s - Iniciando firebase_client.py")
 
 import requests, json, re, secrets, time
 import urllib.parse
@@ -18,9 +21,6 @@ from flet import Page as ft_Page
 import jwt # PyJWT
 from threading import Lock
 
-import logging
-logger = logging.getLogger(__name__)
-
 # --- Constantes para APIs REST ---
 FIRESTORE_BASE_URL = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
 STORAGE_BASE_URL = f"https://firebasestorage.googleapis.com/v0/b/{FB_STORAGE_BUCKET}/o"
@@ -28,7 +28,17 @@ STORAGE_BASE_URL = f"https://firebasestorage.googleapis.com/v0/b/{FB_STORAGE_BUC
 # --- Funções Auxiliares para Conversão de Tipos do Firestore ---
 
 def _to_firestore_value(value: Any) -> Dict[str, Any]:
-    """Converte um valor Python para o formato de valor do Firestore REST API."""
+    """
+    Converte um valor Python para o formato de valor do Firestore REST API.
+
+    Suporta tipos básicos, listas e dicionários.
+
+    Args:
+        value (Any): O valor Python a ser convertido.
+
+    Returns:
+        Dict[str, Any]: O valor formatado para a API REST do Firestore.
+    """
     if isinstance(value, str):
         return {"stringValue": value}
     elif isinstance(value, bool):
@@ -50,7 +60,17 @@ def _to_firestore_value(value: Any) -> Dict[str, Any]:
         return {"stringValue": str(value)}
 
 def _from_firestore_value(fs_value: Dict[str, Any]) -> Any:
-    """Converte um valor do Firestore REST API para o formato Python."""
+    """
+    Converte um valor do Firestore REST API para o formato Python.
+
+    Suporta tipos básicos, listas e dicionários.
+
+    Args:
+        fs_value (Dict[str, Any]): O valor do Firestore a ser convertido.
+
+    Returns:
+        Any: O valor convertido para Python.
+    """
     if "stringValue" in fs_value:
         return fs_value["stringValue"]
     elif "booleanValue" in fs_value:
@@ -1378,10 +1398,10 @@ def test_firebase_clients():
     Requer que as credenciais do Firebase Admin SDK estejam configuradas e que
     um usuário de teste exista no Firebase Authentication.
     """
-    print("--- Iniciando Teste Interativo dos Clientes Firebase (Storage & Firestore) ---")
+    logger.info("--- Iniciando Teste Interativo dos Clientes Firebase (Storage & Firestore) ---")
 
     # 1. Obter Token de Usuário
-    print("\nPasso 1: Autenticação do Usuário de Teste")
+    logger.info("Passo 1: Autenticação do Usuário de Teste")
     fb_auth_manager = FbManagerAuth()
     email = input("Email do usuário de teste: ")
     password = getpass.getpass("Senha do usuário de teste: ")
@@ -1389,16 +1409,16 @@ def test_firebase_clients():
     user_auth_data = fb_auth_manager.authenticate_user_get_all_data(email, password) # Supondo que você tenha esta função
 
     if not user_auth_data or not user_auth_data.get("idToken") or not user_auth_data.get("localId"):
-        print("Falha na autenticação. Verifique as credenciais e a configuração.")
-        print(f"Dados de autenticação recebidos: {user_auth_data}")
+        logger.error("Falha na autenticação. Verifique as credenciais e a configuração.")
+        logger.debug(f"Dados de autenticação recebidos: {user_auth_data}")
         return
 
     user_token = user_auth_data["idToken"]
     user_id = user_auth_data["localId"]
-    print(f"Usuário autenticado com sucesso. User ID: {user_id}")
+    logger.info(f"Usuário autenticado com sucesso. User ID: {user_id}")
 
     # --- Testando FirebaseClientStorage ---
-    print("\n--- Testando FirebaseClientStorage ---")
+    logger.info("--- Testando FirebaseClientStorage ---")
     storage_client = FirebaseClientStorage()
     test_storage_suffix = f"test_data/client_storage_test_{int(time.time())}.txt"
     test_content = f"Conteúdo de teste para Storage - {user_id} @ {time.ctime()}"
@@ -1411,91 +1431,91 @@ def test_firebase_clients():
     LoggerSetup.set_cloud_user_context(user_token, user_id)
     logger = LoggerSetup.get_logger(__name__)
 
-    logger.debug(f"Testando Logger com ClientLogUploader!  [DEBUG]")
-    logger.info(f"Testando Logger com ClientLogUploader!  [INFO]")
-    logger.warning(f"Testando Logger com ClientLogUploader!  [WARN]")
-    logger.error(f"Testando Logger com ClientLogUploader!  [ERROR]")
+    logger.debug(f"Testando Logger com ClientLogUploader!")
+    logger.info(f"Testando Logger com ClientLogUploader!")
+    logger.warning(f"Testando Logger com ClientLogUploader!")
+    logger.error(f"Testando Logger com ClientLogUploader!")
 
     # Teste upload_text_user
-    print(f"\nPasso 2.1: Testando upload_text_user para '{test_storage_suffix}'")
+    logger.info(f"Passo 2.1: Testando upload_text_user para '{test_storage_suffix}'")
     upload_success = storage_client.upload_text_user(user_token, user_id, test_content, test_storage_suffix)
     if upload_success:
-        print(f"SUCESSO: upload_text_user para '{test_storage_suffix}'")
+        logger.info(f"SUCESSO: upload_text_user para '{test_storage_suffix}'")
     else:
-        print(f"FALHA: upload_text_user para '{test_storage_suffix}'")
+        logger.error(f"FALHA: upload_text_user para '{test_storage_suffix}'")
         # Não continuar com get se o upload falhou
         return
 
     # Teste get_text_user
-    print(f"\nPasso 2.2: Testando get_text_user de '{test_storage_suffix}'")
+    logger.info(f"Passo 2.2: Testando get_text_user de '{test_storage_suffix}'")
     retrieved_content = storage_client.get_text_user(user_token, user_id, test_storage_suffix)
     if retrieved_content == test_content:
-        print(f"SUCESSO: get_text_user retornou o conteúdo esperado.")
-        print(f"Conteúdo recuperado: '{retrieved_content[:100]}...'")
+        logger.info(f"SUCESSO: get_text_user retornou o conteúdo esperado.")
+        logger.debug(f"Conteúdo recuperado: '{retrieved_content[:100]}...'")
     elif retrieved_content is None:
-        print(f"FALHA: get_text_user não encontrou o arquivo ou erro.")
+        logger.error(f"FALHA: get_text_user não encontrou o arquivo ou erro.")
     else:
-        print(f"FALHA: get_text_user retornou conteúdo diferente do esperado.")
-        print(f"Esperado: '{test_content}'")
-        print(f"Recebido: '{retrieved_content}'")
+        logger.error(f"FALHA: get_text_user retornou conteúdo diferente do esperado.")
+        logger.debug(f"Esperado: '{test_content}'")
+        logger.debug(f"Recebido: '{retrieved_content}'")
 
     # --- Testando FirebaseClientFirestore ---
-    print("\n--- Testando FirebaseClientFirestore ---")
+    logger.info("--- Testando FirebaseClientFirestore ---")
     firestore_client = FirebaseClientFirestore()
     test_service_name = f"test_service_{int(time.time())}"
     original_api_key = f"sk-testkey123abcXYZ-{user_id}-{int(time.time())}"
 
     # Simular criptografia da chave (como seria feito na UI/lógica da aplicação)
     if not credentials_manager.get_encryption_key():
-        print("\nAVISO: Chave de criptografia local (Fernet) não encontrada no Keyring.")
-        print("Isso é necessário para testar o save/get_user_api_key_client com criptografia real.")
-        print("Você pode precisar rodar o setup de credenciais do `credentials_manager` primeiro.")
-        print("Continuando teste sem criptografia real para API key (usará string simples).")
+        logger.warning("Chave de criptografia local (Fernet) não encontrada no Keyring.")
+        logger.warning("Isso é necessário para testar o save/get_user_api_key_client com criptografia real.")
+        logger.warning("Você pode precisar rodar o setup de credenciais do `credentials_manager` primeiro.")
+        logger.warning("Continuando teste sem criptografia real para API key (usará string simples).")
         encrypted_api_key_bytes = original_api_key.encode('utf-8') # Apenas para o teste prosseguir
     else:
         encrypted_api_key_bytes_maybe = credentials_manager.encrypt(original_api_key)
         if not encrypted_api_key_bytes_maybe:
-            print("FALHA: Não foi possível criptografar a API key de teste com credentials_manager.")
+            logger.error("FALHA: Não foi possível criptografar a API key de teste com credentials_manager.")
             return
         encrypted_api_key_bytes = encrypted_api_key_bytes_maybe
 
     # Teste save_user_api_key_client
-    print(f"\nPasso 3.1: Testando save_user_api_key_client para serviço '{test_service_name}'")
+    logger.info(f"Passo 3.1: Testando save_user_api_key_client para serviço '{test_service_name}'")
     save_key_success = firestore_client.save_user_api_key_client(
         user_token, user_id, test_service_name, encrypted_api_key_bytes
     )
     if save_key_success:
-        print(f"SUCESSO: save_user_api_key_client para '{test_service_name}'")
+        logger.info(f"SUCESSO: save_user_api_key_client para '{test_service_name}'")
     else:
-        print(f"FALHA: save_user_api_key_client para '{test_service_name}'")
+        logger.error(f"FALHA: save_user_api_key_client para '{test_service_name}'")
         # Não continuar com get se o save falhou
         return
 
     # Teste get_user_api_key_client
-    print(f"\nPasso 3.2: Testando get_user_api_key_client para '{test_service_name}'")
+    logger.info(f"Passo 3.2: Testando get_user_api_key_client para '{test_service_name}'")
     retrieved_encrypted_bytes = firestore_client.get_user_api_key_client(
         user_token, user_id, test_service_name
     )
 
     if retrieved_encrypted_bytes:
-        print("Chave criptografada recuperada do Firestore.")
+        logger.debug("Chave criptografada recuperada do Firestore.")
         # Simular descriptografia
         decrypted_api_key = None
         if credentials_manager.get_encryption_key(): # Tenta descriptografar apenas se a chave Fernet existe
             decrypted_api_key = credentials_manager.decrypt(retrieved_encrypted_bytes)
 
         if decrypted_api_key == original_api_key:
-            print(f"SUCESSO: get_user_api_key_client retornou a chave esperada (após descriptografia).")
+            logger.info(f"SUCESSO: get_user_api_key_client retornou a chave esperada (após descriptografia).")
         elif not credentials_manager.get_encryption_key() and retrieved_encrypted_bytes.decode('utf-8', errors='ignore') == original_api_key:
             # Caso de teste onde a criptografia foi pulada
-            print("SUCESSO (parcial): Chave recuperada corresponde à original (teste sem criptografia real).")
+            logger.warning("SUCESSO (parcial): Chave recuperada corresponde à original (teste sem criptografia real).")
         elif not decrypted_api_key and credentials_manager.get_encryption_key():
-            print("FALHA: Não foi possível descriptografar a chave recuperada.")
+            logger.error("FALHA: Não foi possível descriptografar a chave recuperada.")
         else:
-            print(f"FALHA: Chave descriptografada não corresponde à original.")
-            print(f"   Original: {original_api_key}")
-            print(f"   Descriptografada: {decrypted_api_key}")
-            print(f"   Bytes Criptografados Recuperados (início): {retrieved_encrypted_bytes[:30]}...")
+            logger.error(f"FALHA: Chave descriptografada não corresponde à original.")
+            logger.debug(f"   Original: {original_api_key}")
+            logger.debug(f"   Descriptografada: {decrypted_api_key}")
+            logger.debug(f"   Bytes Criptografados Recuperados (início): {retrieved_encrypted_bytes[:30]}...")
 
     elif retrieved_encrypted_bytes is None:
         print(f"FALHA: get_user_api_key_client não encontrou a chave ou erro.")
@@ -1504,7 +1524,7 @@ def test_firebase_clients():
 
 
     # Teste save_metrics_client
-    print(f"\nPasso 3.3: Testando save_metrics_client")
+    logger.info(f"Passo 3.3: Testando save_metrics_client")
     test_metric_data = {
         "event_type": "test_event",
         "timestamp": time.time(),
@@ -1513,23 +1533,23 @@ def test_firebase_clients():
     }
     save_metric_success = firestore_client.save_metrics_client(user_token, user_id, test_metric_data)
     if save_metric_success:
-        print(f"SUCESSO: save_metrics_client para evento '{test_metric_data['event_type']}'")
+        logger.info(f"SUCESSO: save_metrics_client para evento '{test_metric_data['event_type']}'")
     else:
-        print(f"FALHA: save_metrics_client para evento '{test_metric_data['event_type']}'")
+        logger.error(f"FALHA: save_metrics_client para evento '{test_metric_data['event_type']}'")
 
-    print("\n--- Teste Interativo dos Clientes Firebase Concluído ---")
-    print("Verifique o Firebase Console para confirmar os dados criados/modificados.")
-    print(f"Lembre-se: Arquivo de teste no Storage em 'users/{user_id}/{test_storage_suffix}'")
-    print(f"           Chave API de teste no Firestore em 'user_api_keys/{user_id}' campo '{test_service_name}'")
-    print(f"           Métrica de teste no Firestore em 'user_metrics/{user_id}/metrics/' (ID gerado automaticamente)")
+    logger.info("--- Teste Interativo dos Clientes Firebase Concluído ---")
+    logger.info("Verifique o Firebase Console para confirmar os dados criados/modificados.")
+    logger.debug(f"Lembre-se: Arquivo de teste no Storage em 'users/{user_id}/{test_storage_suffix}'")
+    logger.debug(f"           Chave API de teste no Firestore em 'user_api_keys/{user_id}' campo '{test_service_name}'")
+    logger.debug(f"           Métrica de teste no Firestore em 'user_metrics/{user_id}/metrics/' (ID gerado automaticamente)")
 
     #if LoggerSetup._active_cloud_handler_instance: # Verifica se o handler foi criado
-    #    print("\nForçando flush do CloudLogHandler...")
+    #    logger.debug("Forçando flush do CloudLogHandler...")
     #    LoggerSetup._active_cloud_handler_instance.flush()
-    #    print("Flush solicitado. Aguardando um momento para o upload...")
+    #    logger.debug("Flush solicitado. Aguardando um momento para o upload...")
     #    time.sleep(5) # Dê um tempo para o upload HTTP concluir
     #else:
-    #    print("\nCloudLogHandler não está ativo, flush não realizado.")
+    #    logger.debug("CloudLogHandler não está ativo, flush não realizado.")
 
 def test_firebase_auth():
     """
@@ -1537,22 +1557,23 @@ def test_firebase_auth():
     """
 
     def new_autenticate():
-        auth_email = input(f"Email para autenticar (padrão: {created_user_email or 'email@example.com'}): ") 
+        """Autentica um usuário de teste interativamente."""
+        auth_email = input(f"Email para autenticar (padrão: {created_user_email or 'email@example.com'}): ")
         auth_password = getpass.getpass(f"Senha para {auth_email}: ")
-        ...
+        # ... (código de autenticação)
         auth_data = auth_manager.authenticate_user_get_all_data(auth_email, auth_password)
         if auth_data and auth_data.get("idToken") and auth_data.get("localId"):
             test_logger.info(f"SUCESSO: Usuário {auth_email} autenticado.")
             # Se a criação falhou, mas o login funcionou, precisamos do email para reset de senha
             if not created_user_email: created_user_email = auth_email
-            return 
+            return auth_data # Retorna os dados de autenticação
         else:
             test_logger.error(f"FALHA ao autenticar {auth_email}. Resposta: {auth_data}")
             test_logger.warning("Alguns testes subsequentes podem falhar ou ser pulados.")
             raise Exception(f"FALHA ao autenticar {auth_email}. Resposta: {auth_data}")
-        
 
-    print("\n--- Iniciando Teste Interativo de FbManagerAuth ---")
+
+    logger.info("--- Iniciando Teste Interativo de FbManagerAuth ---")
 
     # 0. Inicialização (FbManagerAuth não precisa do Admin SDK, apenas da WEB_API_KEY)
     # No entanto, a inicialização do logger pode ser útil se feita antes.
@@ -1564,11 +1585,11 @@ def test_firebase_auth():
         test_logger = LoggerSetup.get_logger("FbManagerAuthTest")
         test_logger.info("Logger para teste de FbManagerAuth configurado.")
     except ImportError:
-        print("AVISO: LoggerSetup não encontrado, usando prints para o teste.")
+        logger.warning("LoggerSetup não encontrado, usando prints para o teste.")
         class TestLoggerFallback: # Fallback simples se o logger não estiver disponível
-            def info(self, msg): print(f"INFO: {msg}")
-            def warning(self, msg): print(f"WARN: {msg}")
-            def error(self, msg): print(f"ERROR: {msg}")
+            def info(self, msg): logger.info(f"INFO: {msg}")
+            def warning(self, msg): logger.warning(f"WARN: {msg}")
+            def error(self, msg): logger.error(f"ERROR: {msg}")
         test_logger = TestLoggerFallback()
 
 
@@ -1584,7 +1605,7 @@ def test_firebase_auth():
     user_local_id = None
 
     # --- 1. Criar Novo Usuário ---
-    print("\n--- Passo 1: Criar Novo Usuário (signUp) ---")
+    logger.info("Passo 1: Criar Novo Usuário (signUp)")
     timestamp = int(time.time())
     test_email = input(f"Email para novo usuário (ex: testuser{timestamp}@example.com): ") or f"testuser{timestamp}@example.com"
     test_password = getpass.getpass(f"Senha para {test_email} (mín. 6 caracteres): ")
@@ -1605,10 +1626,10 @@ def test_firebase_auth():
     else:
         test_logger.error(f"FALHA ao criar usuário {test_email}. Resposta: {creation_response}")
 
-    input("Pressione Enter para continuar...")
+    input("Pressione Enter para continuar...") # Manter input para interatividade do teste
 
     # --- 2. Autenticar Usuário Criado (ou um existente se a criação falhou) ---
-    print("\n--- Passo 2: Autenticar Usuário (signInWithPassword) ---")
+    logger.info("Passo 2: Autenticar Usuário (signInWithPassword)")
     if user_id_token:
         test_logger.info(f"Usuário {created_user_email} já autenticado durante a criação. Pulando re-autenticação.")
     else:
@@ -1616,10 +1637,10 @@ def test_firebase_auth():
         user_id_token = auth_data.get("idToken")
         user_local_id = auth_data.get("localId")
 
-    input("Pressione Enter para continuar...")
+    input("Pressione Enter para continuar...") # Manter input para interatividade do teste
 
     # --- 3. Enviar Email de Redefinição de Senha ---
-    print("\n--- Passo 3: Enviar Email de Redefinição de Senha (sendOobCode) ---")
+    logger.info("Passo 3: Enviar Email de Redefinição de Senha (sendOobCode)")
     if created_user_email: # Usa o email do usuário criado ou logado
         email_for_reset = created_user_email
     else:
@@ -1635,10 +1656,10 @@ def test_firebase_auth():
     else:
         test_logger.warning("Nenhum email fornecido para redefinição de senha. Teste pulado.")
 
-    input("Pressione Enter para continuar...")
+    input("Pressione Enter para continuar...") # Manter input para interatividade do teste
 
     # --- 4. Alterar Senha (requer ID Token) ---
-    print("\n--- Passo 4: Alterar Senha (update) ---")
+    logger.info("Passo 4: Alterar Senha (update)")
     if user_id_token:
         new_password = getpass.getpass("Digite a NOVA senha para o usuário autenticado: ")
         if len(new_password) >= 6:
@@ -1661,10 +1682,10 @@ def test_firebase_auth():
     else:
         test_logger.warning("Nenhum usuário autenticado (ID Token ausente). Teste de alteração de senha pulado.")
 
-    input("Pressione Enter para continuar...")
+    input("Pressione Enter para continuar...") # Manter input para interatividade do teste
 
     # --- 5. Atualizar Perfil (requer ID Token) ---
-    print("\n--- Passo 5: Atualizar Perfil (update) ---")
+    logger.info("Passo 5: Atualizar Perfil (update)")
     if user_id_token:
         new_display_name = input(f"Novo nome de exibição (atual: '{test_display_name}', deixe em branco para não mudar): ")
         new_photo_url = input("Nova URL da foto (deixe em branco para não mudar, ex: http://example.com/photo.png): ")
@@ -1693,10 +1714,10 @@ def test_firebase_auth():
     else:
         test_logger.warning("Nenhum usuário autenticado (ID Token ausente). Teste de atualização de perfil pulado.")
 
-    input("Pressione Enter para continuar...")
+    input("Pressione Enter para continuar...") # Manter input para interatividade do teste
 
     # --- 6. Excluir Conta (requer ID Token) ---
-    print("\n--- Passo 6: Excluir Conta (delete) ---")
+    logger.info("Passo 6: Excluir Conta (delete)")
     if user_id_token:
         if input(f"Tem CERTEZA que deseja excluir a conta de '{created_user_email or user_local_id}'? Esta ação é IRREVERSÍVEL. (s/N): ").lower() == 's':
             deleted = auth_manager.delete_user_account(user_id_token)
@@ -1711,7 +1732,7 @@ def test_firebase_auth():
     else:
         test_logger.warning("Nenhum usuário autenticado (ID Token ausente). Teste de exclusão de conta pulado.")
 
-    print("\n--- Teste Interativo de FbManagerAuth Concluído ---")
+    logger.info("--- Teste Interativo de FbManagerAuth Concluído ---")
     '''
     Teste de Permissão negada:
     storage_client = FirebaseClientStorage()
@@ -1727,7 +1748,7 @@ def test_firebase_auth():
 # test_firebase_auth()
 
 execution_time = perf_counter() - start_time
-print(f"Carregado FIREBASE_CLIENT em {execution_time:.4f}s")
+logger.debug(f"Carregado FIREBASE_CLIENT em {execution_time:.4f}s")
 
 '''
 TODO: Os atributos de usuários não estão sendo exibidos no console do Firebase, mas conseguimos visualizar através do Admin SDK. A Checar novamente...

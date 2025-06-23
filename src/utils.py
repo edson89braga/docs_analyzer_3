@@ -1,13 +1,13 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando utils.py")
+logger.debug(f"{start_time:.4f}s - Iniciando utils.py")
 
 import os, keyring, re
 from rich import print
 from typing import Union, Optional, Any
-
-import logging
-logger = logging.getLogger(__name__)
 
 from src.settings import (K_PROXY_ENABLED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, 
                             K_PROXY_PASSWORD_SAVED, ASSETS_DIR_ABS)
@@ -205,13 +205,9 @@ def timing_decorator(calc_by_item=False):
             result = func(*args, **kwargs)  # Chama a função decorada
             end_time = time()  # Marca o tempo de término
             total_time = end_time - start_time
-            print('\n')
-            print(f"F: {func.__name__} - Tempo execução total : {total_time:.4f}s")
-            #logger.info(f"F: {func.__name__} - Tempo execução total : {total_time:.4f}s")
+            logger.debug(f"F: {func.__name__} - Tempo execução total : {total_time:.4f}s")
             if calc_by_item and args and type(args) != str and isinstance(args[0], collections.abc.Iterable):
-                print(f"F: {func.__name__} - Tempo p/item - Loops: {len(args[0])} : {total_time/len(args[0]):.4f}s")
-                #logger.info(f"F: {func.__name__} - Tempo p/item - Loops: {len(args[0])} : {total_time/len(args[0]):.4f}s")
-            print('\n')
+                logger.debug(f"F: {func.__name__} - Tempo p/item - Loops: {len(args[0])} : {total_time/len(args[0]):.4f}s")
             return result
         return wrapper
     return decorator
@@ -235,7 +231,7 @@ def count_tokens(text: str, model_name: str = "gpt-3.5-turbo") -> int:
         encoding = _tiktoken.encoding_for_model(model_name)
     except KeyError:
         # Se o modelo não for encontrado, usar um encoding padrão como cl100k_base
-        # print(f"Aviso: Modelo '{model_name}' não encontrado para tiktoken. Usando 'cl100k_base'.") # Opcional
+        logger.warning(f"Modelo '{model_name}' não encontrado para tiktoken. Usando 'cl100k_base'.")
         encoding = _tiktoken.get_encoding("cl100k_base")
     
     # O método encode não aceita 'verbose' ou 'add_special_tokens'.
@@ -270,7 +266,7 @@ def reduce_text_to_limit(text_full: str, token_limit: int, model_name: str = "gp
         encoding = _tiktoken.encoding_for_model(model_name)
     except KeyError:
         # Fallback para um encoding comum se o modelo não for encontrado
-        # print(f"Aviso: Modelo '{model_name}' não encontrado para tiktoken. Usando 'cl100k_base' para reduce_text_to_limit.") # Opcional
+        logger.warning(f"Modelo '{model_name}' não encontrado para tiktoken. Usando 'cl100k_base' para reduce_text_to_limit.")
         encoding = _tiktoken.get_encoding("cl100k_base")
     
     # 1. Codificar o texto completo em tokens
@@ -291,19 +287,8 @@ def reduce_text_to_limit(text_full: str, token_limit: int, model_name: str = "gp
     try:
         reduced_text = encoding.decode(truncated_tokens)
     except Exception as e:
-        # print(f"Erro ao decodificar tokens truncados: {e}. Tentando decodificar com substituição de erros.") # Opcional
-        # Tentar decodificar substituindo bytes problemáticos, se necessário (pode não ser ideal para todos os casos)
+        logger.error(f"Erro ao decodificar tokens truncados: {e}. Tentando decodificar com substituição de erros.", exc_info=True)
         reduced_text = encoding.decode_with_offsets(truncated_tokens)[0] # [0] para pegar o texto
-        # Ou, uma abordagem mais simples é decodificar token por token e juntar,
-        # ou aceitar a perda de um token final se a decodificação falhar.
-        # Para a maioria dos casos de truncagem simples, a decodificação direta funciona.
-        # Se for um problema persistente, pode ser necessário um tratamento mais sofisticado
-        # para garantir que não se corte no meio de uma sequência de bytes de um caractere.
-        # No entanto, tiktoken é geralmente robusto.
-        # Se a decodificação simples falhar, uma estratégia é reduzir o número de tokens em 1 e tentar novamente.
-        # Ex: reduced_text = encoding.decode(truncated_tokens[:-1])
-        # Por ora, vamos manter a decodificação direta.
-        pass # Mantendo o comportamento anterior em caso de erro, mas idealmente logar ou tratar.
 
     return reduced_text
 
@@ -367,30 +352,56 @@ def get_string_intervalos(numeros, incrementa_1=False):
     return ', '.join(intervalos)
 
 ### ========================================================================================================
-
 @timing_decorator()
-def get_uf_list():
-    # Função para buscar UFs
+def get_uf_list() -> list[str]:
+    """
+    Busca a lista de Unidades Federativas (UFs) do Brasil através da BrasilAPI.
+
+    Returns:
+        list[str]: Uma lista de siglas de UFs (ex: ['AC', 'AL', ...]).
+                   Retorna uma lista vazia em caso de erro.
+    """
     _initialize_heavy_utils()
     url = "https://brasilapi.com.br/api/ibge/uf/v1"
-    response = _requests.get(url)
-    if response.status_code == 200:
+    try:
+        response = _requests.get(url)
+        response.raise_for_status()  # Levanta HTTPError para respostas de erro (4xx ou 5xx)
         return [uf['sigla'] for uf in response.json()]
-    else:
+    except _requests.exceptions.RequestException as e:
+        logger.error(f"Erro ao buscar lista de UFs da BrasilAPI: {e}", exc_info=True)
         return []
 
 @timing_decorator()
-def get_municipios_by_uf(uf):
-    # Função para buscar municípios por UF
+def get_municipios_by_uf(uf: str) -> list[str]:
+    """
+    Busca a lista de municípios para uma UF específica através da BrasilAPI.
+
+    Args:
+        uf (str): A sigla da Unidade Federativa (ex: 'SP').
+
+    Returns:
+        list[str]: Uma lista de nomes de municípios.
+                   Retorna uma lista vazia em caso de erro.
+    """
     _initialize_heavy_utils()
     url = f"https://brasilapi.com.br/api/ibge/municipios/v1/{uf}"
-    response = _requests.get(url)
-    if response.status_code == 200:
+    try:
+        response = _requests.get(url)
+        response.raise_for_status()
         return [municipio['nome'] for municipio in response.json()]
-    else:
+    except _requests.exceptions.RequestException as e:
+        logger.error(f"Erro ao buscar municípios para UF '{uf}' da BrasilAPI: {e}", exc_info=True)
         return []
 
-def update_dict_municipios_local():
+def update_dict_municipios_local() -> dict[str, list[str]]:
+    """
+    Atualiza e salva o dicionário de municípios por UF em um arquivo JSON local.
+    Os dados são obtidos da BrasilAPI.
+
+    Returns:
+        dict[str, list[str]]: O dicionário de municípios atualizado.
+                              Retorna um dicionário vazio em caso de erro.
+    """
     import json
     file_path = os.path.join(ASSETS_DIR_ABS, 'dict_municipios.json')
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -398,19 +409,26 @@ def update_dict_municipios_local():
     dict_municipios = {uf: [] for uf in ufs}
     try:
         for uf in dict_municipios:
-            print(f'Capturando municipios de: {uf}...')
+            logger.debug(f'Capturando municipios de: {uf}...')
             dict_municipios[uf] = get_municipios_by_uf(uf)
-            print(f'Concluído com lista de {len(dict_municipios[uf])} municipios.\n')
+            logger.debug(f'Concluído com lista de {len(dict_municipios[uf])} municipios.')
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(dict_municipios, f, ensure_ascii=False, indent=4)
-        print(f"Dicionário de municípios salvo em: {file_path}")
+        logger.info(f"Dicionário de municípios salvo em: {file_path}")
         return dict_municipios
     except Exception as e:
-        print(f"Erro ao salvar dicionário de municípios: {e}")
+        logger.error(f"Erro ao salvar dicionário de municípios: {e}", exc_info=True)
         return {}
 
-# Carregar o dicionário de municípios do arquivo JSON local
-def load_dict_municipios_local():
+def load_dict_municipios_local() -> dict[str, list[str]]:
+    """
+    Carrega o dicionário de municípios por UF de um arquivo JSON local.
+    Se o arquivo não existir, tenta atualizá-lo e salvá-lo.
+
+    Returns:
+        dict[str, list[str]]: O dicionário de municípios carregado.
+                              Retorna um dicionário vazio em caso de erro.
+    """
     try:
         import json
         file_path = os.path.join(ASSETS_DIR_ABS, 'dict_municipios.json')
@@ -418,10 +436,10 @@ def load_dict_municipios_local():
             with open(file_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         else:
-            print(f"Arquivo de municípios não encontrado: {file_path}.")
+            logger.warning(f"Arquivo de municípios não encontrado: {file_path}. Tentando atualizar.")
             return update_dict_municipios_local()
     except Exception as e:
-        print(f"Erro ao carregar dicionário de municípios: {e}")
+        logger.error(f"Erro ao carregar dicionário de municípios: {e}", exc_info=True)
         return {}
 
 _municipios_cache = None
@@ -444,7 +462,17 @@ def get_lista_ufs_cached() -> list:
         _ufs_cache = sorted(list(municipios.keys()))
     return _ufs_cache
 
-def convert_to_list_of_strings(value:str):
+def convert_to_list_of_strings(value: str) -> list[str]:
+    """
+    Converte uma string multi-linha em uma lista de strings,
+    removendo linhas vazias e espaços em branco.
+
+    Args:
+        value (str): A string de entrada.
+
+    Returns:
+        list[str]: Uma lista de strings limpas.
+    """
     if not value:
         return []
     return [line.strip() for line in value.split('\n') if line.strip()]
@@ -691,7 +719,16 @@ def register_temp_files_cleanup(temp_dir_to_clean: str):
     cleanup_func_with_args = partial(cleanup_old_temp_files, temp_dir_to_clean)
     atexit.register(cleanup_func_with_args)
 
-def format_seconds_to_min_sec(total_segundos):
+def format_seconds_to_min_sec(total_segundos: Union[int, float]) -> str:
+    """
+    Formata um número total de segundos em uma string no formato "MMm:SSs".
+
+    Args:
+        total_segundos (Union[int, float]): O número total de segundos.
+
+    Returns:
+        str: A string formatada (ex: "01m:30s").
+    """
     total_segundos = round(total_segundos)
     minutos = int(total_segundos) // 60
     segundos = int(total_segundos) % 60
@@ -736,7 +773,10 @@ def calcular_similaridade_rouge_l(texto_original: str, texto_editado: str) -> fl
 ### ----------------------------------------------------------------
 
 def testando_similaridade_rouge_l():
-
+    """
+    Função de teste para demonstrar o cálculo da similaridade ROUGE-L.
+    Compara diferentes pares de textos e imprime seus scores de similaridade.
+    """
     txt1 = "O sistema solar é composto por oito planetas."
     txt2 = "O sistema solar é composto por 8 planetas." # Pequena edição
     txt3 = "A via láctea é uma galáxia espiral." # Texto diferente
@@ -748,23 +788,23 @@ def testando_similaridade_rouge_l():
     txt8 = "Eu ví um homem correr."
     txt9 = "Eu ví um homem correndo."
 
-    print(f"\nSimilaridade entre '{txt1}' e '{txt2}': {calcular_similaridade_rouge_l(txt1, txt2):.4f}")
-    print(f"\nSimilaridade entre '{txt1}' e '{txt3}': {calcular_similaridade_rouge_l(txt1, txt3):.4f}")
-    print(f"\nSimilaridade entre '{txt1}' e '{txt4}': {calcular_similaridade_rouge_l(txt1, txt4):.4f}")
-    print(f"\nSimilaridade entre '{txt1}' e '{txt5}': {calcular_similaridade_rouge_l(txt1, txt5):.4f}")
-    print(f"\nSimilaridade entre '{txt1}' e '{txt6}': {calcular_similaridade_rouge_l(txt1, txt6):.4f}")
-    print(f"\nSimilaridade entre '{txt6}' e '{txt6}': {calcular_similaridade_rouge_l(txt6, txt6):.4f}")
-    print(f"\nSimilaridade entre '{txt1}' e '{txt7}': {calcular_similaridade_rouge_l(txt1, txt7):.4f}")
+    logger.debug(f"Similaridade entre '{txt1}' e '{txt2}': {calcular_similaridade_rouge_l(txt1, txt2):.4f}")
+    logger.debug(f"Similaridade entre '{txt1}' e '{txt3}': {calcular_similaridade_rouge_l(txt1, txt3):.4f}")
+    logger.debug(f"Similaridade entre '{txt1}' e '{txt4}': {calcular_similaridade_rouge_l(txt1, txt4):.4f}")
+    logger.debug(f"Similaridade entre '{txt1}' e '{txt5}': {calcular_similaridade_rouge_l(txt1, txt5):.4f}")
+    logger.debug(f"Similaridade entre '{txt1}' e '{txt6}': {calcular_similaridade_rouge_l(txt1, txt6):.4f}")
+    logger.debug(f"Similaridade entre '{txt6}' e '{txt6}': {calcular_similaridade_rouge_l(txt6, txt6):.4f}")
+    logger.debug(f"Similaridade entre '{txt1}' e '{txt7}': {calcular_similaridade_rouge_l(txt1, txt7):.4f}")
     
-    print(f"\nSimilaridade entre '{txt8}' e '{txt9}': {calcular_similaridade_rouge_l(txt1, txt7):.4f}")
+    logger.debug(f"Similaridade entre '{txt8}' e '{txt9}': {calcular_similaridade_rouge_l(txt1, txt7):.4f}")
     
     # Teste com textos mais longos
     long_txt_orig = "Este é um exemplo de um texto um pouco mais longo para testar a métrica de similaridade ROUGE-L. Ele contém várias frases e palavras que podem ou não se repetir no texto editado. O objetivo é verificar como a métrica lida com sobreposições parciais e reordenações de conteúdo dentro de um parágrafo ou documento."
     long_txt_edit_similar = "Este é um exemplo de texto um pouco mais longo para testar a métrica ROUGE-L. Ele contém várias frases e palavras que podem ou não se repetir no texto editado. O objetivo é verificar como a métrica lida com sobreposições parciais e reordenações." # Removeu uma parte, reordenou um pouco
     long_txt_edit_diferente = "A culinária italiana é conhecida mundialmente por sua diversidade e sabor. Ingredientes frescos como tomate, manjericão e azeite de oliva são fundamentais em muitos pratos. A pizza e a pasta são talvez os exemplos mais famosos, mas cada região da Itália possui suas próprias especialidades e tradições gastronômicas que valem a pena explorar."
     
-    print(f"\nSimilaridade (longo) entre original e similar: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_similar):.4f}")
-    print(f"\nSimilaridade (longo) entre original e diferente: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_diferente):.4f}")
+    logger.debug(f"Similaridade (longo) entre original e similar: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_similar):.4f}")
+    logger.debug(f"Similaridade (longo) entre original e diferente: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_diferente):.4f}")
 
 ### ========================================================================================================
 
@@ -845,7 +885,5 @@ def check_app_version() -> None:
             os.environ['HTTPS_PROXY'] = https_proxy_bkp
         logger.debug("Configurações de proxy restauradas após verificação de versão.")
         
-### ========================================================================================================
-
 execution_time = perf_counter() - start_time
-print(f"Carregado UTILS em {execution_time:.4f}s")
+logger.debug(f"Carregado UTILS em {execution_time:.4f}s")

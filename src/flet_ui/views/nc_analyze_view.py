@@ -1,11 +1,14 @@
 # src/flet_ui/views/nc_analyze_view.py
 
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando nc_analyze_view.py")
+logger.debug(f"{start_time:.4f}s - Iniciando nc_analyze_view.py")
 
 import flet as ft
-import threading, json, os, shutil
+import threading, os, shutil
 from typing import Optional, Dict, Any, List, Union, Tuple, Callable
 from time import time, sleep, perf_counter
 from datetime import datetime
@@ -21,7 +24,7 @@ from src.flet_ui.components import (
 from src.flet_ui import theme
 
 
-from src.settings import (APP_VERSION , UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR, cotacao_dolar_to_real,
+from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR, cotacao_dolar_to_real,
                           KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, 
                           FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_LOADED_LLM_PROVIDERS,
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST)
@@ -57,9 +60,6 @@ from sentence_transformers import SentenceTransformer
 
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
 municipios_list = get_municipios_por_uf_cached()
-
-import logging
-logger = logging.getLogger(__name__)
 
 # Dicionário para servir como cache no lado do servidor para dados pesados da sessão.
 # A chave será o ID da sessão do Flet (page.session_id).
@@ -141,17 +141,20 @@ class AnalyzePDFViewContent(ft.Column):
     """
     def __init__(self, page: ft.Page):
         """
-        Inicializa a view de Análise de PDF.
+        Inicializa a view de Análise de Notícias-Crime e Outros Documentos.
+
+        Configura os componentes da interface do usuário, gerencia o estado interno da view,
+        e inicializa os gerenciadores de arquivos, análise, configurações e exportação.
 
         Args:
-            page: A página Flet à qual esta view será adicionada.
+            page (ft.Page): A página Flet à qual esta view será adicionada.
         """
-        super().__init__(expand=True, spacing=10) # A Column principal expande
+        super().__init__(expand=True, spacing=10)
         self.page = page
         self.gui_controls: Dict[str, ft.Control] = {}
         self.gui_controls_drawer: Dict[str, ft.Control] = {}
-        self.file_list_manager = None # Será instanciado FileListManager (adaptado)
-        self.analysis_controller = None # Será instanciado AnalysisController (adaptado)
+        self.file_list_manager: Optional[InternalFileListManager] = None
+        self.analysis_controller: Optional[InternalAnalysisController] = None
         self.settings_drawer_manager: Optional[SettingsDrawerManager] = None
         self.export_manager: Optional[InternalExportManager] = None
         self.managed_file_picker: Optional[ManagedFilePicker] = None
@@ -162,13 +165,13 @@ class AnalyzePDFViewContent(ft.Column):
 
         # Estado interno da View
         self._is_drawer_open = False
-        self._files_processed = False # Indica se o conteúdo dos PDFs foi processado
-        self._analysis_requested = False # Indica se a análise LLM foi solicitada/concluída
+        self._files_processed = False
+        self._analysis_requested = False
 
         # --- Adicionado para visualização do prompt ---
         self._is_prompt_view_active = False
-        self._original_main_layout_container: Optional[ft.Row] = None   # Para armazenar main_content_with_drawer_row
-        self._prompt_display_layout: Optional[ft.Container] = None      # Para o layout de exibição do prompt
+        self._original_main_layout_container: Optional[ft.Row] = None
+        self._prompt_display_layout: Optional[ft.Container] = None
 
         self.feedback_workflow_manager: Optional[FeedbackWorkflowManager] = None
         
@@ -176,18 +179,27 @@ class AnalyzePDFViewContent(ft.Column):
 
         self._build_gui_structure()
         self.feedback_workflow_manager = FeedbackWorkflowManager(self.page, self)
-        self._initialize_pickers()  # Deve ser chamado após _build_gui_structure e instanciação dos managers
+        self._initialize_pickers()
         self._setup_event_handlers()
-        self._restore_state_from_session() 
+        self._restore_state_from_session()
 
-    def _remove_data_session(self, key):
-        """Remove um dado específico da sessão da página, se existir."""
+    def _remove_data_session(self, key: str):
+        """
+        Remove um dado específico da sessão da página, se existir.
+
+        Args:
+            key (str): A chave do dado a ser removido da sessão.
+        """
         if self.page.session.contains_key(key):
             self.page.session.remove(key)
 
     def _build_gui_structure(self):
-        """Constrói a estrutura visual (GUI) da view."""
-        logger.info("Construindo estrutura da UI para Análise de PDF.")
+        """
+        Constrói a estrutura visual (GUI) da view, incluindo a barra de botões,
+        painéis expansíveis para arquivos, metadados de processamento e resultados LLM,
+        e o drawer de configurações.
+        """
+        logger.debug("Construindo estrutura da UI para Análise de PDF.")
         
         default_icon_size_bar = 25
         width_btn_bar = 180
@@ -239,7 +251,7 @@ class AnalyzePDFViewContent(ft.Column):
             #bgcolor = theme.PANEL_CONTENT_BGCOLOR
         )
         file_list_header_container = ft.Container(content=ft.Row([ft.Container(width=12), self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]]),
-                                               expand=True, alignment=ft.alignment.center, # ft.MainAxisAlignment.CENTER, 
+                                               expand=True, alignment=ft.alignment.center, # ft.MainAxisAlignment.CENTER,
                                                bgcolor=None) # theme.PANEL_HEADER_BGCOLOR)
         self.gui_controls[CTL_FILE_LIST_PANEL] = ft.ExpansionPanel(
             header=file_list_header_container,
@@ -248,8 +260,8 @@ class AnalyzePDFViewContent(ft.Column):
             expanded=True, # Começa expandido
             #bgcolor = theme.PANEL_HEADER_BGCOLOR
         )
-        self.gui_controls[CTL_FILE_LIST_PANEL] = wrapper_panel_1(self.gui_controls[CTL_FILE_LIST_PANEL]) # wrapper_panel_1 = ExpansionPanelList 
-        self.gui_controls[CTL_FILE_LIST_PANEL].visible=False, # visível após carregament de PDF(s)   
+        self.gui_controls[CTL_FILE_LIST_PANEL] = wrapper_panel_1(self.gui_controls[CTL_FILE_LIST_PANEL]) # wrapper_panel_1 = ExpansionPanelList
+        self.gui_controls[CTL_FILE_LIST_PANEL].visible=False, # visível após carregament de PDF(s)
 
         # Panel 2: Metadados do Processamento
         self.gui_controls[CTL_PROC_METADATA_PANEL_TITLE] = ft.Text("Metadados do Processamento", weight=ft.FontWeight.BOLD)
@@ -264,12 +276,18 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_PROC_METADATA_PANEL].visible=False, # visível após processamento de PDF(s)
 
         # Container 3: Resposta/Resultado da Análise
-        self.llm_result_title = ft.Row([ft.Container(width=12), 
-                                            ft.Text("Resultado da Análise LLM:", 
-                                                style=ft.TextThemeStyle.TITLE_MEDIUM, 
+        self.llm_result_title = ft.Row([ft.Container(width=12),
+                                            ft.Text("Resultado da Análise LLM:",
+                                                style=ft.TextThemeStyle.TITLE_MEDIUM,
                                                 weight=ft.FontWeight.BOLD)], visible=False)
         
-        def close_ai_warning_balloon(e):
+        def close_ai_warning_balloon(e: ft.ControlEvent):
+            """
+            Fecha o balão de aviso de IA.
+
+            Args:
+                e (ft.ControlEvent): Evento de clique do botão.
+            """
             e.control.parent.parent.visible = False
             e.control.parent.parent.update()
 
@@ -321,7 +339,7 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_LLM_RESULT_TEXT] = ft.TextField(
             multiline=True, read_only=True, min_lines=15, max_lines=30,
             expand=True, border_color=theme.PRIMARY, text_size=14,
-            visible=False 
+            visible=False
         )
         
         # Novo display estruturado:
@@ -332,8 +350,8 @@ class AnalyzePDFViewContent(ft.Column):
             content=ft.Column( # Usar Stack para sobrepor o balão e o resultado
                 [
                    self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON],
-                   self.gui_controls[CTL_LLM_RESULT_TEXT], 
-                   self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY] 
+                   self.gui_controls[CTL_LLM_RESULT_TEXT],
+                   self.gui_controls[CTL_LLM_STRUCTURED_RESULT_DISPLAY]
                 ]
             ),
             padding=10,
@@ -377,7 +395,7 @@ class AnalyzePDFViewContent(ft.Column):
         self.settings_drawer_container = ft.Container(content=drawer_content, padding=10, width=0)
 
         self._original_main_layout_container = ft.Row(
-            [ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=8)), 
+            [ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=8)),
              self.settings_drawer_container],
             expand=True, vertical_alignment=ft.CrossAxisAlignment.START
         )
@@ -399,8 +417,15 @@ class AnalyzePDFViewContent(ft.Column):
         # self.export_manager é inicializado em _initialize_pickers após global_file_picker estar pronto
 
     def _create_prompt_display_layout(self) -> ft.Container:
-        """Cria o layout para exibir os prompts estruturados."""
-        logger.info("Criando layout de visualização do prompt.")
+        """
+        Cria e retorna o layout para exibir os prompts estruturados utilizados na análise LLM.
+        Este layout permite a visualização dos prompts de sistema, instrução e outros prompts
+        segmentados, com o conteúdo do PDF substituído por um placeholder para clareza.
+
+        Returns:
+            ft.Container: Um container Flet contendo os TextFields com os prompts.
+        """
+        logger.debug("Criando layout de visualização do prompt.")
 
         prompt_variables_to_display = [                       
             ("System_prompt", core_prompts.system_prompt_A0),
@@ -471,7 +496,7 @@ class AnalyzePDFViewContent(ft.Column):
         para gerenciar as operações de exportação, utilizando a instância global
         do FilePicker da página.
         """
-        logger.info("Inicializando FilePickers (Managed para upload, Global para exportação).")
+        logger.debug("Inicializando FilePickers (Managed para upload, Global para exportação).")
         
         # Primeiro, obtenha a referência ao picker global
         self.global_file_picker_instance = self.page.data.get("global_file_picker")
@@ -490,18 +515,18 @@ class AnalyzePDFViewContent(ft.Column):
                 Callback executado quando o upload de um arquivo individual é concluído.
 
                 Args:
-                    success: True se o upload foi bem-sucedido, False caso contrário.
-                    path_or_msg: O caminho temporário do arquivo no servidor (se sucesso) ou uma mensagem de erro.
-                    file_name: O nome original do arquivo.
+                    success (bool): True se o upload foi bem-sucedido, False caso contrário.
+                    path_or_msg (str): O caminho temporário do arquivo no servidor (se sucesso) ou uma mensagem de erro.
+                    file_name (Optional[str]): O nome original do arquivo.
                 """
                 if success and file_name and path_or_msg:
                     logger.info(f"Upload individual de '{file_name}' OK. Path: {path_or_msg}")
                     current_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
-                    if not isinstance(current_files, list): 
-                        current_files = []                    
+                    if not isinstance(current_files, list):
+                        current_files = []
                     if not any(f['name'] == file_name and f['path'] == path_or_msg for f in current_files):
-                        new_file_entry = {"name": file_name, 
-                                          "path": path_or_msg, 
+                        new_file_entry = {"name": file_name,
+                                          "path": path_or_msg,
                                           "original_index": len(current_files)}
                         current_files.append(new_file_entry)
                         self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
@@ -517,7 +542,7 @@ class AnalyzePDFViewContent(ft.Column):
                 Atualiza a UI com o status do upload e o estado da view.
 
                 Args:
-                    batch_results: Lista de dicionários com os resultados de cada arquivo no lote.
+                    batch_results (List[Dict[str, Any]]): Lista de dicionários com os resultados de cada arquivo no lote.
                 """
                 logger.info(f"Upload_Batch Completo (ManagedFilePicker): {len(batch_results)} resultados.")
                 hide_loading_overlay(self.page)
@@ -540,7 +565,7 @@ class AnalyzePDFViewContent(ft.Column):
                     final_message = "Nenhum arquivo selecionado."
                     final_color = theme.COLOR_WARNING
                 
-                if final_message: 
+                if final_message:
                     show_snackbar(self.page, final_message, color=final_color)
                 
                 # Se novos arquivos foram adicionados, invalida os resultados anteriores.
@@ -569,9 +594,11 @@ class AnalyzePDFViewContent(ft.Column):
         # Inicializa o InternalExportManager passando as dependências necessárias
         self.export_manager = InternalExportManager(self, self.docx_exporter, self.global_file_picker_instance)
 
-    # --- Handlers de Eventos (Implementações Iniciais) ---
     def _setup_event_handlers(self):
-        """Configura os handlers de eventos para os controles da UI."""
+        """
+        Configura os handlers de eventos para os controles da UI.
+        Associa as funções de tratamento de eventos aos respectivos botões e elementos interativos.
+        """
         logger.info("Configurando handlers de eventos da UI.")
         self.gui_controls[CTL_UPLOAD_BTN].on_click = self._handle_upload_click
         self.gui_controls[CTL_PROCESS_BTN].on_click = self._handle_process_content_click
@@ -582,10 +609,19 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_PROMPT_STRUCT_BTN].on_click = self._toggle_prompt_view
 
     def _handle_upload_click(self, e: ft.ControlEvent):
-        """Handler para o clique no botão 'Carregar Arquivo(s)'."""
+        """
+        Handler para o clique no botão 'Carregar Arquivo(s)'.
+
+        Inicia o processo de seleção e upload de arquivos PDF, exibindo um overlay de carregamento.
+        Integra-se com o `FeedbackWorkflowManager` para solicitar feedback antes de prosseguir,
+        se aplicável.
+
+        Args:
+            e (ft.ControlEvent): O evento de clique do botão.
+        """
         logger.info("Botão 'Carregar Arquivo(s)' clicado.")
 
-        def primary_upload_action():            
+        def primary_upload_action():
             if self.managed_file_picker:
                 threading.Timer(0.1, show_loading_overlay, args=[self.page, "A carregar arquivo(s)..."]).start()
                 self.managed_file_picker.pick_files(allow_multiple=True, dialog_title_override="Selecione PDF(s) para análise")
@@ -600,10 +636,19 @@ class AnalyzePDFViewContent(ft.Column):
         else: # Fallback se o manager não estiver pronto
             primary_upload_action()
 
-    def _initiate_analysis_step(self, 
-                                step_type: str, # "process_only", "analyze_only", "process_and_analyze"
-                                event: Optional[ft.ControlEvent] = None): # Evento original, para logging se necessário
-        
+    def _initiate_analysis_step(self,
+                                step_type: str,
+                                event: Optional[ft.ControlEvent] = None):
+        """
+        Inicia uma etapa específica do fluxo de análise (processamento, análise LLM, ou ambos).
+
+        Verifica a existência de arquivos carregados e, se necessário, solicita feedback
+        ao usuário antes de executar a ação primária.
+
+        Args:
+            step_type (str): O tipo de etapa a ser iniciada ("process_only", "analyze_only", "process_and_analyze").
+            event (Optional[ft.ControlEvent]): O evento de controle original que disparou a ação (opcional, para logging).
+        """
         logger.info(f"Iniciando etapa de análise: '{step_type}'")
 
         # 1. Verificar se há arquivos carregados (necessário para todas as etapas)
@@ -689,12 +734,27 @@ class AnalyzePDFViewContent(ft.Column):
                 primary_action_callable()
 
     def _handle_process_content_click(self, e: ft.ControlEvent):
-        """Handler para o clique no botão 'Processar Conteúdo'."""
+        """
+        Handler para o clique no botão 'Processar Conteúdo'.
+
+        Inicia a etapa de processamento de conteúdo dos PDFs.
+
+        Args:
+            e (ft.ControlEvent): O evento de clique do botão.
+        """
         logger.info("Botão 'Processar Conteúdo' clicado.")
         self._initiate_analysis_step(step_type="process_only", event=e)
 
     def _handle_analyze_click(self, e: ft.ControlEvent):
-        """Handler para o clique no botão 'Solicitar Análise'."""
+        """
+        Handler para o clique no botão 'Solicitar Análise'.
+
+        Inicia a etapa de análise LLM. Se os arquivos ainda não foram processados,
+        redireciona para o pipeline completo (processar e analisar).
+
+        Args:
+            e (ft.ControlEvent): O evento de clique do botão.
+        """
         logger.info("Botão 'Solicitar Análise' clicado.")
         if not self._files_processed:
             logger.info("'Solicitar Análise' clicado, mas arquivos não processados. Redirecionando para 'process_and_analyze'.")
@@ -706,6 +766,16 @@ class AnalyzePDFViewContent(ft.Column):
             self._initiate_analysis_step(step_type="analyze_only", event=e)
 
     def _handle_restart_click(self, e: ft.ControlEvent):
+        """
+        Handler para o clique no botão 'Reiniciar Análise'.
+
+        Limpa todos os dados da sessão e reseta a interface do usuário para o estado inicial.
+        Integra-se com o `FeedbackWorkflowManager` para solicitar feedback antes de prosseguir,
+        se aplicável.
+
+        Args:
+            e (ft.ControlEvent): O evento de clique do botão.
+        """
         logger.info("Botão 'Reiniciar' clicado.")
 
         def primary_restart_action():
@@ -721,7 +791,13 @@ class AnalyzePDFViewContent(ft.Column):
             primary_restart_action()
 
     def _update_export_button_menu(self):
-        """Atualiza os itens do menu do botão de Exportar."""
+        """
+        Atualiza os itens do menu do botão de Exportar.
+
+        Popula o menu com opções de exportação simples e baseadas em templates,
+        habilitando ou desabilitando itens conforme a disponibilidade de templates
+        e o estado da análise.
+        """
         export_button = self.gui_controls.get(CTL_EXPORT_BTN)
         if not isinstance(export_button, ft.PopupMenuButton):
             return
@@ -753,12 +829,12 @@ class AnalyzePDFViewContent(ft.Column):
             export_button.items.append(ft.PopupMenuItem()) # Divisor
             export_button.items.append(
                  ft.PopupMenuItem(text="Nenhum template DOCX encontrado", disabled=True)
-            )    
+            )
 
         # Opção de Gerenciar Templates (ainda desabilitada)
         export_button.items.append(ft.PopupMenuItem()) # Divisor
         manage_templates_item = ft.PopupMenuItem(
-            text="Adicionar Novo Template", 
+            text="Adicionar Novo Template",
             data="manage_templates",
             #icon=ft.Icons.SETTINGS_APPLICATIONS_OUTLINED,
         )
@@ -769,7 +845,15 @@ class AnalyzePDFViewContent(ft.Column):
             export_button.update()
 
     def _handle_toggle_settings_drawer(self, e: Optional[ft.ControlEvent] = None):
-        """Handler para abrir/fechar o drawer de configurações."""
+        """
+        Handler para abrir/fechar o drawer de configurações.
+
+        Controla a largura e a visibilidade do drawer, além de aplicar efeitos visuais
+        no botão de configurações.
+
+        Args:
+            e (Optional[ft.ControlEvent]): O evento de clique do botão (opcional).
+        """
         self._is_drawer_open = not self._is_drawer_open
         self.settings_drawer_container.width = 320 if self._is_drawer_open else 0
         # self.settings_drawer_container.visible = self._is_drawer_open # Alternativa à largura
@@ -787,7 +871,15 @@ class AnalyzePDFViewContent(ft.Column):
         logger.info(f"Drawer de configurações {'aberto' if self._is_drawer_open else 'fechado'}.")
 
     def _toggle_prompt_view(self, e: ft.ControlEvent):
-        """Handler para o clique no botão 'Prompt Estruturado'."""
+        """
+        Handler para o clique no botão 'Prompt Estruturado'.
+
+        Alterna a exibição entre o layout principal da análise e o layout de visualização
+        dos prompts estruturados.
+
+        Args:
+            e (ft.ControlEvent): O evento de clique do botão.
+        """
         #_logger.info("Botão 'Prompt Estruturado' clicado.")
         #show_snackbar(self.page, "Visualização do 'Prompt Estruturado' ainda não implementado.", theme.COLOR_WARNING)
         self._is_prompt_view_active = not self._is_prompt_view_active
@@ -807,8 +899,8 @@ class AnalyzePDFViewContent(ft.Column):
             else:
                 logger.error("Estrutura de controle inesperada ao tentar mostrar a visualização do prompt.")
                 # Reverter e não fazer nada
-                self._is_prompt_view_active = False 
-                if prompt_button and prompt_button.page: 
+                self._is_prompt_view_active = False
+                if prompt_button and prompt_button.page:
                     prompt_button.update()
                 self.update()
                 return
@@ -842,7 +934,12 @@ class AnalyzePDFViewContent(ft.Column):
 
     # --- Lógica de Atualização da UI (Métodos Internos) ---
     def _update_button_states(self):
-        """Atualiza o estado (habilitado/desabilitado) dos botões da UI."""
+        """
+        Atualiza o estado (habilitado/desabilitado) dos botões da UI com base no estado atual da view.
+
+        Os botões são habilitados ou desabilitados dinamicamente para guiar o usuário
+        através do fluxo de trabalho (carregar, processar, analisar, exportar).
+        """
         barra_main_btns = [CTL_UPLOAD_BTN, CTL_PROCESS_BTN, CTL_ANALYZE_BTN, CTL_PROMPT_STRUCT_BTN, CTL_RESTART_BTN, CTL_EXPORT_BTN, CTL_SETTINGS_BTN]
         
         if self._is_prompt_view_active:
@@ -855,7 +952,7 @@ class AnalyzePDFViewContent(ft.Column):
                 if self.gui_controls[key].page and self.gui_controls[key].uid:
                     self.gui_controls[key].update()
             
-            logger.info("[DEBUG] Estados dos botões atualizados (Prompt View Ativa).")
+            logger.info("Estados dos botões atualizados (Prompt View Ativa).")
             return # Termina aqui se a visualização do prompt estiver ativa
 
         files_exist = bool(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED))
@@ -895,15 +992,15 @@ class AnalyzePDFViewContent(ft.Column):
         if self.llm_result_title.page and self.llm_result_title.uid:
             self.llm_result_title.update()
 
-        logger.info("[DEBUG] Estados dos botões atualizados.")
+        logger.info("Estados dos botões atualizados.")
 
     def _update_processing_metadata_display(self, proc_meta: Optional[Dict[str, Any]] = None):
         """
         Atualiza a exibição dos metadados do processamento de PDF no painel correspondente.
 
         Args:
-            proc_meta: Dicionário opcional contendo os metadados a serem exibidos.
-                       Se None, tenta obter da sessão.
+            proc_meta (Optional[Dict[str, Any]]): Dicionário opcional contendo os metadados a serem exibidos.
+                                                  Se None, tenta obter da sessão.
         """
         content_area = self.gui_controls[CTL_PROC_METADATA_CONTENT]
         content_area.controls.clear()
@@ -934,12 +1031,12 @@ class AnalyzePDFViewContent(ft.Column):
             ordered_keys = [key for key, _ in labels]
             labels = {k: v for k, v in labels}
             data_rows = []
-
+ 
             calculated_embedding_cost_usd = metadata_to_display.get("calculated_embedding_cost_usd")
             for key in ordered_keys:
                 if key in ["count_selected_relevant", "count_discarded_unintelligible", "count_selected_final"]:
                     continue
-
+ 
                 if key in metadata_to_display and key in labels:
                     label_text = f"{labels[key]}:"
                     value = metadata_to_display.get(key)
@@ -949,9 +1046,9 @@ class AnalyzePDFViewContent(ft.Column):
                     
                     if key == "calculated_embedding_cost_usd" and not calculated_embedding_cost_usd:
                         continue
-
+ 
                     display_value = str(value if value is not None else "N/A")
-
+ 
                     if key == "supressed_tokens_percentage" and isinstance(value, (int, float)):
                         value = 0 if value < 0 else value
                         display_value = f"{value:.2f}%"
@@ -970,7 +1067,7 @@ class AnalyzePDFViewContent(ft.Column):
                         display_value = f"{cost_embeddings_usd_str} : {cost_embeddings_brl_str}"
                                         
                     data_rows.append((label_text, display_value))
-
+ 
             if data_rows:
                 metadata_table = CompactKeyValueTable(
                     data=data_rows,
@@ -982,7 +1079,7 @@ class AnalyzePDFViewContent(ft.Column):
                     # Você pode passar key_style e value_style personalizados se desejar
                 )
                 content_area.controls.append(ft.Container(metadata_table, padding=ft.padding.only(left=30, bottom=10)))
-
+ 
             # Alerta OCR (mantido como estava, abaixo da tabela se houver)
             if metadata_to_display.get("count_discarded_unintelligible", 0) > 0:
                 content_area.controls.append(ft.Container(height=1)) # Espaçador
@@ -990,7 +1087,7 @@ class AnalyzePDFViewContent(ft.Column):
                     ft.Container(
                         ft.Row([
                             ft.Icon(ft.icons.WARNING_AMBER_ROUNDED, color=theme.COLOR_WARNING),
-                            ft.Text("Páginas ininteligíveis detectadas. Considere usar OCR nelas.", 
+                            ft.Text("Páginas ininteligíveis detectadas. Considere usar OCR nelas.",
                                     color=theme.COLOR_WARNING, weight=ft.FontWeight.BOLD)
                         ], spacing=5, alignment=ft.MainAxisAlignment.START),
                         padding=ft.padding.only(left=20, bottom=10)
@@ -1005,27 +1102,27 @@ class AnalyzePDFViewContent(ft.Column):
         Atualiza a exibição dos metadados da análise LLM no painel correspondente.
 
         Args:
-            llm_meta: Dicionário opcional contendo os metadados a serem exibidos.
-                      Se None, tenta obter da sessão.
+            llm_meta (Optional[Dict[str, Any]]): Dicionário opcional contendo os metadados a serem exibidos.
+                                                  Se None, tenta obter da sessão.
         """
         content_area = self.gui_controls[CTL_LLM_METADATA_CONTENT]
         content_area.controls.clear()
         metadata_to_display = llm_meta or self.page.session.get(KEY_SESSION_LLM_METADATA)
-
+ 
         if not metadata_to_display:
             #content_area.controls.append(ft.Text("Nenhum metadado da LLM disponível.", italic=True))
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = False
-        else:           
+        else:
             self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = False
             self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = False
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
             labels = [
                 ("input_tokens",         "Tokens de Entrada"),
-                ("cached_tokens",        "Tokens em Cache"), 
+                ("cached_tokens",        "Tokens em Cache"),
                 ("output_tokens",        "Tokens de Resposta"),
                 #"total_tokens",        "Total de Tokens Processados pela LLM",
                 ("total_cost_usd",       "Custo Estimado (USD)"),
-                ("total_cost_brl",       "Custo Estimado (BRL)"), 
+                ("total_cost_brl",       "Custo Estimado (BRL)"),
                 ("llm_provider_used",    "Provedor LLM"),
                 ("llm_model_used",       "Modelo Utilizado"),
                 ("processing_time",      "Tempo de processamento")
@@ -1034,7 +1131,7 @@ class AnalyzePDFViewContent(ft.Column):
             ordered_keys = [key for key, _ in labels]
             labels = {k: v for k, v in labels}
             data_rows = []
-
+ 
             for key in ordered_keys:
                 label_text = f"{labels[key]}:"
                 if key in ["total_tokens", "successful_requests"]:
@@ -1043,7 +1140,7 @@ class AnalyzePDFViewContent(ft.Column):
                     value = metadata_to_display.get("total_cost_usd") * cotacao_dolar_to_real
                 else:
                     value = metadata_to_display.get(key)
-
+ 
                 if value is not None:
                     display_value = str(value if value is not None else "N/A")
                     if key in ["total_cost_usd", "total_cost_brl"] and isinstance(value, (int, float)):
@@ -1055,10 +1152,10 @@ class AnalyzePDFViewContent(ft.Column):
             if data_rows:
                 metadata_table = CompactKeyValueTable(
                     data=data_rows,
-                    key_col_width=290,  
-                    value_col_width=None, 
-                    row_spacing=4,      
-                    col_spacing=8,      
+                    key_col_width=290,
+                    value_col_width=None,
+                    row_spacing=4,
+                    col_spacing=8,
                     default_text_size=14
                     # Você pode passar key_style e value_style personalizados se desejar
                 )
@@ -1066,20 +1163,21 @@ class AnalyzePDFViewContent(ft.Column):
             
             if self.gui_controls[CTL_LLM_METADATA_PANEL].page and self.gui_controls[CTL_LLM_METADATA_PANEL].uid:
                 self.gui_controls[CTL_LLM_METADATA_PANEL].update()
-
+ 
         if content_area.page and content_area.uid:
             content_area.update()
 
-    def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, formatted_initial_analysis]] = None, 
+    def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, formatted_initial_analysis]] = None,
                                      is_initial_llm_response: bool = False):
         """
         Controla a visibilidade entre o balão informativo, o resultado LLM em texto puro
         e o display estruturado, exibindo o conteúdo apropriado.
 
         Args:
-            show_balloon: Se True, exibe o balão informativo.
-            result_data: Os dados do resultado da LLM (string ou FormatAnaliseInicial).
-                         Ignorado se show_balloon for True.
+            show_balloon (bool): Se True, exibe o balão informativo.
+            result_data (Optional[Union[str, formatted_initial_analysis]]): Os dados do resultado da LLM (string ou FormatAnaliseInicial).
+                                                                             Ignorado se show_balloon for True.
+            is_initial_llm_response (bool): Indica se `result_data` é uma resposta inicial da LLM.
         """
         balloon = self.gui_controls[CTL_LLM_RESULT_INFO_BALLOON]
         text_result = self.gui_controls[CTL_LLM_RESULT_TEXT]
@@ -1114,11 +1212,13 @@ class AnalyzePDFViewContent(ft.Column):
         # Atualiza o container que contém o Stack e outros elementos
         for ctl in [self.llm_result_container, warning_balloon]:
             if ctl.page and ctl.uid:
-                ctl.update()  
+                ctl.update()
 
     def _reset_processing_and_llm_results(self):
-        """Limpa os resultados do processamento PDF e da análise LLM."""
-        # NOVO MÉTODO (a ser usado quando a lista de arquivos muda)
+        """
+        Limpa os resultados do processamento de PDF e da análise LLM da sessão e do cache do usuário.
+        Este método é usado quando a lista de arquivos carregados é alterada, invalidando análises anteriores.
+        """
         logger.debug("Resetando resultados de processamento e LLM.")
         
         self.user_cache = get_user_cache(self.page)
@@ -1130,7 +1230,7 @@ class AnalyzePDFViewContent(ft.Column):
         keys_to_clear = [
             KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA,
             KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
-            "has_analyzer_data", "has_llm_response"     
+            "has_analyzer_data", "has_llm_response"
         ]
         for key in keys_to_clear:
             self._remove_data_session(key)
@@ -1139,15 +1239,17 @@ class AnalyzePDFViewContent(ft.Column):
         self._update_gui_from_state()
 
     def _reset_llm_results(self):
-        """Limpa apenas os resultados da análise LLM."""
-        # NOVO MÉTODO (a ser usado quando uma nova análise LLM é solicitada)
+        """
+        Limpa apenas os resultados da análise LLM da sessão e do cache do usuário.
+        Este método é usado quando uma nova análise LLM é solicitada, mas o processamento de PDF permanece válido.
+        """
         logger.debug("Resetando resultados da LLM.")
         
         self.user_cache = get_user_cache(self.page)
         self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE, None)
         self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL, None)
         self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK, None)
-
+ 
         keys_to_clear = [
             KEY_SESSION_LLM_METADATA,
             KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
@@ -1162,7 +1264,8 @@ class AnalyzePDFViewContent(ft.Column):
     def _update_gui_from_state(self):
         """
         Atualiza toda a GUI da view com base no estado atual salvo na sessão.
-        Este método centraliza todas as chamadas de atualização da GUI.
+        Este método centraliza todas as chamadas de atualização da GUI, garantindo
+        que a interface reflita o estado mais recente dos dados e configurações.
         """
         logger.info("Atualizando GUI a partir do estado da sessão...")
         hide_loading_overlay(self.page)
@@ -1205,8 +1308,13 @@ class AnalyzePDFViewContent(ft.Column):
         
     # --- Gerenciamento de Estado e Limpeza ---
     def _restore_state_from_session(self):
-        """Restaura o estado da view a partir dos dados salvos na sessão."""
-        logger.info("Restaurando estado da view Análise PDF da sessão.")    
+        """
+        Restaura o estado da view a partir dos dados salvos na sessão.
+
+        Isso inclui configurações de análise e o estado atual dos dados processados e analisados,
+        garantindo que a UI reflita a última sessão do usuário.
+        """
+        logger.info("Restaurando estado da view Análise PDF da sessão.")
         
         # Carrega as configurações para o drawer (isso não afeta o estado principal da análise)
         analysis_settings_from_session = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
@@ -1219,7 +1327,12 @@ class AnalyzePDFViewContent(ft.Column):
         self._update_gui_from_state()
 
     def _clear_all_data_and_gui(self):
-        """Limpa todos os dados da sessão e reseta a UI para o estado inicial."""
+        """
+        Limpa todos os dados da sessão relacionados a esta view e reseta a UI para o estado inicial.
+
+        Isso inclui o cache do servidor, dados de arquivos, metadados de processamento e LLM,
+        e o estado interno da view. Também limpa o diretório de uploads temporários.
+        """
         logger.info("Limpando todos os dados e resetando UI da Análise PDF.")
         
         # Limpa o cache do servidor para este usuário
@@ -1260,30 +1373,30 @@ class InternalFileListManager:
         Inicializa o gerenciador da lista de arquivos.
 
         Args:
-            page: A página Flet.
-            gui_controls: Dicionário de controles da UI da view principal.
-            parent_view: Referência à instância da view principal.
+            page (ft.Page): A página Flet.
+            gui_controls (Dict[str, ft.Control]): Dicionário de controles da UI da view principal.
+            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
         """
         self.page = page
         self.gui_controls = gui_controls
-        self.parent_view = parent_view # Referência à view principal
+        self.parent_view = parent_view
 
     def update_selected_files_display(self, files_ordered: Optional[List[Dict[str, Any]]] = None):
         """
         Atualiza a exibição da lista de arquivos selecionados na UI.
 
         Args:
-            files_ordered: Lista opcional de dicionários representando os arquivos.
-                           Se None, obtém a lista da sessão.
+            files_ordered (Optional[List[Dict[str, Any]]]): Lista opcional de dicionários representando os arquivos.
+                                                            Se None, obtém a lista da sessão.
         """
         list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
         title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
         list_view.controls.clear()
         
         _files = files_ordered if files_ordered is not None else self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
-
+ 
         if not isinstance(_files, list): _files = []
-
+ 
         if not _files:
             title_text.value = "Nenhum arquivo carregado." # list_view.height = 0
             self.gui_controls[CTL_FILE_LIST_PANEL].visible = False
@@ -1291,7 +1404,7 @@ class InternalFileListManager:
             self.gui_controls[CTL_FILE_LIST_PANEL].visible = True
             self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = True
             for idx, file_info in enumerate(_files):
-                if not isinstance(file_info, dict): 
+                if not isinstance(file_info, dict):
                     continue # Skip malformado
                 
                 file_name_display = ft.Text(
@@ -1304,10 +1417,10 @@ class InternalFileListManager:
                     ft.IconButton(ft.Icons.ARROW_DOWNWARD_ROUNDED, on_click=lambda _, i=idx: self._move_file_in_list(i, 1), disabled=(idx == len(_files) - 1), icon_size=18, padding=3, tooltip="Mover para Baixo"),
                     ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED, on_click=lambda _, i=idx: self._remove_file_from_list(i), icon_color=theme.COLOR_ERROR, icon_size=18, padding=3, tooltip="Remover Arquivo")
                 ], spacing=0, alignment=ft.MainAxisAlignment.START, width=110)
-                # Necessário definir width aqui devido concorrência de espaço indevido com file_name_text no ListTile 
-
-                list_tile = ft.ListTile(title=file_name_display, 
-                                        leading=ft.Icon(ft.Icons.PICTURE_AS_PDF_ROUNDED), 
+                # Necessário definir width aqui devido concorrência de espaço indevido com file_name_text no ListTile
+ 
+                list_tile = ft.ListTile(title=file_name_display,
+                                        leading=ft.Icon(ft.Icons.PICTURE_AS_PDF_ROUNDED),
                                         trailing=action_buttons,)
                                         # visual_density=ft.VisualDensity.COMPACT,) # Torna o ListTile um pouco mais compacto
                                         # dense=True,) # Outra opção para compactar
@@ -1315,7 +1428,7 @@ class InternalFileListManager:
                 # Draggable/DragTarget (simplificado, verificar documentação Flet para melhor implementação)
                 # Para este exemplo, a reordenação será via botões. Drag-and-drop pode ser complexo aqui.
                 list_view.controls.append(list_tile)
-
+ 
             if len(_files) == 1:
                 title_text.value = f"Arquivo selecionado: {_files[0]['name']}"
             else:
@@ -1335,14 +1448,14 @@ class InternalFileListManager:
         Move um arquivo na lista de arquivos selecionados.
 
         Args:
-            index: O índice atual do arquivo a ser movido.
-            direction: A direção do movimento (-1 para cima, 1 para baixo).
+            index (int): O índice atual do arquivo a ser movido.
+            direction (int): A direção do movimento (-1 para cima, 1 para baixo).
         """
         current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
         new_index = index + direction
-        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)): 
+        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)):
             return
-
+ 
         def primary_move_action():
             current_files.insert(new_index, current_files.pop(index))
             self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
@@ -1365,10 +1478,10 @@ class InternalFileListManager:
         Remove um arquivo da lista de arquivos selecionados.
 
         Args:
-            index: O índice do arquivo a ser removido.
+            index (int): O índice do arquivo a ser removido.
         """
         current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
-        if not (0 <= index < len(current_files)): 
+        if not (0 <= index < len(current_files)):
             return
         
         def primary_remove_action():
@@ -1409,19 +1522,28 @@ class InternalAnalysisController:
         Inicializa o controlador de análise.
 
         Args:
-            page: A página Flet.
-            gui_controls: Dicionário de controles da UI da view principal.
-            parent_view: Referência à instância da view principal.
+            page (ft.Page): A página Flet.
+            gui_controls (Dict[str, ft.Control]): Dicionário de controles da UI da view principal.
+            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
         """
         self.page = page
         self.gui_controls = gui_controls
-        self.parent_view = parent_view # Referência à view principal
-        self.pdf_analyzer = parent_view.pdf_analyzer # Usa o da view
+        self.parent_view = parent_view
+        self.pdf_analyzer = parent_view.pdf_analyzer
         self.firestore_client = FirebaseClientFirestore()
         self.user_cache = get_user_cache(self.page)
 
     def _get_current_analysis_settings(self) -> Dict[str, Any]:
-        """Busca as configurações de análise atuais da sessão."""
+        """
+        Busca as configurações de análise atuais da sessão.
+
+        Retorna um dicionário com as configurações, aplicando valores padrão (fallbacks)
+        se as configurações não forem encontradas ou estiverem em formato inválido.
+        Realiza a conversão de tipos para garantir a correta utilização dos valores.
+
+        Returns:
+            Dict[str, Any]: Um dicionário contendo as configurações de análise.
+        """
         settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
         if not settings or not isinstance(settings, dict):
             logger.warning("Configurações de análise não encontradas na sessão ou formato inválido. Usando fallbacks.")
@@ -1453,15 +1575,15 @@ class InternalAnalysisController:
         Callback para atualizar o texto de status na UI (executado na thread principal).
 
         Args:
-            text: O texto de status a ser exibido.
-            is_error: Se True, formata o texto como erro.
-            only_txt: Se True, atualiza apenas o texto, sem mostrar/esconder o overlay de loading.
+            text (str): O texto de status a ser exibido.
+            is_error (bool): Se True, formata o texto como erro.
+            only_txt (bool): Se True, atualiza apenas o texto, sem mostrar/esconder o overlay de loading.
         """
         # Este callback será executado pela thread principal via page.run_thread
         #_logger.info(f"[DEBUG] Callback UI: Atualizando {control_key} para '{text}' (Erro: {is_error})")
         
         txt_to_update = self.gui_controls[CTL_LLM_STATUS_INFO] # control_key = ft.Text
-
+ 
         hide_loading_overlay(self.page)
         if not only_txt:
             show_loading_overlay(self.page, text)
@@ -1476,10 +1598,15 @@ class InternalAnalysisController:
         """
         Função executada em uma thread separada para realizar o processamento de PDF.
 
+        Esta função orquestra as etapas de extração de texto, pré-processamento,
+        cálculo de embeddings, classificação de páginas por relevância e agregação de texto,
+        atualizando a UI com o progresso. Opcionalmente, pode iniciar a análise LLM em seguida.
+
         Args:
-            pdf_paths: Lista de caminhos para os arquivos PDF.
-            batch_name: Nome do lote de arquivos.
-            analyze_llm_after: Se True, inicia a análise LLM após o processamento.
+            pdf_paths (List[str]): Lista de caminhos para os arquivos PDF a serem processados.
+            batch_name (str): Nome do lote de arquivos, usado para identificação nos logs e UI.
+            analyze_llm_after (bool): Se True, inicia a análise LLM automaticamente após o processamento de PDF.
+            is_reanalysis (bool): Indica se esta é uma reanálise, afetando o comportamento de logging e feedback.
         """
         current_analysis_settings = self._get_current_analysis_settings()
         logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
@@ -1488,7 +1615,7 @@ class InternalAnalysisController:
         vectorization_model = current_analysis_settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
         similarity_threshold = current_analysis_settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
         token_limit_pref = current_analysis_settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
-
+ 
         # TODO: avaliar se tornar esses parâmetros mutáveis na Gui:
         mode_main_filter = 'get_pages_among_similars_graphs'
         mode_filter_similar = 'bigger_content'
@@ -1496,42 +1623,42 @@ class InternalAnalysisController:
         if pdf_extractor == 'PdfPlumber':
             self.pdf_analyzer.extractor = PdfPlumberExtractor()
             logger.info("Alterando pdf_extractor para PdfPlumber!")
-
-        decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}") 
+ 
+        decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
         if decrypted_api_key:
             logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
-
+ 
         try:
             start_time = perf_counter()
-
+ 
             logger.info(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
             self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
-
+ 
             processed_files_metadata, all_indices, all_texts_to_storage, all_texts_to_loop = \
                                 self.pdf_analyzer.extract_texts_and_preprocess_files(pdf_paths)
-
+ 
             processed_page_data_combined, all_global_page_keys_ordered = \
                                 self.pdf_analyzer.build_combined_page_data(processed_files_metadata, all_indices, all_texts_to_storage)
-
+ 
             self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
-
+ 
             ready_embeddings, tokens_embeddings = None, None
             calculated_embedding_cost_usd = 0
             if vectorization_model == "text-embedding-3-small":
-                if not decrypted_api_key: 
+                if not decrypted_api_key:
                     decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
                     assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
-
+ 
                 loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
                 ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
                                                                                      all_texts_to_loop, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
-
+ 
             embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.pdf_analyzer.get_similarity_and_tfidf_score_docs(
                                                                             all_texts_to_loop, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
             
             point_time = perf_counter()
             self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
-
+ 
             if tokens_embeddings:
                 self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
                 logger.info(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
@@ -1550,15 +1677,15 @@ class InternalAnalysisController:
             
             relevant_ordered_indices, unintelligible_indices, count_similars = classified_data
             count_sel, count_unint = len(relevant_ordered_indices), len(unintelligible_indices)
-
+ 
             if not relevant_ordered_indices:
                 raise ValueError("Nenhuma página relevante encontrada após classificação.")
-
+ 
             if perf_counter() - point_time < 1: sleep(1) # Apenas Garante visibilidade do text_progressing
-
+ 
             point_time = perf_counter()
             self.page.run_thread(self._update_status_callback, "Etapa 4/5: Filtrando páginas...")
-
+ 
             aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(processed_page_data_combined, relevant_ordered_indices, token_limit_pref)
             
             self.user_cache = get_user_cache(self.page)
@@ -1567,18 +1694,18 @@ class InternalAnalysisController:
             
             pages_agg_indices, _, tokens_antes_agg, tokens_final_agg = aggregated_info
             count_sel_final = len(pages_agg_indices)
-            #print('\n[DEBUG]:\n', pages_agg_indices, '\n\n') 
-
+            #print('\n[DEBUG]:\n', pages_agg_indices, '\n\n')
+ 
             supressed_tokens = tokens_antes_agg - tokens_final_agg
             perc_supressed = (supressed_tokens / tokens_antes_agg * 100) if tokens_antes_agg > 0 else 0
-
+ 
             total_processing_time = perf_counter() - start_time
             
             proc_meta_for_ui = {
                 "total_pages_processed": len(processed_page_data_combined),
                 "relevant_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(relevant_ordered_indices),
                 "count_selected_relevant": count_sel,
-                "unintelligible_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(unintelligible_indices), 
+                "unintelligible_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(unintelligible_indices),
                 "count_discarded_unintelligible": count_unint,
                 "count_discarded_similarity": count_similars,
                 "total_tokens_before_truncation": tokens_antes_agg,
@@ -1591,13 +1718,13 @@ class InternalAnalysisController:
             }
             self.page.session.set(KEY_SESSION_PROCESSING_METADATA, proc_meta_for_ui)
             self.page.run_thread(self.parent_view._update_processing_metadata_display, proc_meta_for_ui)
-
+ 
             self.parent_view._files_processed = True
             logger.info(f"Thread: Processamento de PDF para '{batch_name}' concluído.")
-
-            if perf_counter() - point_time < 1: sleep(1) 
+ 
+            if perf_counter() - point_time < 1: sleep(1)
             self.page.run_thread(self._update_status_callback, "Aguardando para exibir os resultados...", False, True)
-
+ 
             if analyze_llm_after:
                 self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
                 self.start_llm_analysis_only(aggregated_info[1], batch_name, from_pipeline=True, is_reanalysis=is_reanalysis) # Passa o texto agregado
@@ -1622,6 +1749,22 @@ class InternalAnalysisController:
                 self.page.run_thread(self.parent_view._update_button_states)
 
     def _get_data_to_log(self):
+        """
+        Coleta e retorna os dados relevantes da sessão e do cache para fins de logging e métricas.
+
+        Retorna:
+            Tuple: Uma tupla contendo:
+                - user_id (str): ID do usuário autenticado.
+                - user_token (str): Token de autenticação do usuário.
+                - filenames_uploaded (List[str]): Lista de nomes dos arquivos PDF carregados.
+                - proc_meta_session (Dict[str, Any]): Metadados do processamento de PDF.
+                - tokens_embeddings_session (Tuple): Informações sobre tokens de embeddings.
+                - llm_meta_session (Dict[str, Any]): Metadados da análise LLM.
+                - current_settings (Dict[str, Any]): Configurações de análise atuais.
+                - default_settings (Dict[str, Any]): Configurações padrão da nuvem.
+                - llm_response_obj (formatted_initial_analysis): Objeto de resposta estruturada da LLM.
+                - fields_to_log (List[str]): Lista de campos da resposta LLM a serem logados.
+        """
         user_id = self.page.session.get("auth_user_id")
         user_token = self.page.session.get("auth_id_token")
     
@@ -1636,8 +1779,8 @@ class InternalAnalysisController:
         files_ordered_session = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
         filenames_uploaded = [f.get('name', 'unknown_file') for f in files_ordered_session if isinstance(f, dict)]
         
-        proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {} 
-        tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)    
+        proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {}
+        tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
         current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
         default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
         
@@ -1647,7 +1790,7 @@ class InternalAnalysisController:
             fields_to_log = [
                 "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
                 "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
-                "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", 
+                "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re",
                 "materia_especial", "destinacao"
             ]
         else:
@@ -1660,21 +1803,26 @@ class InternalAnalysisController:
         """
         Função executada em uma thread separada para realizar a análise LLM.
 
+        Orquestra a chamada ao modelo de linguagem, gerencia o uso de chaves de API,
+        atualiza o estado da UI com os resultados da análise e registra métricas.
+
         Args:
-            aggregated_text: O texto agregado das páginas relevantes do PDF.
-            batch_name: Nome do lote de arquivos.
+            aggregated_text (str): O texto agregado das páginas relevantes do PDF para análise.
+            batch_name (str): Nome do lote de arquivos, usado para identificação nos logs e UI.
+            is_reanalysis (bool): Indica se esta é uma reanálise, afetando o comportamento de logging e feedback.
         """
         import src.core.ai_orchestrator as ai_orchestrator
-
+ 
         current_analysis_settings = self._get_current_analysis_settings()
         logger.info(f"Usando configurações de análise para LLM: {current_analysis_settings}")
         provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
         model_name = current_analysis_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
         temperature = current_analysis_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
         mode_prompt = current_analysis_settings.get("prompt_structure", FALLBACK_ANALYSIS_SETTINGS["prompt_structure"])
-
-        logger.info(f"[DEBUG] mode_prompt: {mode_prompt}")  ,
-
+ 
+        logger.debug(f"mode_prompt: {mode_prompt}")  ,
+ 
+ 
         if mode_prompt == "sequential_prompts":
             selected_prompts = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
         else: # if mode_prompt == "prompt_unico":
@@ -1682,20 +1830,20 @@ class InternalAnalysisController:
         try:
             logger.info(f"Thread: Iniciando análise LLM para '{batch_name}'...")
             self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
-
-            decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}") 
+ 
+            decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
             if decrypted_api_key:
                 logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
             else:
                 decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
                 assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
-
+ 
             loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
-
+ 
             llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(selected_prompts, aggregated_text,
-                                                                                                provider, model_name, temperature, 
-                                                                                                decrypted_api_key, loaded_llm_providers)
-
+                                                                                                 provider, model_name, temperature,
+                                                                                                 decrypted_api_key, loaded_llm_providers)
+ 
             if llm_response_data:
                 # Se já existe uma llm_response na sessão é porque é caso de reanálise (usuário clicou em 'Solicitar Análise' novamente).
                 # Registrar essa informação para o feedback_metric
@@ -1707,24 +1855,24 @@ class InternalAnalysisController:
                 # A flag 'is_new_llm_response' será passada para a sessão para ser usada por _update_ui_from_state
                 self.page.session.set("is_new_llm_response_flag", True)
                 
-                llm_meta_for_gui = token_usage_info if token_usage_info else {} 
+                llm_meta_for_gui = token_usage_info if token_usage_info else {}
                 llm_meta_for_gui.update({
                     "llm_provider_used": provider.upper(),
                     "llm_model_used": model_name.upper(),
                     "processing_time": format_seconds_to_min_sec(processing_time_llm)
-                }) 
+                })
                 
                 self.parent_view._analysis_requested = True
                 self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_for_gui)
                 self.page.run_thread(self.parent_view._update_gui_from_state)
                 self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
                 self.page.run_thread(self._update_status_callback,  "", False, True)
-
+ 
                 data_to_log = self._get_data_to_log()
                 if self.firestore_client.save_analysis_metrics(*data_to_log):
                     #Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
                     self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
-
+ 
             else:
                 self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
                 self.page.run_thread(self._update_status_callback,  "Análise LLM: Falha ao obter resposta da IA.", True, True)
@@ -1740,15 +1888,15 @@ class InternalAnalysisController:
             self.gui_controls[CTL_LLM_METADATA_PANEL].controls[0].expanded = True
             hide_loading_overlay(self.page)
             # A atualização da GUI já foi tratada dentro do try/except, não precisa aqui.
-
+ 
     def start_pdf_processing_only(self, pdf_paths: List[str], batch_name: str):
         """
         Inicia o processo de extração e pré-processamento de PDF em uma nova thread.
 
         Args:
-            pdf_paths: Lista de caminhos para os arquivos PDF.
-            batch_name: Nome do lote de arquivos.
-        """        
+            pdf_paths (List[str]): Lista de caminhos para os arquivos PDF.
+            batch_name (str): Nome do lote de arquivos.
+        """
         thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, False), daemon=True)
         thread.start()
 
@@ -1757,9 +1905,9 @@ class InternalAnalysisController:
         Inicia a análise LLM em uma nova thread.
 
         Args:
-            aggregated_text: O texto agregado para análise.
-            batch_name: Nome do lote de arquivos.
-            from_pipeline: Indica se a chamada veio do pipeline completo (True) ou diretamente (False).
+            aggregated_text (str): O texto agregado para análise.
+            batch_name (str): Nome do lote de arquivos.
+            from_pipeline (bool): Indica se a chamada veio do pipeline completo (True) ou diretamente (False).
         """
         if not from_pipeline: # Se chamado diretamente (não pelo pipeline do fast_forward)
             ...
@@ -1772,8 +1920,9 @@ class InternalAnalysisController:
         Inicia o pipeline completo: processamento de PDF seguido por análise LLM.
 
         Args:
-            pdf_paths: Lista de caminhos para os arquivos PDF.
-            batch_name: Nome do lote de arquivos.
+            pdf_paths (List[str]): Lista de caminhos para os arquivos PDF.
+            batch_name (str): Nome do lote de arquivos.
+            is_reanalysis (bool): Indica se esta é uma reanálise.
         """
         thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, True, is_reanalysis), daemon=True)
         thread.start()
@@ -1790,9 +1939,9 @@ class InternalExportManager:
         Inicializa o gerenciador de exportação.
 
         Args:
-            parent_view: Referência à instância da view principal.
-            docx_exporter: Instância do DocxExporter para gerar os arquivos.
-            global_file_picker: Instância global do FilePicker para operações de salvar.
+            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
+            docx_exporter (DocxExporter): Instância do DocxExporter para gerar os arquivos.
+            global_file_picker (Optional[ft.FilePicker]): Instância global do FilePicker para operações de salvar.
         """
         self.parent_view = parent_view
         self.page = parent_view.page
@@ -1800,13 +1949,22 @@ class InternalExportManager:
         self.global_file_picker = global_file_picker
 
     def _get_default_filename_base(self) -> str:
+        """
+        Gera um nome de arquivo base padrão para exportação, derivado do nome do lote atual.
+
+        Returns:
+            str: O nome de arquivo base limpo e formatado.
+        """
         base = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "analise_documento"
         return base.replace("Arquivos selecionados: ", "").replace("Arquivo selecionado: ", "").split(" e Outros")[0].replace(".pdf", "")
 
     def _handle_desktop_save_result(self, event: ft.FilePickerResultEvent):
         """
         Handler para o resultado do diálogo "Salvar Como" no desktop.
-        Args: event: O evento do FilePicker com o caminho selecionado.
+        Este método está descontinuado e não possui implementação funcional.
+
+        Args:
+            event (ft.FilePickerResultEvent): O evento do FilePicker com o caminho selecionado.
         """
         self.desktop_picker_operation: ExportOperation = ExportOperation.NONE
         self.desktop_picker_template_path: Optional[str] = None
@@ -1815,12 +1973,15 @@ class InternalExportManager:
 
     def start_export(self, operation_type: ExportOperation, data_to_export: formatted_initial_analysis, template_path: Optional[str] = None):
         """
-        Inicia o processo de exportação para DOCX.
+        Inicia o processo de exportação dos resultados da análise para um arquivo DOCX.
+
+        Gerencia a lógica de exportação para o modo web (download) e desktop (salvar como),
+        utilizando o DocxExporter para a geração do documento.
 
         Args:
-            operation_type: O tipo de exportação (simples ou com template).
-            data_to_export: Os dados estruturados da análise a serem exportados.
-            template_path: O caminho para o arquivo de template DOCX (obrigatório para exportação com template).
+            operation_type (ExportOperation): O tipo de exportação (simples ou com template).
+            data_to_export (formatted_initial_analysis): Os dados estruturados da análise a serem exportados.
+            template_path (Optional[str]): O caminho para o arquivo de template DOCX (obrigatório para exportação com template).
         """
         logger.info(f"ExportManager: start_export. Op: {operation_type}, Web: {self.page.web}")
 
@@ -1884,7 +2045,12 @@ class InternalExportManager:
             raise ValueError("Método não customizado para desktop!")
 
     def handle_add_new_template_click(self):
-        """Handler para o clique no item 'Adicionar Novo Template'."""
+        """
+        Handler para o clique no item 'Adicionar Novo Template'.
+
+        Inicia o processo de seleção de um novo arquivo de template DOCX,
+        diferenciando o comportamento para o modo web (upload) e desktop (cópia local).
+        """
         logger.info("Botão 'Adicionar Novo Template' clicado.")
         if not self.global_file_picker:
             show_snackbar(self.page, "Erro: Seletor de arquivos não pronto.", theme.COLOR_ERROR)
@@ -1897,8 +2063,8 @@ class InternalExportManager:
             self.global_file_picker.on_upload = None
         
         self.global_file_picker.pick_files(
-            dialog_title="Selecionar Template DOCX", 
-            allowed_extensions=["docx"], 
+            dialog_title="Selecionar Template DOCX",
+            allowed_extensions=["docx"],
             allow_multiple=False)
         
         self.page.update()
@@ -1907,8 +2073,10 @@ class InternalExportManager:
         """
         Handler para a seleção de um arquivo de template no modo web (antes do upload).
 
+        Prepara o URL de upload e inicia o processo de upload do arquivo para o servidor temporário.
+
         Args:
-            e: O evento do FilePicker com os arquivos selecionados.
+            e (ft.FilePickerResultEvent): O evento do FilePicker com os arquivos selecionados.
         """
         if not e.files:
             show_snackbar(self.page, "Seleção cancelada.", theme.COLOR_INFO)
@@ -1918,20 +2086,20 @@ class InternalExportManager:
         temp_target = os.path.join(UPLOAD_TEMP_DIR, file_name)
         
         if os.path.exists(temp_target):
-            try: 
+            try:
                 os.remove(temp_target)
-            except OSError as er: 
+            except OSError as er:
                 logger.warning(f"Não remover temp anterior '{temp_target}': {er}")
         try:
             upload_url = self.page.get_upload_url(file_name, expires=300)
-            if not upload_url: 
+            if not upload_url:
                 raise ValueError("URL de upload template não gerada.")
             
             self.global_file_picker.upload([
                 ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)])
             show_loading_overlay(self.page, f"Fazendo upload de '{file_name}'...")
             self.page.update()
-        except Exception as ex: 
+        except Exception as ex:
             logger.error(f"Erro upload template web: {ex}", exc_info=True)
             show_snackbar(self.page, f"Erro upload: {ex}", theme.COLOR_ERROR)
             hide_loading_overlay(self.page)
@@ -1940,26 +2108,28 @@ class InternalExportManager:
         """
         Handler para o evento de upload de um arquivo de template no modo web.
 
+        Após o upload, verifica a existência do arquivo no servidor e o copia para o diretório de assets.
+
         Args:
-            e: O evento de upload do FilePicker.
+            e (ft.FilePickerUploadEvent): O evento de upload do FilePicker.
         """
         if e.error:
             hide_loading_overlay(self.page)
             show_snackbar(self.page, f"Erro upload template: {e.error}", theme.COLOR_ERROR)
             return
-        if e.progress is not None and e.progress < 1.0: 
+        if e.progress is not None and e.progress < 1.0:
             return
         
         hide_loading_overlay(self.page)
         source_path_server = os.path.join(UPLOAD_TEMP_DIR, e.file_name)
         file_found = False
         for _ in range(5):
-            if os.path.exists(source_path_server): 
+            if os.path.exists(source_path_server):
                 file_found = True
                 break
             time.sleep(0.3)
         
-        if not file_found: 
+        if not file_found:
             logger.error(f"Template '{e.file_name}' não encontrado em '{source_path_server}'.")
             show_snackbar(self.page, "Erro: Arquivo não confirmado no servidor.", theme.COLOR_ERROR)
             return
@@ -1970,8 +2140,10 @@ class InternalExportManager:
         """
         Handler para a seleção de um novo arquivo de template no modo desktop.
 
+        Copia o arquivo selecionado para o diretório de assets.
+
         Args:
-            e: O evento do FilePicker com os arquivos selecionados.
+            e (ft.FilePickerResultEvent): O evento do FilePicker com os arquivos selecionados.
         """
         if not e.files:
             show_snackbar(self.page, "Seleção cancelada.", theme.COLOR_INFO)
@@ -1979,22 +2151,22 @@ class InternalExportManager:
         
         source_path = e.files[0].path
         original_name = e.files[0].name
-
+ 
         if not self.page.web:
-            if not source_path: 
+            if not source_path:
                 logger.error("Desktop: source_path None.")
                 show_snackbar(self.page, "Erro caminho template.", theme.COLOR_ERROR)
                 return
             self.copy_template_to_assets(source_path, original_name)
-
+ 
     def copy_template_to_assets(self, source_path: str, original_filename: str, is_web_upload_temp: bool = False):
         """
         Copia um arquivo de template para o diretório de assets.
 
         Args:
-            source_path: O caminho de origem do arquivo.
-            original_filename: O nome original do arquivo.
-            is_web_upload_temp: Indica se o arquivo de origem é um temporário de upload web.
+            source_path (str): O caminho de origem do arquivo.
+            original_filename (str): O nome original do arquivo.
+            is_web_upload_temp (bool): Indica se o arquivo de origem é um temporário de upload web.
         """
         templates_dir = os.path.join(ASSETS_DIR_ABS, DOCX_TEMPLATES_SUBDIR)
         os.makedirs(templates_dir, exist_ok=True)
@@ -2004,29 +2176,40 @@ class InternalExportManager:
             show_snackbar(self.page, f"Template '{original_filename}' adicionado!", theme.COLOR_SUCCESS)
             self.parent_view._update_export_button_menu() # Acessa via parent_view
             if self.page: self.page.update()
-        except Exception as ex: 
+        except Exception as ex:
             logger.error(f"Erro ao copiar template '{original_filename}': {ex}", exc_info=True)
             show_snackbar(self.page, f"Falha: {ex}", theme.COLOR_ERROR)
         finally:
             if is_web_upload_temp and source_path.startswith(os.path.abspath(UPLOAD_TEMP_DIR)):
-                try: 
+                try:
                     os.remove(source_path)
-                except OSError as er: 
+                except OSError as er:
                     logger.warning(f"Não remover temp template '{source_path}': {er}")
+ 
+    def _trigger_feedback_and_export(self, export_operation: ExportOperation, data_to_export: formatted_initial_analysis, template_path: Optional[str]):
+        """
+        Dispara o fluxo de feedback do usuário antes de iniciar a exportação.
 
-    def _trigger_feedback_and_export(self, export_operation: ExportOperation, template_path: Optional[str]): 
+        Valida os dados do formulário para exportação e, se válidos, solicita feedback
+        ao usuário antes de chamar a função de exportação primária.
+
+        Args:
+            export_operation (ExportOperation): O tipo de exportação a ser realizada.
+            data_to_export (formatted_initial_analysis): Os dados estruturados da análise a serem exportados.
+            template_path (Optional[str]): O caminho para o arquivo de template DOCX (se aplicável).
+        """
         logger.info(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
-
+ 
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
         if not isinstance(llm_display_component, LLMStructuredResultDisplay):
             logger.error("ExportManager: LLMStructuredResultDisplay não encontrado.")
             show_snackbar(self.page, "Erro interno: Display de resultados não operacional.", theme.COLOR_ERROR)
             return
-
+ 
         # Garante que os dados da UI sejam validados E obtidos.
         # A validação para exportação acontece aqui, antes do diálogo de feedback.
         data_to_export_or_errors = llm_display_component.get_current_form_data(validate_for_export=True)
-
+ 
         if isinstance(data_to_export_or_errors, list):
             first_error_tuple = data_to_export_or_errors[0]
             if first_error_tuple[0].startswith("pydantic_validation_error") or first_error_tuple[0].startswith("internal_form_data_error"):
@@ -2039,12 +2222,12 @@ class InternalExportManager:
             for field_name, control_instance in data_to_export_or_errors:
                 friendly_field_name = field_name.replace("_", " ").title()
                 error_messages.append(f"- {friendly_field_name}")
-                if control_instance and not first_invalid_ctrl: 
+                if control_instance and not first_invalid_ctrl:
                     first_invalid_ctrl = control_instance
-
+ 
             if error_messages:
                 dialog_content_controls_list = [ft.Text("Os seguintes campos obrigatórios precisam ser preenchidos antes da exportação:")]
-                for msg_item in error_messages: 
+                for msg_item in error_messages:
                     dialog_content_controls_list.append(ft.Text(msg_item))
                 show_confirmation_dialog(
                     page=self.page, title="Campos Obrigatórios Pendentes",
@@ -2053,13 +2236,13 @@ class InternalExportManager:
                     on_confirm= lambda: first_invalid_ctrl.focus() if first_invalid_ctrl and hasattr(first_invalid_ctrl, 'focus') else None)
                 return
             
-        elif not data_to_export_or_errors: 
+        elif not data_to_export_or_errors:
             show_snackbar(self.page, "Dados de análise inválidos.", theme.COLOR_ERROR)
             return
-
+ 
         # Se chegou aqui, data_to_export_or_errors é um objeto FormatAnaliseInicial válido
         current_data_for_export = data_to_export_or_errors
-
+ 
         def primary_export_action():
             self.start_export(export_operation, current_data_for_export, template_path)
         
@@ -2071,32 +2254,32 @@ class InternalExportManager:
             )
         else: # Fallback se o manager não estiver pronto
             primary_export_action()
-
+ 
     def handle_export_selected(self, e: ft.ControlEvent):
         """
         Handler para a seleção de um item no menu do botão de Exportar.
 
         Args:
-            e: O evento do controle.
+            e (ft.ControlEvent): O evento do controle.
         """
         logger.info(f"ExportManager: Item de exportação selecionado - Data: {e.control.data}")
         selected_action_data = e.control.data
                    
         operation: Optional[ExportOperation] = None
         template_p: Optional[str] = None
-
-        if selected_action_data == "export_simple_docx": 
+ 
+        if selected_action_data == "export_simple_docx":
             operation = ExportOperation.SIMPLE_DOCX
         elif selected_action_data and selected_action_data.startswith("export_template_"):
             operation = ExportOperation.TEMPLATE_DOCX
             template_p = selected_action_data[len("export_template_"):]
-        elif selected_action_data == "manage_templates": 
+        elif selected_action_data == "manage_templates":
             self.handle_add_new_template_click()
             return
         else:
             logger.warning(f"Ação de exportação desconhecida: {selected_action_data}")
             return
-
+ 
         if not operation: # Se a operação não foi definida (ex: manage_templates já retornou)
             return
             
@@ -2118,7 +2301,7 @@ class SettingsDrawerManager:
         Inicializa o gerenciador do drawer de configurações.
 
         Args:
-            parent_view: Referência à instância da view principal.
+            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
         """
         self.parent_view = parent_view
         self.page = parent_view.page
@@ -2128,8 +2311,11 @@ class SettingsDrawerManager:
         """
         Constrói e retorna o conteúdo visual do drawer de configurações.
 
+        Este método cria os controles de UI para as diversas configurações de processamento
+        de documentos e modelos de linguagem (LLM), incluindo sliders, dropdowns e campos de texto.
+
         Returns:
-            Um ft.Column contendo todos os controles de configuração.
+            ft.Column: Um ft.Column contendo todos os controles de configuração.
         """
         logger.info("SettingsDrawerManager: Construindo conteúdo do drawer.")
         default_width = 260
@@ -2168,7 +2354,7 @@ class SettingsDrawerManager:
         #     label="Analisador TF-IDF", options=[ft.dropdown.Option("sklearn", "sklearn")],
         #     value=current_analysis_settings.get("tfidf_analyzer"), width=default_width
         # )
-
+ 
         # Seção LLM
         provider_options_drawer = [
             ft.dropdown.Option(key=p['system_name'], text=p.get('name_display', p['system_name']))
@@ -2179,7 +2365,7 @@ class SettingsDrawerManager:
         self.gui_controls_drawer["llm_model_dd"] = ft.Dropdown(label="Modelo LLM", options=[],
                                                                value=current_analysis_settings.get("llm_model"), width=default_width)
         self._populate_models_for_selected_provider(current_analysis_settings.get("llm_provider"), current_analysis_settings.get("llm_model"))
-
+ 
         self.gui_controls_drawer["llm_token_limit_tf"] = ft.TextField(
             label="Limite Tokens Input", value=str(current_analysis_settings.get("llm_input_token_limit")),
             input_filter=ft.InputFilter(r"[0-9]"), width=default_width
@@ -2194,7 +2380,7 @@ class SettingsDrawerManager:
             hint_text="Deixe 'Padrão' ou vazio para usar o default do modelo",
             width=default_width, read_only=True
         )
-
+ 
         # Slider de Temperatura
         initial_temp = current_analysis_settings.get("llm_temperature", 0.2)
         self.gui_controls_drawer["temperature_value_label"] = ft.Text(f"{initial_temp:.1f}", weight=ft.FontWeight.BOLD)
@@ -2202,22 +2388,22 @@ class SettingsDrawerManager:
             min=0.0, max=20.0, value=initial_temp * 10,
             divisions=20, expand=True, label="{value}",
         )
-
-        # Seção Prompt 
+ 
+        # Seção Prompt
         self.gui_controls_drawer["prompt_structure_rg"] = ft.RadioGroup(
             content=ft.Column([
                 ft.Radio(value="prompt_unico", label="Prompt Único"),
                 ft.Radio(value="sequential_prompts", label="Prompt Agrupado", disabled=False),
             ], spacing=1), value=current_analysis_settings.get("prompt_structure")
         )
-
+ 
         self.gui_controls_drawer[CTL_RESET_SETTINGS_BTN] = ft.ElevatedButton(
             "Resetar para Padrões",
             icon=ft.icons.SETTINGS_BACKUP_RESTORE_ROUNDED,
             on_click=self._handle_reset_settings_click,
             visible=False,
         )
-
+ 
         drawer_layout = ft.Column(
             [
                 ft.Text("Configurações específicas", style=ft.TextThemeStyle.TITLE_LARGE),
@@ -2261,10 +2447,15 @@ class SettingsDrawerManager:
         return drawer_layout
 
     def setup_event_handlers(self):
-        """Configura os handlers de eventos para os controles dentro do drawer."""
+        """
+        Configura os handlers de eventos para os controles dentro do drawer.
+
+        Associa as funções de tratamento de eventos aos controles de configuração
+        para que as alterações do usuário sejam capturadas e as configurações sejam atualizadas.
+        """
         logger.info("SettingsDrawerManager: Configurando handlers de eventos.")
         controls_to_watch = [
-            "proc_vectorization_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider", 
+            "proc_vectorization_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider",
             "prompt_structure_rg", "similarity_threshold_slider"
             # "llm_output_format_dd", "llm_max_output_length_tf", "proc_extractor_dd"
         ]
@@ -2278,9 +2469,17 @@ class SettingsDrawerManager:
                 elif hasattr(control, 'on_change'):
                      control.on_change = self._handle_setting_change_drawer
                 # Para RadioGroup, o evento é on_change, já coberto acima
-
+ 
     def _handle_setting_change_drawer(self, e: Optional[ft.ControlEvent] = None):
-        """Chamado quando qualquer configuração no drawer é alterada pelo usuário."""
+        """
+        Chamado quando qualquer configuração no drawer é alterada pelo usuário.
+
+        Atualiza as configurações na sessão e a visibilidade do botão de reset.
+        Se o usuário não for administrador, reverte a alteração e exibe um aviso.
+
+        Args:
+            e (Optional[ft.ControlEvent]): O evento de controle que disparou a alteração (opcional).
+        """
         if not self.page.session.get("is_admin"):
             show_snackbar(self.page, "Alteração de configurações restrita à usuários administradores.", color=theme.COLOR_WARNING)
             # Recarrega os valores da sessão para reverter a alteração na UI
@@ -2290,7 +2489,7 @@ class SettingsDrawerManager:
         
         if e:
              logger.debug(f"SettingsDrawerManager: Configuração alterada - Controle: {type(e.control).__name__}, Valor: {e.control.value}")
-
+ 
         if e and isinstance(e.control, ft.Slider) and e.control == self.gui_controls_drawer.get("temperature_slider"):
             slider_val = float(e.control.value) / 10.0 # Converte de 0-20 para 0.0-2.0
             temp_label = self.gui_controls_drawer.get("temperature_value_label")
@@ -2303,14 +2502,22 @@ class SettingsDrawerManager:
             if isinstance(temp_label, ft.Text):
                 temp_label.value = f"{slider_val:.2f}"
                 if temp_label.page: temp_label.update()
-
+ 
         new_settings = self._get_settings_from_drawer_controls()
         self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, new_settings)
         logger.info(f"SettingsDrawerManager: Configurações da sessão atualizadas: {new_settings}")
         self._update_reset_button_visibility()
-
+ 
     def _handle_provider_change_drawer(self, e: ft.ControlEvent):
-        """Handler para a mudança de provedor LLM no dropdown do drawer."""
+        """
+        Handler para a mudança de provedor LLM no dropdown do drawer.
+
+        Atualiza as opções de modelo LLM disponíveis com base no provedor selecionado
+        e chama o handler de alteração de configuração geral.
+
+        Args:
+            e (ft.ControlEvent): O evento de alteração do dropdown.
+        """
         if not self.page.session.get("is_admin"):
             show_snackbar(self.page, "Alteração de configurações restrita à usuários administradores.", color=theme.COLOR_WARNING)
             # Recarrega os valores da sessão para reverter a alteração na UI
@@ -2320,24 +2527,24 @@ class SettingsDrawerManager:
         selected_provider_system_name = e.control.value
         self._populate_models_for_selected_provider(selected_provider_system_name, new_provider_selected=True)
         self._handle_setting_change_drawer(e)
-
+ 
     def _populate_models_for_selected_provider(self, provider_system_name: Optional[str], current_model_value: Optional[str] = None, new_provider_selected:bool=False):
         """
         Popula o dropdown de modelos LLM com base no provedor selecionado.
-
+ 
         Args:
-            provider_system_name: O nome do sistema do provedor selecionado.
-            current_model_value: O valor do modelo atualmente selecionado (para restaurar estado).
-            new_provider_selected: Indica se um novo provedor foi selecionado (para resetar o modelo).
+            provider_system_name (Optional[str]): O nome do sistema do provedor selecionado.
+            current_model_value (Optional[str]): O valor do modelo atualmente selecionado (para restaurar estado).
+            new_provider_selected (bool): Indica se um novo provedor foi selecionado (para resetar o modelo para o primeiro disponível).
         """
         model_dropdown_drawer = self.gui_controls_drawer.get("llm_model_dd")
         if not model_dropdown_drawer or not isinstance(model_dropdown_drawer, ft.Dropdown):
             return
-
+ 
         model_dropdown_drawer.options = []
         model_dropdown_drawer.disabled = True
         loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
-
+ 
         if provider_system_name and loaded_llm_providers:
             provider_config = next((p for p in loaded_llm_providers if p.get("system_name") == provider_system_name), None)
             if provider_config and provider_config.get("models"):
@@ -2347,7 +2554,7 @@ class SettingsDrawerManager:
                 ]
                 model_dropdown_drawer.options = model_options
                 model_dropdown_drawer.disabled = False
-
+ 
                 if new_provider_selected and model_options:
                     model_dropdown_drawer.value = model_options[0].key
                 elif current_model_value and any(opt.key == current_model_value for opt in model_options):
@@ -2356,17 +2563,17 @@ class SettingsDrawerManager:
                     model_dropdown_drawer.value = model_options[0].key
                 else:
                     model_dropdown_drawer.value = None
-
+ 
         if model_dropdown_drawer.page: model_dropdown_drawer.update()
-
+ 
     def _get_settings_from_drawer_controls(self) -> Dict[str, Any]:
         """
         Coleta os valores atuais dos controles do drawer e os retorna como um dicionário de configurações.
-
+ 
         Realiza a conversão de tipos quando necessário (ex: string para int/float).
-
+ 
         Returns:
-            Um dicionário contendo as configurações atuais do drawer.
+            Dict[str, Any]: Um dicionário contendo as configurações atuais do drawer.
         """
         settings = {}
         key_map = {
@@ -2381,7 +2588,7 @@ class SettingsDrawerManager:
             #"llm_output_format_dd": "llm_output_format",
             "llm_max_output_length_tf": "llm_max_output_length",
             "temperature_slider": "llm_temperature", # O valor do slider será convertido
-            "similarity_threshold_slider": "similarity_threshold", # 
+            "similarity_threshold_slider": "similarity_threshold", #
             "prompt_structure_rg": "prompt_structure",
         }
         for ctrl_key, setting_key in key_map.items():
@@ -2402,13 +2609,13 @@ class SettingsDrawerManager:
                     value = float(control.value) / 100.0
                 settings[setting_key] = value
         return settings
-
+ 
     def _load_settings_into_drawer_controls(self, settings_to_load: Dict[str, Any]):
         """
         Carrega um dicionário de configurações para os controles do drawer.
-
+ 
         Args:
-            settings_to_load: O dicionário de configurações a ser carregado.
+            settings_to_load (Dict[str, Any]): O dicionário de configurações a ser carregado.
         """
         logger.info("SettingsDrawerManager: Carregando configurações para o drawer.")
         loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
@@ -2421,7 +2628,7 @@ class SettingsDrawerManager:
             drawer_provider_dd.options = provider_options_drawer
             drawer_provider_dd.value = settings_to_load.get("llm_provider")
             if drawer_provider_dd.page: drawer_provider_dd.update()
-
+ 
         self._populate_models_for_selected_provider(
             settings_to_load.get("llm_provider"),
             settings_to_load.get("llm_model")
@@ -2458,9 +2665,17 @@ class SettingsDrawerManager:
                         if temp_label.page : temp_label.update()
                 if control.page : control.update()
         self._update_reset_button_visibility()
-
+ 
     def _handle_reset_settings_click(self, e: ft.ControlEvent):
-        """Handler para o clique no botão 'Resetar para Padrões'."""
+        """
+        Handler para o clique no botão 'Resetar para Padrões'.
+
+        Reseta as configurações de análise para os valores padrão da nuvem,
+        atualiza a sessão e a UI.
+
+        Args:
+            e (ft.ControlEvent): O evento de clique do botão.
+        """
         logger.info("SettingsDrawerManager: Botão 'Resetar Configurações' clicado.")
         cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
         if cloud_defaults:
@@ -2470,23 +2685,23 @@ class SettingsDrawerManager:
         else:
             show_snackbar(self.page, "Não foi possível carregar os padrões em nuvem.", theme.COLOR_ERROR)
         self._update_reset_button_visibility()
-
+ 
     def _update_reset_button_visibility(self):
         """
         Atualiza a visibilidade do botão 'Resetar para Padrões'.
-
+ 
         O botão fica visível se as configurações atuais na sessão forem diferentes
         das configurações padrão da nuvem.
         """
         current_session_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
         cloud_default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
         reset_button = self.gui_controls_drawer.get(CTL_RESET_SETTINGS_BTN)
-
+ 
         if not current_session_settings or not cloud_default_settings or not reset_button:
             if reset_button : reset_button.visible = False
             if reset_button and reset_button.page: reset_button.update()
             return
-
+ 
         are_different = False
         for key in cloud_default_settings.keys():
             val_session = current_session_settings.get(key)
@@ -2515,11 +2730,11 @@ class LLMStructuredResultDisplay(ft.Column):
         Inicializa o display de resultados estruturados.
 
         Args:
-            page: A página Flet.
+            page (ft.Page): A página Flet.
         """
         super().__init__(
-            scroll=ft.ScrollMode.ADAPTIVE, 
-            expand=True, 
+            scroll=ft.ScrollMode.ADAPTIVE,
+            expand=True,
             spacing=12,
             #horizontal_alignment=ft.CrossAxisAlignment.CENTER # Centraliza os cards
         )
@@ -2541,10 +2756,10 @@ class LLMStructuredResultDisplay(ft.Column):
         Cria um ícone informativo com tooltip para exibir justificativas.
 
         Args:
-            justificativa: A string de justificativa a ser exibida no tooltip.
-
+            justificativa (Optional[str]): A string de justificativa a ser exibida no tooltip.
+ 
         Returns:
-            Um ft.IconButton configurado.
+            ft.IconButton: Um ft.IconButton configurado.
         """
         return ft.IconButton(
             icon=ft.icons.INFO_OUTLINE_ROUNDED,
@@ -2554,13 +2769,13 @@ class LLMStructuredResultDisplay(ft.Column):
             disabled=not bool(justificativa),
             padding=ft.padding.only(left=0, right=1),
         )
-
-    def _atualizar_municipios_origem(self, e=None):
+ 
+    def _atualizar_municipios_origem(self, e: Optional[ft.ControlEvent] = None):
         """
         Atualiza as opções do dropdown de municípios de origem com base na UF selecionada.
-
+ 
         Args:
-            e: Evento opcional (se chamado por um evento de UI).
+            e (Optional[ft.ControlEvent]): Evento opcional (se chamado por um evento de UI).
         """
         if self.dropdown_uf_origem and self.dropdown_municipio_origem:
             selected_uf = self.dropdown_uf_origem.value
@@ -2574,16 +2789,16 @@ class LLMStructuredResultDisplay(ft.Column):
             else:
                 self.dropdown_municipio_origem.options = []
                 self.dropdown_municipio_origem.value = None
-
+ 
             if e is not None and self.page and self.dropdown_municipio_origem.uid: # 'e' indica chamada por evento de usuário
                 self.dropdown_municipio_origem.update()
-
-    def _atualizar_municipios_fato(self, e=None):
+ 
+    def _atualizar_municipios_fato(self, e: Optional[ft.ControlEvent] = None):
         """
         Atualiza as opções do dropdown de municípios do fato com base na UF selecionada.
-
+ 
         Args:
-            e: Evento opcional (se chamado por um evento de UI).
+            e (Optional[ft.ControlEvent]): Evento opcional (se chamado por um evento de UI).
         """
         if self.dropdown_uf_fato and self.dropdown_municipio_fato:
             selected_uf = self.dropdown_uf_fato.value
@@ -2599,18 +2814,18 @@ class LLMStructuredResultDisplay(ft.Column):
             
             if e is not None and self.page and self.dropdown_municipio_fato.uid: # 'e' indica chamada por evento de usuário
                 self.dropdown_municipio_fato.update()
-
+ 
     def update_data(self, data_to_display_in_gui: formatted_initial_analysis, is_new_llm_response: bool = False):
         """
         Atualiza o display com novos dados de análise estruturada.
         Popula os campos da UI e gerencia o snapshot original para feedback.
-
+ 
         Args:
-            data_to_display_in_ui: O objeto FormatAnaliseInicial para exibir na UI.
-                                   Pode ser None para limpar a UI.
-            is_new_llm_response: True se data_to_display_in_ui é uma resposta fresca da LLM,
-                                 False caso contrário (ex: restauração de sessão).
-
+            data_to_display_in_gui (formatted_initial_analysis): O objeto FormatAnaliseInicial para exibir na UI.
+                                                                 Pode ser None para limpar a UI.
+            is_new_llm_response (bool): True se data_to_display_in_gui é uma resposta fresca da LLM,
+                                        False caso contrário (ex: restauração de sessão).
+ 
         "lg": 4 (Large): Em telas grandes (como um monitor de desktop), a coluna ocupará 4 das 12 partes disponíveis. Isso significa que até 3 colunas (4+4+4=12) podem caber lado a lado.
         "md": 6 (Medium): Em telas médias (como um tablet ou uma janela menor de navegador), a coluna ocupará 6 das 12 partes. Isso permite que até 2 colunas (6+6=12) fiquem na mesma linha.
         "sm": 12 (Small): Em telas pequenas (como um celular), a coluna ocupará todas as 12 partes, efetivamente empilhando os itens verticalmente.
@@ -2619,7 +2834,7 @@ class LLMStructuredResultDisplay(ft.Column):
         logger.info(f"LLMStructuredResultDisplay.update_data chamado. is_new_llm_response={is_new_llm_response}, data_is_none={data_to_display_in_gui is None}")
         
         if data_to_display_in_gui is None:
-            logger.warning("LLMStructuredResultDisplay.update_data: data_to_display_in_ui é None. Limpando display e snapshots.")
+            logger.warning("LLMStructuredResultDisplay.update_data: data_to_display_in_gui é None. Limpando display e snapshots.")
             self.original_llm_data_snapshot = None
             self.data = None
             
@@ -2629,10 +2844,10 @@ class LLMStructuredResultDisplay(ft.Column):
             if self.page and self.uid:
                 self.update()
             return
-
+ 
         # 1. Define self.data (o que será usado para construir/atualizar a UI)
         self.data = data_to_display_in_gui
-
+ 
         # 2. Gerencia o original_llm_data_snapshot
         self.user_cache = get_user_cache(self.page)
         if is_new_llm_response:
@@ -2649,36 +2864,36 @@ class LLMStructuredResultDisplay(ft.Column):
                 logger.info("Snapshot original da LLM restaurado da sessão dedicada.")
             else:
                 # Se não há snapshot na sessão dedicada, e não é uma nova resposta LLM,
-                # este é o caso "tardio". Usamos os dados atuais (data_to_display_in_ui) como base, com warning.
+                # este é o caso "tardio". Usamos os dados atuais (data_to_display_in_gui) como base, com warning.
                 self.original_llm_data_snapshot = data_to_display_in_gui.model_copy(deep=True)
                 logger.warning("LLMStructuredResultDisplay.update_data: Snapshot original não encontrado na sessão dedicada e dados não são 'is_new_llm_response'. "
                                 "Capturando snapshot com dados atuais da UI como base. O feedback pode ser impreciso se os dados já foram editados anteriormente e o snapshot original não foi salvo corretamente.")
                 # Opcional: Salvar este snapshot "tardio" na sessão dedicada também, para consistência na sessão atual,
                 # mas sabendo que pode não ser o "verdadeiro" original da LLM.
                 self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = self.original_llm_data_snapshot
-
+ 
         # Limpa controles antigos e reconstrói a UI
         self.controls.clear()
         self.gui_fields.clear()
-
+ 
         # --- Seção 1: Identificação do Documento ---
         self.gui_fields["descricao_geral"] = ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, width=1600)
-        self.gui_fields["tipo_documento_origem"] = ft.Dropdown(label="Tipo Documento Origem", 
-                                                               options=[ft.dropdown.Option(td) for td in tipos_doc], 
-                                                               value=self.data.tipo_documento_origem if self.data.tipo_documento_origem in tipos_doc else "", 
+        self.gui_fields["tipo_documento_origem"] = ft.Dropdown(label="Tipo Documento Origem",
+                                                               options=[ft.dropdown.Option(td) for td in tipos_doc],
+                                                               value=self.data.tipo_documento_origem if self.data.tipo_documento_origem in tipos_doc else "",
                                                                width=475, dense=True)
-        self.gui_fields["orgao_origem"] = ft.Dropdown(label="Órgão de Origem", 
-                                                      options=[ft.dropdown.Option(oo) for oo in origens_doc], 
-                                                      value=self.data.orgao_origem if self.data.orgao_origem in origens_doc else "", 
+        self.gui_fields["orgao_origem"] = ft.Dropdown(label="Órgão de Origem",
+                                                      options=[ft.dropdown.Option(oo) for oo in origens_doc],
+                                                      value=self.data.orgao_origem if self.data.orgao_origem in origens_doc else "",
                                                       width=480, dense=True) # Removido expand=True
-
+ 
         self.dropdown_uf_origem = ft.Dropdown(
             label="UF de Origem", options=[ft.dropdown.Option(uf) for uf in ufs_list],
             value=self.data.uf_origem if self.data.uf_origem in ufs_list else "",
             on_change=self._atualizar_municipios_origem, width=145, dense=True
         )
         self.gui_fields["uf_origem"] = self.dropdown_uf_origem # Adiciona ao ui_fields
-
+ 
         municipios_origem_init = municipios_list[self.data.uf_origem] if self.data.uf_origem else []
         municipio_origem = self.data.municipio_origem
         self.dropdown_municipio_origem = ft.Dropdown(
@@ -2690,7 +2905,7 @@ class LLMStructuredResultDisplay(ft.Column):
         self.gui_fields["municipio_origem"] = self.dropdown_municipio_origem
         
         self._atualizar_municipios_origem() # Popula municípios com base na UF inicial
-
+ 
         id_doc_card_content = ft.Column([
             ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["descricao_geral"]])]),
             ft.ResponsiveRow([
@@ -2702,7 +2917,7 @@ class LLMStructuredResultDisplay(ft.Column):
         
         id_doc_card = CardWithHeader(title="Identificação do Documento", content=id_doc_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), expand=True) # width=1640
         self.controls.append(id_doc_card)
-
+ 
         # --- Seção 2: Detalhes do Fato ---
         self.gui_fields["resumo_fato"] = ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, width=1600)
         
@@ -2712,7 +2927,7 @@ class LLMStructuredResultDisplay(ft.Column):
             on_change=self._atualizar_municipios_fato, width=145, dense=True
         )
         self.gui_fields["uf_fato"] = self.dropdown_uf_fato
-
+ 
         municipios_fato_init = municipios_list[self.data.uf_fato] if self.data.uf_fato else []
         municipio_fato = self.data.municipio_fato
         self.dropdown_municipio_fato = ft.Dropdown(
@@ -2723,19 +2938,19 @@ class LLMStructuredResultDisplay(ft.Column):
         )
         self.gui_fields["municipio_fato"] = self.dropdown_municipio_fato
         self._atualizar_municipios_fato()
-
-        self.gui_fields["tipo_local"] = ft.Dropdown(label="Tipo de Local", 
-                                                    options=[ft.dropdown.Option(tl) for tl in tipos_locais], 
-                                                    value=self.data.tipo_local if self.data.tipo_local in tipos_locais else "", 
+ 
+        self.gui_fields["tipo_local"] = ft.Dropdown(label="Tipo de Local",
+                                                    options=[ft.dropdown.Option(tl) for tl in tipos_locais],
+                                                    value=self.data.tipo_local if self.data.tipo_local in tipos_locais else "",
                                                     width=480, dense=True) # expand=True
         
         valor_apuracao_str = f"{self.data.valor_apuracao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(self.data.valor_apuracao, float) else str(self.data.valor_apuracao)
-        self.gui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER, 
+        self.gui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER,
                                                          width=475, prefix_text="R$ ", dense=True)
         
         self.gui_fields["pessoas_envolvidas"] = ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, width=1600)
         self.gui_fields["linha_do_tempo"] = ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, width=1600)
-
+ 
         det_fato_card_content = ft.Column([
             ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["resumo_fato"]])]),
             ft.ResponsiveRow([
@@ -2745,29 +2960,29 @@ class LLMStructuredResultDisplay(ft.Column):
             ], vertical_alignment=ft.CrossAxisAlignment.START),
             ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["pessoas_envolvidas"]])]),
             ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["linha_do_tempo"]])]),
-        ], spacing=12) 
-
+        ], spacing=12)
+ 
         det_fato_card = CardWithHeader(title="Detalhes do Fato", content=det_fato_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), expand=True) # width=1640
         self.controls.append(det_fato_card)
-
+ 
         # --- Seção 3: Classificação e Encaminhamento ---
-        self.gui_fields["area_atribuicao"] = ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição], 
-                                                         value=self.data.area_atribuicao if self.data.area_atribuicao in areas_de_atribuição else "", 
+        self.gui_fields["area_atribuicao"] = ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição],
+                                                         value=self.data.area_atribuicao if self.data.area_atribuicao in areas_de_atribuição else "",
                                                          width=475, dense=True)
-        self.gui_fields["destinacao"] = ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas], 
-                                                    value=self.data.destinacao if self.data.destinacao in destinacoes_completas else "", 
+        self.gui_fields["destinacao"] = ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas],
+                                                    value=self.data.destinacao if self.data.destinacao in destinacoes_completas else "",
                                                     width=480, dense=True)
-        self.gui_fields["tipo_a_autuar"] = ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipos_a_autuar], 
-                                                       value=self.data.tipo_a_autuar if self.data.tipo_a_autuar in tipos_a_autuar else "", 
+        self.gui_fields["tipo_a_autuar"] = ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipos_a_autuar],
+                                                       value=self.data.tipo_a_autuar if self.data.tipo_a_autuar in tipos_a_autuar else "",
                                                        width=475, dense=True)
         self.gui_fields["tipificacao_penal"] = ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=475, dense=True, height=58)
-        self.gui_fields["materia_especial"] = ft.Dropdown(label="Tratamento especial", options=[ft.dropdown.Option(mp) for mp in materias_prometheus], 
-                                                    value=self.data.materia_especial if self.data.materia_especial in materias_prometheus else "", 
+        self.gui_fields["materia_especial"] = ft.Dropdown(label="Tratamento especial", options=[ft.dropdown.Option(mp) for mp in materias_prometheus],
+                                                    value=self.data.materia_especial if self.data.materia_especial in materias_prometheus else "",
                                                     width=480, dense=True)
-        self.gui_fields["assunto_re"] = ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re], 
-                                                    value=self.data.assunto_re if self.data.assunto_re in assuntos_re else "", 
+        self.gui_fields["assunto_re"] = ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re],
+                                                    value=self.data.assunto_re if self.data.assunto_re in assuntos_re else "",
                                                     width=475, dense=True)
-
+ 
         class_enc_card_content = ft.Column([
             ft.ResponsiveRow([
                 ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["area_atribuicao"], self._create_justificativa_icon(self.data.justificativa_area_atribuicao)], alignment=ft.MainAxisAlignment.START)]),
@@ -2780,25 +2995,25 @@ class LLMStructuredResultDisplay(ft.Column):
                 ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["assunto_re"], self._create_justificativa_icon(self.data.justificativa_assunto_re)], alignment=ft.MainAxisAlignment.START)]),
             ], vertical_alignment=ft.CrossAxisAlignment.START),
         ], spacing=12)
-
+ 
         class_enc_card = CardWithHeader(title="Classificação e Encaminhamento", content=class_enc_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), expand=True) # width=1640
         self.controls.append(class_enc_card)
-
+ 
         # --- Seção 4: Observações ---
         self.gui_fields["observacoes"] = ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, width=1600)
         obs_card_content = ft.Column([ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["observacoes"]])])], spacing=10)
-
+ 
         obs_card = CardWithHeader(title="Observações Adicionais", content=obs_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), expand=True) # width=1640  # header_bgcolor=ft.Colors.GREY_300
         self.controls.append(obs_card)
-
+ 
         if self.page and self.uid:
             self.update()
-
+ 
     def get_current_form_data(self, validate_for_export: bool = False) -> Union[Optional[formatted_initial_analysis], List[str]]:
         """
         Coleta os dados atuais dos campos da UI, atualiza self.data.
         Se validate_for_export for True, valida campos obrigatórios para exportação.
-
+ 
         Returns:
             - FormatAnaliseInicial: se os dados são válidos (ou validação não solicitada).
             - List[str]: Lista de nomes de campos inválidos/vazios se validate_for_export é True e há erros.
@@ -2807,11 +3022,11 @@ class LLMStructuredResultDisplay(ft.Column):
         if not self.data: # Se não há dados base (ex: LLM não retornou nada)
             logger.warning("get_current_form_data: self.data não está definido. Não é possível coletar dados da UI.")
             return None
-
+ 
         # Passo 1: Coletar valores dos campos da UI (self.ui_fields)
         collected_values_from_ui = {}
         invalid_fields_for_export: List[Tuple[str, ft.Control]] = [] # (field_name, control_instance)
-
+ 
         # Define aqui os campos que são OBRIGATÓRIOS para a exportação; Estes devem corresponder às chaves em self.ui_fields
         required_fields_for_export = [
             "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
@@ -2820,12 +3035,12 @@ class LLMStructuredResultDisplay(ft.Column):
             # "valor_apuracao", # Pode ser opcional ou zero
             "area_atribuicao",
             "tipo_a_autuar", "destinacao",
-            # "descricao_geral" 
+            # "descricao_geral"
             # "tipificacao_penal" e "assunto_re" são Optional[str] no FormatAnaliseInicial
             # "pessoas_envolvidas", "linha_do_tempo", "observacoes" são Optional[List[str]]
         ]
         logger.debug(f"Campos definidos como obrigatórios para exportação: {required_fields_for_export}")
-
+ 
         for field_name, control in self.gui_fields.items():
             value = None
             is_dropdown = isinstance(control, ft.Dropdown)
@@ -2849,7 +3064,7 @@ class LLMStructuredResultDisplay(ft.Column):
                 if is_empty:
                     logger.warning(f"Campo obrigatório '{field_name}' está vazio. Valor atual: '{value}'")
                     invalid_fields_for_export.append((field_name, control))
-
+ 
             # Tratamentos específicos de tipo (continua como antes)
             if field_name == "valor_apuracao":
                 value = clean_and_convert_to_float(value)
@@ -2857,12 +3072,12 @@ class LLMStructuredResultDisplay(ft.Column):
                 value = convert_to_list_of_strings(value)
             
             collected_values_from_ui[field_name] = value
-
+ 
         if validate_for_export and invalid_fields_for_export:
             logger.warning(f"Validação para exportação falhou. Campos vazios: {[f[0] for f in invalid_fields_for_export]}")
             # Retorna a lista de tuplas (nome_do_campo, instancia_do_controle)
-            return invalid_fields_for_export 
-
+            return invalid_fields_for_export
+ 
         # Se passou na validação (ou não foi solicitada), prossiga para criar o objeto
         # final_data_for_pydantic = {}
         # if self.data:
@@ -2873,9 +3088,9 @@ class LLMStructuredResultDisplay(ft.Column):
             final_data_for_pydantic = self.original_llm_data_snapshot.model_dump()
         else: # Fallback se original_llm_data_snapshot for None (não deveria acontecer se update_data foi chamado com dados)
             final_data_for_pydantic = {}
-
+ 
         final_data_for_pydantic.update(collected_values_from_ui)
-
+ 
         for pydantic_field_name in formatted_initial_analysis.model_fields.keys():
             # Se não foi coletado da UI e não estava no snapshot original (improvável para campos principais),
             # pegue o valor default do modelo Pydantic se existir, ou defina como None.
@@ -2892,10 +3107,10 @@ class LLMStructuredResultDisplay(ft.Column):
                      final_data_for_pydantic[pydantic_field_name] = None
         try:
             logger.debug(f"Dados para instanciar FormatAnaliseInicial: {final_data_for_pydantic}")
-
+ 
             self.data = formatted_initial_analysis(**final_data_for_pydantic)  # Atualiza o self.data da instância com os dados atuais da UI, já validados por Pydantic
             logger.info("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
-
+ 
             # Atualiza também a sessão com a representação mais recente (objeto Pydantic)
             self.user_cache = get_user_cache(self.page)
             self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL] = self.data
@@ -2924,20 +3139,18 @@ class FeedbackDialog(ft.AlertDialog):
         on_close_callback: Callable[[FeedbackDialogAction], None],
     ):
         """
-        Inicializa o diálogo de feedback.
+        Inicializa o diálogo para coletar feedback do usuário sobre a precisão da análise da LLM.
 
         Args:
-            page_ref: Referência à página Flet.
-            fields_feedback_data: Lista de dicionários, cada um contendo:
+            page_ref (ft.Page): Referência à página Flet.
+            fields_feedback_data (List[Dict[str, Any]]): Lista de dicionários, cada um contendo:
                 - "nome_campo" (str): Nome interno do campo.
                 - "label_campo" (str): Nome amigável do campo para exibição.
                 - "valor_original_llm" (Any): Valor original da LLM.
                 - "valor_atual_ui" (Any): Valor atual na UI (editado ou não).
                 - "foi_editado" (bool): True se o campo foi editado.
                 - "tipo_campo" (str): Tipo do campo (ex: "textfield_multiline", "dropdown").
-            on_close_callback: Função a ser chamada quando o diálogo for fechado por uma ação.
-            action_context_name: Texto para o botão principal (ex: "Exportar", "Reiniciar").
-            allow_return_to_edit: Controla a visibilidade do botão "Retornar para Edição".
+            on_close_callback (Callable[[FeedbackDialogAction], None]): Função a ser chamada quando o diálogo for fechado por uma ação.
         """
         super().__init__(
             modal=True,
@@ -2959,6 +3172,10 @@ class FeedbackDialog(ft.AlertDialog):
         self._build_dialog_actions()
 
     def _build_dialog_content(self):
+        """
+        Constrói o conteúdo visual do diálogo de feedback, exibindo os campos
+        que foram editados pelo usuário e os que não foram, com informações de similaridade.
+        """
         logger.debug(f"FeedbackDialog: Construindo conteúdo com {len(self.fields_feedback_data)} campos.")
         
         intro_text = ft.Text(
@@ -3049,6 +3266,11 @@ class FeedbackDialog(ft.AlertDialog):
         )
 
     def _build_dialog_actions(self):
+        """
+        Constrói os botões de ação para o diálogo de feedback.
+
+        Inclui opções para confirmar a avaliação, retornar para edição ou ignorar a avaliação.
+        """
         actions = []
         
         actions.append(
@@ -3074,6 +3296,14 @@ class FeedbackDialog(ft.AlertDialog):
         self.actions = actions
 
     def _handle_action_click(self, action: FeedbackDialogAction):
+        """
+        Handler para o clique em um dos botões de ação do diálogo de feedback.
+
+        Fecha o diálogo e invoca o callback `on_close_callback` com a ação selecionada.
+
+        Args:
+            action (FeedbackDialogAction): A ação selecionada pelo usuário.
+        """
         logger.info(f"FeedbackDialog: Ação '{action.value}' selecionada.")
         self.open = False
         if self.page_ref and self.uid: # Garante que está na árvore da UI para atualizar
@@ -3096,6 +3326,9 @@ class FeedbackDialog(ft.AlertDialog):
         threading.Timer(0.15, delayed_callback).start() # Pequeno delay
 
     def show(self):
+        """
+        Exibe o diálogo de feedback na página.
+        """
         logger.info("FeedbackDialog: Solicitado para mostrar.")
         if self not in self.page_ref.overlay:
             self.page_ref.overlay.append(self)
@@ -3243,28 +3476,29 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     Função de fábrica para criar a view de Análise de PDF.
 
     Args:
-        page: A página Flet.
+        page (ft.Page): A página Flet.
 
     Returns:
-        Uma instância de AnalyzePDFViewContent.
+        ft.Control: Uma instância de AnalyzePDFViewContent.
     """
     logger.info("View Análise de PDF: Iniciando criação (nova estrutura).")
     return AnalyzePDFViewContent(page)
 
 # Funções acessórias:
 
-def get_api_key_in_firestore(page, provider, firestore_client):
+def get_api_key_in_firestore(page: ft.Page, provider: str, firestore_client: FirebaseClientFirestore) -> Optional[str]:
     """
     Busca a chave de API criptografada para um provedor específico no Firestore
     e a descriptografa.
 
     Args:
-        page: A página Flet, usada para acessar a sessão do usuário.
-        provider: O nome do provedor (ex: "openai").
+        page (ft.Page): A página Flet, usada para acessar a sessão do usuário.
+        provider (str): O nome do provedor (ex: "openai").
+        firestore_client (FirebaseClientFirestore): Instância do cliente Firestore.
 
     Returns:
-        A chave de API descriptografada como string, ou None se não for encontrada
-        ou houver erro na descriptografia.
+        Optional[str]: A chave de API descriptografada como string, ou None se não for encontrada
+                       ou houver erro na descriptografia.
     """
     from src.services import credentials_manager
 
@@ -3295,15 +3529,19 @@ def get_api_key_in_firestore(page, provider, firestore_client):
     page.session.set(f"decrypted_api_key_{provider}", decrypted_api_key)
     return decrypted_api_key
 
-def get_prepared_feedback_data(original_snapshot, current_data_ui, gui_fields) -> Optional[List[Dict[str, Any]]]:
+def get_prepared_feedback_data(original_snapshot: formatted_initial_analysis, current_data_ui: formatted_initial_analysis, gui_fields: Dict[str, ft.Control]) -> Optional[List[Dict[str, Any]]]:
     """
-    Prepara os dados para serem enviados ao FeedbackDialog, incluindo o status 'foi_editado'.
-    Este método deve ser chamado após garantir que get_current_form_data() foi executado
-    para que self.data reflita o estado atual da UI.
+    Prepara os dados para serem enviados ao FeedbackDialog, incluindo o status 'foi_editado'
+    e a similaridade de texto para campos editados.
+
+    Args:
+        original_snapshot (formatted_initial_analysis): O snapshot original dos dados da LLM.
+        current_data_ui (formatted_initial_analysis): Os dados atuais da UI, que podem ter sido editados pelo usuário.
+        gui_fields (Dict[str, ft.Control]): Dicionário de controles da GUI para obter labels amigáveis e tipos de campo.
 
     Returns:
-        Uma lista de dicionários, cada um representando um campo e seu status,
-        ou None se os dados originais não estiverem disponíveis.
+        Optional[List[Dict[str, Any]]]: Uma lista de dicionários, cada um representando um campo e seu status,
+                                        ou None se os dados originais ou atuais não estiverem disponíveis.
     """
     
     if not original_snapshot or not current_data_ui:
@@ -3314,8 +3552,8 @@ def get_prepared_feedback_data(original_snapshot, current_data_ui, gui_fields) -
     fields_for_feedback = [
         "descricao_geral", "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
         "resumo_fato", "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
-        "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", 
-        "destinacao", "materia_especial"
+        "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re",
+        "destinacao", "materia_especial",
         "pessoas_envolvidas", "linha_do_tempo", "observacoes"
     ]
 
@@ -3358,8 +3596,8 @@ def get_prepared_feedback_data(original_snapshot, current_data_ui, gui_fields) -
             "tipo_campo": tipo_campo_str,
             "llm_acertou": not foi_editado, # Novo campo para o Firestore
             "foi_editado": foi_editado,
-            "valor_original_llm": original_value, 
-            "valor_atual_ui": current_value_ui,   
+            "valor_original_llm": original_value,
+            "valor_atual_ui": current_value_ui,
         }
 
         # Adiciona similaridade apenas se editado e for um tipo de texto aplicável
@@ -3370,10 +3608,19 @@ def get_prepared_feedback_data(original_snapshot, current_data_ui, gui_fields) -
         
         feedback_field_data_prepared.append(field_data_entry)
         
-    return feedback_field_data_prepared 
+    return feedback_field_data_prepared
 
-def get_field_type_for_feedback(field_name: str, gui_fields) -> str:
-    """Retorna o tipo do campo para categorização no feedback."""
+def get_field_type_for_feedback(field_name: str, gui_fields: Dict[str, ft.Control]) -> str:
+    """
+    Retorna o tipo de controle Flet associado a um campo específico para categorização no feedback.
+
+    Args:
+        field_name (str): O nome do campo (atributo do objeto formatted_initial_analysis).
+        gui_fields (Dict[str, ft.Control]): Dicionário de controles da GUI.
+
+    Returns:
+        str: Uma string representando o tipo do campo (ex: "textfield_multiline", "dropdown", "textfield_valor").
+    """
     # Mapeamento simplificado, pode ser expandido
     if field_name in ["descricao_geral", "resumo_fato", "tipificacao_penal", "observacoes"]:
         return "textfield_multiline"
@@ -3388,4 +3635,4 @@ def get_field_type_for_feedback(field_name: str, gui_fields) -> str:
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado NC_ANALYZE_VIEW em {execution_time:.4f}s")
+logger.debug(f"Carregado NC_ANALYZE_VIEW em {execution_time:.4f}s")

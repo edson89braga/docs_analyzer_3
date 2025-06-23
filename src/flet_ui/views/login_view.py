@@ -17,6 +17,15 @@ logger = logging.getLogger(__name__)
 
 # Validador simples de email (pode ser mais robusto)
 def email_validator(email: str) -> Optional[str]:
+    """
+    Valida o formato de um endereço de email.
+
+    Args:
+        email (str): O endereço de email a ser validado.
+
+    Returns:
+        Optional[str]: Uma mensagem de erro se o email for inválido, caso contrário, None.
+    """
     if not email:
         return "O email não pode estar vazio."
     if "@" not in email or "." not in email: # Validação muito básica
@@ -25,6 +34,15 @@ def email_validator(email: str) -> Optional[str]:
 
 # Validador de senha
 def password_validator(password: str) -> Optional[str]:
+    """
+    Valida a complexidade de uma senha.
+
+    Args:
+        password (str): A senha a ser validada.
+
+    Returns:
+        Optional[str]: Uma mensagem de erro se a senha for inválida, caso contrário, None.
+    """
     if not password:
         return "A senha não pode estar vazia."
     if len(password) < 6:
@@ -34,7 +52,14 @@ def password_validator(password: str) -> Optional[str]:
 
 def create_login_view(page: ft.Page) -> ft.View:
     """
-    Cria e retorna a ft.View para a tela de login.
+    Cria e retorna a ft.View para a tela de login, incluindo campos para email e senha,
+    opções de "Lembrar de mim", e links para redefinição de senha e criação de conta.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.View: A view completa da tela de login.
     """
     from src.services.firebase_client import FirebaseClientStorage
     logger.info("Criando a view de Login.")
@@ -62,6 +87,12 @@ def create_login_view(page: ft.Page) -> ft.View:
     remember_me_checkbox = ft.Checkbox(label="Lembrar de mim", value=True) # Default True
 
     def _resend_verification_email(id_token: str):
+        """
+        Reenvia o email de verificação para o usuário.
+
+        Args:
+            id_token (str): O ID token do usuário autenticado.
+        """
         show_loading_overlay(page, "Reenviando email de verificação...")
         success = auth_manager.send_verification_email(id_token)
         hide_loading_overlay(page)
@@ -72,8 +103,15 @@ def create_login_view(page: ft.Page) -> ft.View:
 
     # --- Função de Callback para o Botão de Login ---
     def handle_login_click(e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão de login.
+        Realiza a validação dos campos, autentica o usuário e gerencia o estado da sessão.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info("Botão de login clicado.")
-        page.update() 
+        page.update()
 
         is_email_valid = email_field.validate(show_error=True)
         is_password_valid = password_field.validate(show_error=True)
@@ -92,7 +130,7 @@ def create_login_view(page: ft.Page) -> ft.View:
         try:
             auth_response: Optional[Dict[str, Any]] = auth_manager.authenticate_user_get_all_data(email, password)
             hide_loading_overlay(page)
-            logger.info(f"[DEBUG] Resposta da autenticação: {auth_response}")
+            logger.debug(f"Resposta da autenticação: {auth_response}")
             if auth_response and auth_response.get("idToken") and auth_response.get("localId"):
                 
                 #is_email_verified = auth_response.get("emailVerified", False)
@@ -252,7 +290,14 @@ def create_login_view(page: ft.Page) -> ft.View:
     )
 
     # Link para "Esqueci minha senha" (implementação futura)
-    def handle_forgot_password_click(e):
+    def handle_forgot_password_click(e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do link "Esqueci minha senha".
+        Solicita o envio de um email de redefinição de senha para o email fornecido.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         email_val = email_field.value or ""
         if not email_val or not email_validator(email_val) is None:
             show_snackbar(page, "Por favor, digite um email válido no campo Email para redefinir a senha.", color=theme.COLOR_WARNING, duration=5000)
@@ -279,9 +324,16 @@ def create_login_view(page: ft.Page) -> ft.View:
     )
 
     # Link para "Criar conta" (implementação futura)
-    def handle_create_account_click(e):
+    def handle_create_account_click(e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do link "Criar conta".
+        Redireciona o usuário para a página de cadastro (/signup).
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info("Botão 'Criar conta' clicado. Navegando para /signup.")
-        page.go("/signup") 
+        page.go("/signup")
 
     create_account_button = ft.TextButton(
         "Não tem conta? Crie uma aqui",

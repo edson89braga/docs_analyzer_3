@@ -3,37 +3,41 @@
 Módulo para gerenciar e fornecer os prompts utilizados nas interações com LLMs.
 """
 
-from time import perf_counter
-start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando prompts.py")
-
-from typing import Optional, Dict, List, Type
-
 import logging
 logger = logging.getLogger(__name__)
 
-# FORMATOS das saídas estruturadas:
+from time import perf_counter
+start_time = perf_counter()
+logger.debug(f"{start_time:.4f}s - Iniciando prompts.py")
+
+from typing import Optional, Dict, List, Type, Union
 from pydantic import BaseModel, Field 
+
+# FORMATOS das saídas estruturadas:
 class formatted_initial_analysis(BaseModel):
-    descricao_geral: str 
-    tipo_documento_origem: str 
-    orgao_origem: str 
-    uf_origem: str 
-    municipio_origem: str 
-    resumo_fato: str 
-    uf_fato: str 
-    municipio_fato: str 
-    tipo_local: str 
-    valor_apuracao: float # Consta resposta padrão 0 se não aplicável
+    """
+    Modelo Pydantic para a análise inicial formatada de um documento.
+    Contém campos para diversas informações extraídas e suas justificativas.
+    """
+    descricao_geral: str
+    tipo_documento_origem: str
+    orgao_origem: str
+    uf_origem: str
+    municipio_origem: str
+    resumo_fato: str
+    uf_fato: str
+    municipio_fato: str
+    tipo_local: str
+    valor_apuracao: float = Field(default=0.0) # Consta resposta padrão 0 se não aplicável
     tipificacao_penal: str
-    materia_especial: str  # Consta resposta padrão se não aplicável
-    area_atribuicao: str 
-    destinacao: str 
-    tipo_a_autuar: str 
-    assunto_re: str                # Consta resposta padrão se não aplicável
+    materia_especial: str = Field(default="Não aplicável")  # Consta resposta padrão se não aplicável
+    area_atribuicao: str
+    destinacao: str
+    tipo_a_autuar: str
+    assunto_re: str = Field(default="Não aplicável") # Consta resposta padrão se não aplicável
     pessoas_envolvidas: Optional[List[str]]
-    linha_do_tempo: Optional[List[str]] 
-    observacoes: str = Field(default="") 
+    linha_do_tempo: Optional[List[str]]
+    observacoes: str = Field(default="")
 
     justificativa_tipo_documento_origem:str = Field(default="Justificativa não fornecida pela IA.")
     justificativa_orgao_origem:         str = Field(default="Justificativa não fornecida pela IA.")
@@ -49,37 +53,46 @@ class formatted_initial_analysis(BaseModel):
     justificativa_assunto_re:           str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
 
 class formatted_part_1(BaseModel):
-    tipo_documento_origem: str 
-    orgao_origem: str 
-    uf_origem: str 
-    municipio_origem: str 
-    observacoes: str = Field(default="") 
+    """
+    Modelo Pydantic para a primeira parte da análise segmentada, focando na origem do documento.
+    """
+    tipo_documento_origem: str
+    orgao_origem: str
+    uf_origem: str
+    municipio_origem: str
+    observacoes: str = Field(default="")
 
     justificativa_tipo_documento_origem:str = Field(default="Justificativa não fornecida pela IA.")
     justificativa_orgao_origem:         str = Field(default="Justificativa não fornecida pela IA.")
     justificativa_municipio_uf_origem:  str = Field(default="Justificativa não fornecida pela IA.")
     
 class formatted_part_2(BaseModel):
-    descricao_geral: str 
-    resumo_fato: str 
-    uf_fato: str 
-    municipio_fato: str 
-    tipo_local: str 
-    valor_apuracao: float # Consta resposta padrão 0 se não aplicável
+    """
+    Modelo Pydantic para a segunda parte da análise segmentada, focando nos fatos documentados.
+    """
+    descricao_geral: str
+    resumo_fato: str
+    uf_fato: str
+    municipio_fato: str
+    tipo_local: str
+    valor_apuracao: float = Field(default=0.0) # Consta resposta padrão 0 se não aplicável
     pessoas_envolvidas: Optional[List[str]]
-    linha_do_tempo: Optional[List[str]] 
-    observacoes: str = Field(default="") 
+    linha_do_tempo: Optional[List[str]]
+    observacoes: str = Field(default="")
 
     justificativa_municipio_uf_fato:    str = Field(default="Justificativa não fornecida pela IA.")
     justificativa_tipo_local:           str = Field(default="Justificativa não fornecida pela IA.")
     justificativa_valor_apuracao:       str = Field(default="Justificativa não fornecida pela IA.")
 
 class formatted_part_3(BaseModel):
+    """
+    Modelo Pydantic para a terceira parte da análise segmentada, focando na área temática e destinação.
+    """
     tipificacao_penal: str
-    materia_especial: str  # Consta resposta padrão se não aplicável
-    area_atribuicao: str 
-    destinacao: str 
-    observacoes: str = Field(default="") 
+    materia_especial: str = Field(default="Não aplicável")  # Consta resposta padrão se não aplicável
+    area_atribuicao: str
+    destinacao: str
+    observacoes: str = Field(default="")
 
     justificativa_tipificacao_penal:    str = Field(default="Justificativa não fornecida pela IA.") 
     justificativa_materia_especial:     str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
@@ -87,9 +100,12 @@ class formatted_part_3(BaseModel):
     justificativa_destinacao:           str = Field(default="Justificativa não fornecida pela IA.")
 
 class formatted_part_4(BaseModel):
-    tipo_a_autuar: str 
-    assunto_re: str                # Consta resposta padrão se não aplicável
-    observacoes: str = Field(default="") 
+    """
+    Modelo Pydantic para a quarta parte da análise segmentada, focando no tipo de procedimento a gerar.
+    """
+    tipo_a_autuar: str
+    assunto_re: str = Field(default="Não aplicável") # Consta resposta padrão se não aplicável
+    observacoes: str = Field(default="")
 
     justificativa_tipo_a_autuar:        str = Field(default="Justificativa não fornecida pela IA.")
     justificativa_assunto_re:           str = Field(default="Justificativa não fornecida pela IA (ou não aplicável).")
@@ -357,7 +373,6 @@ assuntos_comuns_delepat = [
 assuntos_comuns_dre = [
 'Tráfico ilícito de drogas'
 ]
-
 
 # Prompts do escopo de Análise sobre Notícias-crimes:
 
@@ -858,7 +873,19 @@ PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS = [
                                  prompt_K4]
 ]
 
-def return_parse_prompt(dados_respostas):
+def return_parse_prompt(dados_respostas: List[str]) -> List[Dict[str, str]]:
+    """
+    Gera um prompt para consolidar respostas segmentadas em um único objeto JSON.
+
+    Args:
+        dados_respostas (List[str]): Uma lista de strings, onde cada string representa
+                                     a análise de um segmento diferente de um documento.
+
+    Returns:
+        List[Dict[str, str]]: Uma lista contendo um dicionário que representa o prompt
+                              para o modelo de linguagem, instruindo-o a consolidar
+                              as informações em um formato JSON específico.
+    """
     return [{
         "role": "user",
         "content":
@@ -889,7 +916,19 @@ output_formats = {
 import json
 from src.utils import (get_sigla_uf, get_municipios_por_uf_cached, obter_string_normalizada_em_lista, clean_and_convert_to_float, convert_to_list_of_strings)
 
-def try_convert_to_pydantic_format(data, pydantic_format):
+def try_convert_to_pydantic_format(data: Union[str, BaseModel], pydantic_format: Type[BaseModel]) -> Union[BaseModel, str]:
+    """
+    Tenta converter os dados de entrada para o formato Pydantic especificado.
+
+    Args:
+        data (Union[str, BaseModel]): Os dados a serem convertidos, que podem ser uma string JSON
+                                      ou um objeto Pydantic.
+        pydantic_format (Type[BaseModel]): O modelo Pydantic para o qual os dados devem ser convertidos.
+
+    Returns:
+        Union[BaseModel, str]: O objeto Pydantic convertido se bem-sucedido, ou a string original
+                               se a conversão falhar.
+    """
     # llm_response_data PODE ser um objeto FormatAnaliseInicial ou uma string
     # Se for string e parece JSON, tenta parsear para FormatAnaliseInicial
     if isinstance(data, str):
@@ -899,19 +938,19 @@ def try_convert_to_pydantic_format(data, pydantic_format):
             if 'valor_apuracao' in json_data and type(json_data['valor_apuracao']) != float:
                 raw_valor = json_data['valor_apuracao']
                 json_data['valor_apuracao'] = clean_and_convert_to_float(raw_valor)
-                logger.info(f"Valor apuracao original: '{raw_valor}', convertido para float: {json_data['valor_apuracao']}")
+                logger.debug(f"Valor apuracao original: '{raw_valor}', convertido para float: {json_data['valor_apuracao']}")
             for k in ["pessoas_envolvidas", "linha_do_tempo"]:
                 if k in json_data and type(json_data[k]) == str:
                     raw_valor = json_data[k]
                     json_data[k] = convert_to_list_of_strings(raw_valor)
 
             data = pydantic_format(**json_data )
-            logger.info("Resposta (string) parseada com sucesso para Pydantic_format.")
+            logger.debug("Resposta (string) parseada com sucesso para Pydantic_format.")
         except (json.JSONDecodeError, TypeError, Exception) as parse_error: # Exception para Pydantic ValidationError
             logger.warning(f"Resposta é string, mas falhou ao parsear/validar como Pydantic_format: {parse_error}. Usando como texto puro.")
             # Mantém llm_response_data como string para o fallback
     elif isinstance(data, pydantic_format):
-        logger.info("Resposta já é um objeto Pydantic_format.")
+        logger.debug("Resposta já é um objeto Pydantic_format.")
     else:
         logger.warning("Resposta não é string nem objeto Pydantic_format!")
     
@@ -921,10 +960,24 @@ def merge_parts_into_model(
     parts: List[BaseModel],
     target_model: Type[BaseModel],
 ) -> BaseModel:
+    """
+    Mescla múltiplas partes de modelos Pydantic em um único modelo Pydantic de destino.
+
+    Esta função combina os dados de uma lista de objetos BaseModel em um único dicionário,
+    tratando o campo 'observacoes' de forma especial, concatenando-o se presente em várias partes.
+    O dicionário resultante é então usado para instanciar o modelo de destino.
+
+    Args:
+        parts (List[BaseModel]): Uma lista de objetos BaseModel a serem mesclados.
+        target_model (Type[BaseModel]): O tipo do modelo Pydantic de destino.
+
+    Returns:
+        BaseModel: Uma instância do `target_model` preenchida com os dados mesclados.
+    """
     
     combined_data = {}
     observacoes_coletadas = []
-    logger.info(f"Unificando {len(parts)} partes em Pydantic_target.")
+    logger.debug(f"Unificando {len(parts)} partes em Pydantic_target.")
     for part in parts:
         # Verifica se 'observacoes' é um campo definido no modelo
         has_obs = "observacoes" in part.model_fields
@@ -946,7 +999,19 @@ def merge_parts_into_model(
 
     return target_model(**combined_data)
 
-def normalizing_function(resposta_formatada: formatted_initial_analysis):
+def normalizing_function(resposta_formatada: formatted_initial_analysis) -> formatted_initial_analysis:
+    """
+    Normaliza os dados de uma resposta formatada, especialmente UFs e municípios.
+
+    Esta função garante que os valores de UF e município estejam em um formato consistente
+    e válidos de acordo com as listas de referência.
+
+    Args:
+        resposta_formatada (formatted_initial_analysis): A resposta formatada a ser normalizada.
+
+    Returns:
+        formatted_initial_analysis: A resposta formatada após a normalização.
+    """
     municipios_list = get_municipios_por_uf_cached()
 
     if not isinstance(resposta_formatada, formatted_initial_analysis):
@@ -968,7 +1033,16 @@ def normalizing_function(resposta_formatada: formatted_initial_analysis):
     
     return resposta_formatada
 
-def review_function(resposta_formatada: formatted_initial_analysis):
+def review_function(resposta_formatada: formatted_initial_analysis) -> formatted_initial_analysis:
+    """
+    Revisa os dados de uma resposta formatada, aplicando regras de negócio e ajustes.
+
+    Args:
+        resposta_formatada (formatted_initial_analysis): A resposta formatada a ser revisada.
+
+    Returns:
+        formatted_initial_analysis: A resposta formatada após a revisão.
+    """
     if not isinstance(resposta_formatada, formatted_initial_analysis):
         logger.warning(f"Resposta fora da formatação esperada: {type(resposta_formatada)}.\nCancelando revisão de dados.")
         return resposta_formatada
@@ -980,7 +1054,7 @@ def review_function(resposta_formatada: formatted_initial_analysis):
     if resposta_formatada.uf_fato != 'SP':
         resposta_formatada.destinacao = dict_corregedorias_uf.get(resposta_formatada.uf_fato)
         destinacao_alterada = True
-    elif resposta_formatada.municipio_fato not in dict_circunscrições["SR/PF/SP"]:  
+    elif resposta_formatada.municipio_fato not in dict_circunscrições["SR/PF/SP"]:
         # Conferido nomes com MUNICIPIOS_POR_UF["SP"]; os municípios da SR tiveram upper ativado.
         from unidecode import unidecode
         for dpf, municipios in dict_circunscrições.items():
@@ -1030,5 +1104,29 @@ Grupos de prompt:
 
 '''
 
+__all__ = [
+    # Prompts principais
+    "system_prompt_A0", "general_instruction_B1_1", "general_instruction_B1_2",
+    "start_action_B2", "final_action_L0", "prompt_format_output_instruction",
+    
+    # Grupos de prompts
+    "prompt_C0", "prompt_C1", "prompt_C2", "prompt_C3", "prompt_C4",
+    "prompt_D0", "prompt_D1", "prompt_D2", "prompt_D3", "prompt_D4",
+    "prompt_F0", "prompt_F1", "prompt_F2", "prompt_F3", "prompt_F4",
+    "prompt_G1", "prompt_G2", "prompt_H1", "prompt_I1", "prompt_I2",
+    "prompt_J0", "prompt_J1", "prompt_J2",
+    "prompt_K0", "prompt_K1", "prompt_K2", "prompt_K3", "prompt_K4",
+
+    # Prompts combinados
+    # "prompts", "prompt_inicial_para_cache", "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS",
+    # "PROMPT_UNICO_for_INITIAL_ANALYSIS",
+
+    # Listas de referência (se você também quiser atualizá-las dinamicamente)
+    # "tipos_doc", "origens_doc", "tipos_locais", "areas_de_atribuição",
+    # "tipos_a_autuar", "assuntos_re", "materias_prometheus",
+    # "lista_normativa_prometheus"
+    # "lista_delegacias_especializadas",  "lista_delegacias_interior", "lista_corregedorias",
+]
+
 execution_time = perf_counter() - start_time
-print(f"Carregado PROMPTS em {execution_time:.4f}s")
+logger.debug(f"Carregado PROMPTS em {execution_time:.4f}s")

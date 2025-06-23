@@ -3,15 +3,15 @@
 Define o tema visual, cores, fontes e estilos reutilizáveis para a aplicação Flet.
 """
 
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando themes.py")
+logger.debug(f"{start_time:.4f}s - Iniciando themes.py")
 
 import flet as ft
 from datetime import datetime
-
-import logging
-logger = logging.getLogger(__name__)
 
 # --- Paleta de Cores Principal (Exemplo - Azul) ---
 # Você pode definir suas cores hexadecimais aqui ou usar as pré-definidas do Flet
@@ -113,7 +113,7 @@ def configure_theme(page: ft.Page):
         #     padding=PADDING_M
         # )
     )
-    # print("Tema configurado a partir de src/flet_ui/theme.py")
+    # logger.debug("Tema configurado a partir de src/flet_ui/theme.py")
 
 WIDTH_CONTAINER_CONFIGS = 700
 
@@ -123,4 +123,4 @@ PANEL_CONTENT_BGCOLOR = ft.colors.BACKGROUND # SURFACE Ou ft.colors.BACKGROUND, 
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado THEME.py em {execution_time:.4f}s")
+logger.debug(f"Carregado THEME.py em {execution_time:.4f}s")

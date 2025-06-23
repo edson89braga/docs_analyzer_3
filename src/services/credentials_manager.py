@@ -1,8 +1,11 @@
 # src/utils/fb_credentials_manager.py
 
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando credentials_manager.py")
+logger.debug(f"{start_time:.4f}s - Iniciando credentials_manager.py")
 
 import keyring, json, os
 from cryptography.fernet import Fernet, InvalidToken
@@ -10,9 +13,6 @@ from typing import Optional
 
 from src.settings import (APP_NAME, APP_DATA_DIR, KEYRING_SERVICE_FIREBASE, KEYRING_USER_ENCRYPTION_KEY, 
 ENCRYPTED_SERVICE_KEY_FILENAME, ENCRYPTED_SERVICE_KEY_PATH)
-
-import logging
-logger = logging.getLogger(__name__)
 
 logger.debug(f"Credentials Manager usando diretório de dados: {APP_DATA_DIR}")
 logger.debug(f"Caminho esperado para chave de serviço criptografada: {ENCRYPTED_SERVICE_KEY_PATH}")
@@ -30,7 +30,7 @@ def get_encryption_key() -> Optional[bytes]:
     try:
         key_str = keyring.get_password(KEYRING_SERVICE_FIREBASE, KEYRING_USER_ENCRYPTION_KEY)
         if key_str:
-            logger.info("Chave de criptografia encontrada no Keyring.")
+            logger.debug("Chave de criptografia encontrada no Keyring.")
             # Keyring retorna string, Fernet precisa de bytes. Assume UTF-8 ou compatível.
             return key_str.encode('utf-8')
         else:
@@ -60,12 +60,29 @@ def _save_encryption_key(key: bytes):
         raise # Propaga o erro para quem chamou lidar (ex: UI mostrando falha)
 
 def _generate_encryption_key() -> bytes:
-    """Gera uma nova chave de criptografia Fernet."""
-    logger.info("Gerando nova chave de criptografia Fernet.")
+    """
+    Gera uma nova chave de criptografia Fernet.
+
+    Returns:
+        bytes: A chave Fernet gerada.
+    """
+    logger.debug("Gerando nova chave de criptografia Fernet.")
     return Fernet.generate_key()
 
 def _encrypt_data(data: str, fernet_instance: Fernet) -> bytes:
-    """Criptografa dados (string) usando a instância Fernet fornecida."""
+    """
+    Criptografa dados (string) usando a instância Fernet fornecida.
+
+    Args:
+        data (str): A string a ser criptografada.
+        fernet_instance (Fernet): A instância Fernet para criptografia.
+
+    Returns:
+        bytes: Os dados criptografados.
+
+    Raises:
+        Exception: Se ocorrer um erro durante a criptografia.
+    """
     logger.debug("Criptografando dados...")
     try:
         encrypted_data = fernet_instance.encrypt(data.encode('utf-8'))
@@ -76,7 +93,20 @@ def _encrypt_data(data: str, fernet_instance: Fernet) -> bytes:
         raise # Propaga
 
 def _decrypt_data(encrypted_data: bytes, fernet_instance: Fernet) -> str:
-    """Descriptografa dados usando a instância Fernet fornecida."""
+    """
+    Descriptografa dados usando a instância Fernet fornecida.
+
+    Args:
+        encrypted_data (bytes): Os dados criptografados.
+        fernet_instance (Fernet): A instância Fernet para descriptografia.
+
+    Returns:
+        str: A string descriptografada.
+
+    Raises:
+        InvalidToken: Se o token for inválido (chave errada ou dados corrompidos).
+        Exception: Se ocorrer um erro inesperado durante a descriptografia.
+    """
     logger.debug("Descriptografando dados...")
     try:
         decrypted_data = fernet_instance.decrypt(encrypted_data).decode('utf-8')
@@ -195,7 +225,7 @@ def get_decrypted_service_key_json() -> Optional[str]:
         decrypted_json = _decrypt_data(encrypted_content, fernet_instance)
         # Validação JSON
         json.loads(decrypted_json)
-        logger.info("Chave de serviço descriptografada e validada como JSON com sucesso.")
+        logger.debug("Chave de serviço descriptografada e validada como JSON com sucesso.")
         return decrypted_json
     except InvalidToken:
          logger.error("Falha ao obter chave de serviço: Descriptografia falhou (token inválido/chave errada).")
@@ -308,4 +338,4 @@ def decrypt(encrypted_bytes: bytes) -> Optional[str]:
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado CREDENTIALS_MANAGER em {execution_time:.4f}s")
+logger.debug(f"Carregado CREDENTIALS_MANAGER em {execution_time:.4f}s")

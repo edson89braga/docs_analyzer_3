@@ -12,6 +12,16 @@ logger = logging.getLogger(__name__)
 
 
 def create_chat_pdf_content(page: ft.Page) -> ft.Control:
+    """
+    Cria e retorna o conteúdo placeholder para a view "Chat com PDF".
+    Esta funcionalidade ainda não está implementada.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo placeholder da view.
+    """
     logger.info("Criando conteúdo da view Chat com PDF.")
 
     current_pdf_name = page.session.get(KEY_SESSION_CURRENT_BATCH_NAME)
@@ -120,6 +130,16 @@ def create_chat_pdf_content(page: ft.Page) -> ft.Control:
     return main_content
 
 def OLD_create_knowledge_base_content(page: ft.Page) -> ft.Control:
+    """
+    Cria e retorna o conteúdo placeholder para a view "Banco de Pareceres".
+    Esta função é uma versão antiga e será substituída por create_placeholder_content.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo placeholder da view.
+    """
     logger.info("Acessando conteúdo placeholder para Banco de Pareceres.")
 
     # Exibe o snackbar imediatamente ao carregar o conteúdo desta "view"
@@ -156,6 +176,16 @@ def OLD_create_knowledge_base_content(page: ft.Page) -> ft.Control:
     return main_content
 
 def create_placeholder_content(page: ft.Page, module_name: str) -> ft.Control:
+    """
+    Cria e retorna um conteúdo placeholder genérico para módulos ainda não implementados.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+        module_name (str): O nome do módulo para o qual o placeholder está sendo criado.
+
+    Returns:
+        ft.Control: O conteúdo placeholder genérico.
+    """
     logger.info(f"Acessando conteúdo placeholder para: {module_name}")
     show_snackbar(
         page,
@@ -176,13 +206,49 @@ def create_placeholder_content(page: ft.Page, module_name: str) -> ft.Control:
     )
 
 def create_knowledge_base_content(page: ft.Page) -> ft.Control:
+    """
+    Cria e retorna o conteúdo para a view "Banco de Pareceres", utilizando o placeholder genérico.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo da view "Banco de Pareceres".
+    """
     return create_placeholder_content(page, "Banco de Pareceres")
 
 def create_wiki_rotinas_content(page: ft.Page) -> ft.Control:
+    """
+    Cria e retorna o conteúdo para a view "Wiki PF - Rotinas", utilizando o placeholder genérico.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo da view "Wiki PF - Rotinas".
+    """
     return create_placeholder_content(page, "Wiki PF - Rotinas")
 
 def create_correicao_processos_content(page: ft.Page) -> ft.Control:
+    """
+    Cria e retorna o conteúdo para a view "Correição de Flagrantes e IPLs", utilizando o placeholder genérico.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo da view "Correição de Flagrantes e IPLs".
+    """
     return create_placeholder_content(page, "Correição de Flagrantes e IPLs")
 
 def create_roteiro_investigacoes_content(page: ft.Page) -> ft.Control:
+    """
+    Cria e retorna o conteúdo para a view "Roteiros de Investigações", utilizando o placeholder genérico.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo da view "Roteiros de Investigações".
+    """
     return create_placeholder_content(page, "Roteiros de Investigações")

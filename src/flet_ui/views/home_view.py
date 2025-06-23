@@ -10,6 +10,16 @@ logger = logging.getLogger(__name__)
 
 
 def create_home_view(page: ft.Page) -> ft.Control:
+    """
+    Cria e retorna a primeira versão da view Home, exibindo informações básicas
+    e o logo do departamento.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo principal da view Home.
+    """
     logger.info("Criando o conteúdo da view Home.")
 
     try:
@@ -83,8 +93,21 @@ def create_home_view(page: ft.Page) -> ft.Control:
     return main_content
 
 
-def create_feature_card(page: ft.Page, title: str, description: str, icon: str, route: Optional[str] = None):
-    """Cria um card para destacar uma funcionalidade."""
+def create_feature_card(page: ft.Page, title: str, description: str, icon: str, route: Optional[str] = None) -> ft.Container:
+    """
+    Cria um card clicável para destacar uma funcionalidade ou seção do aplicativo.
+
+    Args:
+        page (ft.Page): A página Flet atual, usada para navegação.
+        title (str): O título do card.
+        description (str): Uma breve descrição da funcionalidade.
+        icon (str): O nome do ícone Flet a ser exibido no card.
+        route (Optional[str]): A rota para a qual o aplicativo navegará ao clicar no card.
+                                Se None, o card não será clicável.
+
+    Returns:
+        ft.Container: Um container Flet que encapsula o card, tornando-o clicável.
+    """
     
     card_content_column = ft.Column( # Renomeado para clareza
         [
@@ -119,6 +142,16 @@ def create_feature_card(page: ft.Page, title: str, description: str, icon: str, 
 
 
 def create_home_view2(page: ft.Page) -> ft.Control:
+    """
+    Cria e retorna a segunda versão da view Home, apresentando cards de funcionalidades
+    e informações sobre o uso responsável da IA.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.Control: O conteúdo principal da view Home com cards.
+    """
     logger.info("Criando o conteúdo da view Home (com cards).")
 
     try:

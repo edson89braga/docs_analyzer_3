@@ -1,8 +1,10 @@
 # src/flet_ui/router.py
+import logging
+logger = logging.getLogger(__name__)
 
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando router.py")
+logger.debug(f"{start_time:.4f}s - Iniciando router.py")
 
 import flet as ft
 import threading
@@ -13,9 +15,6 @@ from src.settings import UPLOAD_TEMP_DIR
 
 from .theme import COLOR_WARNING, COLOR_ERROR, PADDING_L 
 from .layout import create_app_bar, _find_nav_index_for_route, icones_navegacao
-
-import logging
-logger = logging.getLogger(__name__)
 
 #from .views.login_view import create_login_view
 #from .views.signup_view import create_signup_view 
@@ -73,15 +72,36 @@ ROUTES_WITHOUT_NAV_RAIL = ["/login", "/signup"]
 
 # Função auxiliar para verificar se o usuário está autenticado
 def is_user_authenticated(page: ft.Page) -> bool:
-    """Verifica se há um token de ID válido na sessão ou client_storage."""
+    """
+    Verifica se o usuário está autenticado.
+
+    Procura por um token de ID válido na sessão da página ou no armazenamento do cliente.
+
+    Args:
+        page (ft.Page): A instância da página Flet.
+
+    Returns:
+        bool: True se o usuário estiver autenticado, False caso contrário.
+    """
     token = page.session.get("auth_id_token") or (page.client_storage.get("auth_id_token") if page.client_storage else None)
     return bool(token)
 
 def app_router(page: ft.Page, route: str):
     """
-    Gerencia a navegação e a exibição das views corretas.
+    Gerencia a navegação e a exibição das views corretas no aplicativo Flet.
+
+    Esta função é responsável por:
+    1. Limpar a pilha de views existente.
+    2. Lidar com a lógica de autenticação e redirecionamento para rotas públicas/privadas.
+    3. Construir e exibir a view apropriada para a rota solicitada.
+    4. Adicionar elementos de layout padrão (AppBar) para rotas autenticadas.
+    5. Tratar erros na criação da view, exibindo uma mensagem de erro.
+
+    Args:
+        page (ft.Page): A instância da página Flet.
+        route (str): A rota para a qual o aplicativo está navegando.
     """
-    logger.info(f"Router: Navegando para rota '{route}'")
+    logger.info(f"Navegando para rota: '{route}'")
     page.views.clear() # Limpa a pilha de views atual
 
     current_view_creator: Optional[callable] = None
@@ -101,7 +121,7 @@ def app_router(page: ft.Page, route: str):
     # --- Lógica de Autenticação e Redirecionamento ---
     authenticated = is_user_authenticated(page)
 
-    public_routes = ["/login", "/signup"] 
+    public_routes = ["/login", "/signup"]
     if not authenticated and route not in public_routes:
         logger.warning(f"Usuário não autenticado tentando acessar '{route}'. Redirecionando para /login.")
         page.go("/login") # Força o redirecionamento
@@ -176,10 +196,24 @@ def OLD_route_change_content_only(
     page: ft.Page,
     app_bar: ft.AppBar,
     navigation_rail: ft.NavigationRail,
-    content_container_for_main_layout: ft.Container, # Renomeado para clareza
+    content_container_for_main_layout: ft.Container,
     route: str
 ):
-    logger.info(f"Router (content_only): Navegando para rota '{route}'")
+    """
+    [DEPRECATED] Gerencia a navegação e a atualização do conteúdo principal da página.
+
+    Esta função é uma versão mais antiga da lógica de roteamento que atualiza
+    diretamente o conteúdo de um container na página, em vez de manipular a pilha de views.
+    Inclui lógica de autenticação e tratamento de rotas de arquivo.
+
+    Args:
+        page (ft.Page): A instância da página Flet.
+        app_bar (ft.AppBar): A barra de aplicativo principal.
+        navigation_rail (ft.NavigationRail): O componente de navegação lateral.
+        content_container_for_main_layout (ft.Container): O container onde o conteúdo principal será carregado.
+        route (str): A rota para a qual o aplicativo está navegando.
+    """
+    logger.info(f"Navegando para rota (OLD_content_only): '{route}'")
 
     upload_dir_base_url_path = f"/{Path(UPLOAD_TEMP_DIR).name}/" # Ex: "/uploads_temp/"
     if route.startswith(upload_dir_base_url_path):
@@ -285,18 +319,25 @@ def route_change_content_only(
     Esta função atualiza a UI imediatamente com um indicador de progresso e,
     em uma thread de background, carrega o módulo da view e suas dependências.
     Quando o conteúdo real está pronto, ele substitui o indicador.
+
+    Args:
+        page (ft.Page): A instância da página Flet.
+        app_bar (ft.AppBar): A barra de aplicativo principal.
+        navigation_rail (ft.NavigationRail): O componente de navegação lateral.
+        content_container_for_main_layout (ft.Container): O container onde o conteúdo principal será carregado.
+        route (str): A rota para a qual o aplicativo está navegando.
     """
-    logger.info(f"Router (content_only): Navegando para rota '{route}'")
+    logger.info(f"Navegando para rota (content_only): '{route}'")
 
     # Ignora rotas de ação de autenticação do Firebase para que o SDK JS do cliente possa lidar com elas.
     if "/__/auth/action" in route:
-        logger.info("Router: Rota de ação do Firebase detectada. Ignorando para manipulação pelo cliente.")
+        logger.debug("Rota de ação do Firebase detectada. Ignorando para manipulação pelo cliente.")
         return
     
     # --- 1. Validações e Redirecionamento ---
     upload_dir_base_url_path = f"/{Path(UPLOAD_TEMP_DIR).name}/"
     if route.startswith(upload_dir_base_url_path):
-        logger.info(f"Router: Rota de arquivo '{route}'. Deixando Flet servir o arquivo.")
+        logger.debug(f"Rota de arquivo '{route}'. Deixando Flet servir o arquivo.")
         return
 
     authenticated = is_user_authenticated(page)
@@ -313,13 +354,22 @@ def route_change_content_only(
     update_lock = page.data.get("global_update_lock")
 
     def _execute_ui_update(update_callable: Callable):
-        """Função auxiliar para executar atualizações de UI de forma segura com lock."""
+        """
+        Função auxiliar para executar atualizações de UI de forma segura com um lock.
+
+        Garante que as atualizações da UI sejam feitas de forma thread-safe,
+        utilizando um lock global se disponível.
+
+        Args:
+            update_callable (Callable): A função a ser executada para atualizar a UI.
+        """
         if update_lock:
             with update_lock:
                 update_callable()
                 page.update()
         else:
-            # Fallback se o lock não for encontrado
+            # Fallback se o lock não for encontrado (menos seguro, mas evita deadlock)
+            logger.warning("Lock de atualização da UI não encontrado. Atualizando UI sem proteção de lock.")
             update_callable()
             page.update()
 
@@ -358,7 +408,18 @@ def route_change_content_only(
 
     # --- 3. Carregamento do Conteúdo Real em Background ---
     def _load_and_set_view(page_ref: ft.Page, target_route: str):
-        logger.info(f"Thread: Iniciando carregamento do conteúdo para a rota '{target_route}'.")
+        """
+        Carrega o conteúdo da view em uma thread separada e atualiza a UI.
+
+        Esta função é executada em uma thread de background para carregar
+        dinamicamente o módulo e a função criadora da view, evitando bloquear a UI.
+        Após o carregamento, agenda a atualização da UI na thread principal.
+
+        Args:
+            page_ref (ft.Page): Referência à instância da página Flet.
+            target_route (str): A rota para a qual o conteúdo está sendo carregado.
+        """
+        logger.debug(f"Thread: Iniciando carregamento do conteúdo para a rota '{target_route}'.")
         final_content: Optional[ft.Control] = None
 
         try:
@@ -391,7 +452,7 @@ def route_change_content_only(
             Função que será executada na thread da UI para substituir o placeholder.
             Esta função é agora protegida pelo lock em _execute_ui_update.
             """
-            logger.info(f"Thread: Conteúdo para '{target_route}' carregado. Atualizando UI.")
+            logger.debug(f"Thread: Conteúdo para '{target_route}' carregado. Atualizando UI.")
             if target_route in ROUTES_WITHOUT_NAV_RAIL:
                 page_ref.controls.clear()
                 page_ref.add(final_content)
@@ -407,4 +468,4 @@ def route_change_content_only(
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado ROUTER.py em {execution_time:.4f}s")
+logger.debug(f"Carregado ROUTER.py em {execution_time:.4f}s")

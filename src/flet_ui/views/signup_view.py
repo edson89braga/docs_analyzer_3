@@ -13,23 +13,57 @@ logger = logging.getLogger(__name__)
 
 # Validadores (podem ser movidos para um utils_validators.py se usados em mais lugares)
 def email_validator(email: str) -> Optional[str]:
+    """
+    Valida o formato de um endereço de email.
+
+    Args:
+        email (str): O endereço de email a ser validado.
+
+    Returns:
+        Optional[str]: Uma mensagem de erro se o email for inválido, caso contrário, None.
+    """
     if not email: return "O email não pode estar vazio."
     if "@" not in email or "." not in email: return "Formato de email inválido."
     return None
 
 def password_validator(password: str) -> Optional[str]:
+    """
+    Valida a complexidade de uma senha.
+
+    Args:
+        password (str): A senha a ser validada.
+
+    Returns:
+        Optional[str]: Uma mensagem de erro se a senha for inválida, caso contrário, None.
+    """
     if not password: return "A senha não pode estar vazia."
     if len(password) < 6: return "A senha deve ter pelo menos 6 caracteres."
     return None
 
 def display_name_validator(name: str) -> Optional[str]:
+    """
+    Valida o nome de exibição do usuário.
+
+    Args:
+        name (str): O nome de exibição a ser validado.
+
+    Returns:
+        Optional[str]: Uma mensagem de erro se o nome for inválido, caso contrário, None.
+    """
     if not name: return "O nome de exibição não pode estar vazio."
     if len(name) < 3: return "O nome de exibição deve ter pelo menos 3 caracteres."
     return None
 
 def create_signup_view(page: ft.Page) -> ft.View:
     """
-    Cria e retorna a ft.View para a tela de criação de conta (signup).
+    Cria e retorna a ft.View para a tela de criação de conta (signup),
+    permitindo que novos usuários se registrem no sistema.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.View: A view completa da tela de criação de conta.
     """
     logger.info("Criando a view de Signup.")
     auth_manager = FbManagerAuth()
@@ -67,6 +101,14 @@ def create_signup_view(page: ft.Page) -> ft.View:
     )
 
     def handle_signup_click(e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão de criação de conta.
+        Realiza a validação dos campos, tenta criar a conta do usuário
+        e gerencia as mensagens de sucesso/erro.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info("Botão de signup clicado.")
         page.update()
 

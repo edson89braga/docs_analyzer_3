@@ -23,18 +23,44 @@ logger = logging.getLogger(__name__)
 
 # Validador de senha (reutilizado)
 def password_validator(password: str) -> Optional[str]:
+    """
+    Valida a complexidade de uma senha.
+
+    Args:
+        password (str): A senha a ser validada.
+
+    Returns:
+        Optional[str]: Uma mensagem de erro se a senha for inválida, caso contrário, None.
+    """
     if not password: return "A senha não pode estar vazia."
     if len(password) < 6: return "A senha deve ter pelo menos 6 caracteres."
     return None
 
-def display_name_validator(name: str) -> Optional[str]: # Reutilizado do signup
+def display_name_validator(name: str) -> Optional[str]:
+    """
+    Valida o nome de exibição do usuário.
+
+    Args:
+        name (str): O nome de exibição a ser validado.
+
+    Returns:
+        Optional[str]: Uma mensagem de erro se o nome for inválido, caso contrário, None.
+    """
     if not name: return "O nome de exibição não pode estar vazio."
     if len(name) < 3: return "O nome de exibição deve ter pelo menos 3 caracteres."
     return None
 
 def create_profile_view(page: ft.Page) -> ft.View:
     """
-    Cria e retorna a ft.View para a tela de perfil do usuário.
+    Cria e retorna a ft.View para a tela de perfil do usuário,
+    permitindo a visualização e edição de informações do perfil,
+    alteração de senha e exclusão de conta.
+
+    Args:
+        page (ft.Page): A página Flet atual.
+
+    Returns:
+        ft.View: A view completa da tela de perfil.
     """
     logger.info("Criando a view de Perfil.")
     auth_manager = FbManagerAuth()
@@ -55,7 +81,14 @@ def create_profile_view(page: ft.Page) -> ft.View:
             controls=[ft.Text("Erro: Usuário não autenticado. Redirecionando...")]
         )
 
-    def handle_delete_account_click(e):
+    def handle_delete_account_click(e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão "Excluir Minha Conta".
+        Exibe um diálogo de confirmação antes de prosseguir com a exclusão.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info("Botão 'Excluir Conta' clicado.")
 
         show_confirmation_dialog(
@@ -69,11 +102,17 @@ def create_profile_view(page: ft.Page) -> ft.View:
             on_confirm=confirm_delete_account
         )
 
-    def handle_change_password(e):
-        
+    def handle_change_password(e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão "Alterar Senha".
+        Valida as novas senhas e tenta alterá-las através do gerenciador de autenticação.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info("Tentando alterar senha do perfil.")
         if not new_password_field.validate(show_error=True) or \
-           not confirm_new_password_field.validate(show_error=True):
+        not confirm_new_password_field.validate(show_error=True):
             show_snackbar(page, "Por favor, corrija os erros no formulário de senha.", color=theme.COLOR_ERROR)
             return
 
@@ -115,7 +154,14 @@ def create_profile_view(page: ft.Page) -> ft.View:
             logger.error(f"Erro geral ao alterar senha: {ex}", exc_info=True)
             show_snackbar(page, "Ocorreu um erro ao tentar alterar a senha.", color=theme.COLOR_ERROR)
 
-    def handle_update_profile(e: ft.ControlEvent): # Reescrita integral
+    def handle_update_profile(e: ft.ControlEvent):
+        """
+        Manipula o evento de clique do botão "Salvar Novo Nome".
+        Valida o novo nome de exibição e tenta atualizá-lo através do gerenciador de autenticação.
+
+        Args:
+            e (ft.ControlEvent): O evento de controle que disparou a função.
+        """
         logger.info("Botão 'Salvar Novo Nome' clicado.")
         
         if not edit_display_name_field.validate(show_error=True):
@@ -169,7 +215,11 @@ def create_profile_view(page: ft.Page) -> ft.View:
             logger.error(f"Erro geral ao atualizar perfil (nome): {ex}", exc_info=True)
             show_snackbar(page, "Ocorreu um erro ao tentar atualizar o perfil.", color=theme.COLOR_ERROR)
 
-    def confirm_delete_account(): 
+    def confirm_delete_account():
+        """
+        Confirma e executa a exclusão da conta do usuário.
+        Esta função é chamada após a confirmação do diálogo de exclusão.
+        """
         logger.warning(f"Usuário {page.session.get('auth_user_id')} confirmou a exclusão da conta. Executando ação...")
         
         show_loading_overlay(page, "Excluindo conta...")

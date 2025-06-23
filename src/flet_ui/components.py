@@ -2,9 +2,12 @@
 Componentes de UI Reutilizáveis: Contém classes ou funções que criam componentes customizados ou combinações de componentes Flet.
 '''
 
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando components.py")
+logger.debug(f"{start_time:.4f}s - Iniciando components.py")
 
 import flet as ft
 from typing import List, Dict, Any, Optional, Callable, Type, Union, Tuple
@@ -12,9 +15,6 @@ import os, shutil, time, threading
 
 from src.flet_ui import theme
 from src.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
-
-import logging
-logger = logging.getLogger(__name__)
 
 ### SnackBar global: ---------------------------------------------------------------------------------------
 
@@ -31,7 +31,7 @@ def show_snackbar(page: ft.Page, message: str, color: str = theme.COLOR_INFO, du
     
     snackbar_instance = page.data.get("global_snackbar")
     if not snackbar_instance:
-        print("ERRO: Instância global do SnackBar não está definida!")
+        logger.error("ERRO: Instância global do SnackBar não está definida!")
         return # Sai se algo deu errado
     
     # Abre o SnackBar
@@ -206,7 +206,10 @@ class DataTableWrapper(ft.Column):
         self._apply_filter_and_pagination()
 
     def _get_table_columns(self) -> List[ft.DataColumn]:
-        # Retorna as colunas originais + ações
+        """
+        Retorna a lista de colunas para o ft.DataTable, incluindo colunas de ação
+        (Editar/Excluir) se configurado.
+        """
         cols = self.original_columns[:]
         if self.action_buttons:
             if self.on_edit_callback: cols.append(ft.DataColumn(ft.Text("Editar", weight=ft.FontWeight.BOLD)))
@@ -214,12 +217,18 @@ class DataTableWrapper(ft.Column):
         return cols
 
     def _get_paginated_data(self) -> List[Dict[str, Any]]:
-        # ... (como antes) ...
+        """
+        Retorna uma fatia dos dados filtrados com base na página atual e itens por página.
+        """
         start_index = (self.current_page - 1) * self.items_per_page
         end_index = start_index + self.items_per_page
         return self.filtered_data[start_index:end_index]
 
     def _update_table(self):
+        """
+        Atualiza as linhas do ft.DataTable e os controles de paginação
+        com base nos dados filtrados e paginados.
+        """
         paginated_data = self._get_paginated_data()
         total_pages = (len(self.filtered_data) + self.items_per_page - 1) // self.items_per_page
         total_pages = max(1, total_pages)
@@ -273,6 +282,10 @@ class DataTableWrapper(ft.Column):
     # --- Métodos restantes (filtros, handlers, update_data) ---
     # A busca agora usa as chaves originais fornecidas
     def _apply_filter_and_pagination(self):
+        """
+        Aplica o termo de busca aos dados, filtra-os e redefine a paginação
+        para a primeira página.
+        """
         if not self.search_term:
             self.filtered_data = self.all_data[:]
         else:
@@ -285,18 +298,28 @@ class DataTableWrapper(ft.Column):
         self.current_page = 1
         self._update_table()
 
-    def handle_search_change(self, e):
+    def handle_search_change(self, e: ft.ControlEvent):
+        """
+        Manipula a mudança no campo de busca, atualizando o termo de busca
+        e reaplicando o filtro e a paginação.
+        """
         self.search_term = e.control.value # Não força mais para maiúsculas aqui
         self._apply_filter_and_pagination()
 
     # prev_page, next_page, handle_edit_click, handle_delete_click, update_data
     # permanecem como antes
-    def prev_page(self, e):
+    def prev_page(self, e: ft.ControlEvent):
+        """
+        Navega para a página anterior da tabela, se disponível.
+        """
         if self.current_page > 1:
             self.current_page -= 1
             self._update_table()
 
-    def next_page(self, e):
+    def next_page(self, e: ft.ControlEvent):
+        """
+        Navega para a próxima página da tabela, se disponível.
+        """
         total_pages = (len(self.filtered_data) + self.items_per_page - 1) // self.items_per_page
         total_pages = max(1, total_pages)
         if self.current_page < total_pages:
@@ -338,14 +361,21 @@ class DataTableWrapper(ft.Column):
 
 ### LoadingIndicator: ---------------------------------------------------------------------------------------
 
-def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."):   
+def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."):
+    """
+    Exibe um overlay de carregamento global na página.
+
+    Args:
+        page: A instância da página Flet.
+        message: A mensagem a ser exibida no indicador de carregamento.
+    """
     loading_overlay_instance = page.data.get("global_loading_overlay")
     loading_text_instance = page.data.get("global_loading_text")
 
     if not isinstance(loading_overlay_instance, ft.Container) or \
        not isinstance(loading_text_instance, ft.Text):
         logger.error("show_loading_overlay: Instâncias do LoadingOverlay/Text não encontradas ou inválidas em page.data.")
-        print(f"ERRO INTERNO: LoadingOverlay não encontrado para a página. Mensagem: {message}")
+        logger.debug(f"ERRO INTERNO: LoadingOverlay não encontrado para a página. Mensagem: {message}")
         return
 
     loading_text_instance.value = message
@@ -356,6 +386,12 @@ def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."
     else: page.update()
 
 def hide_loading_overlay(page: ft.Page):
+    """
+    Oculta o overlay de carregamento global na página.
+
+    Args:
+        page: A instância da página Flet.
+    """
     loading_overlay_instance = page.data.get("global_loading_overlay")
     if not isinstance(loading_overlay_instance, ft.Container):
         logger.error("hide_loading_overlay: Instância do LoadingOverlay não encontrada ou inválida em page.data.")
@@ -437,6 +473,9 @@ class ValidatedTextField(ft.Column):
 
     @property
     def disabled(self) -> bool:
+        """
+        Retorna o estado de desabilitação do campo de texto.
+        """
         return self._disabled
 
     @disabled.setter
@@ -452,11 +491,19 @@ class ValidatedTextField(ft.Column):
                 else: self.page.update()
 
     def _handle_change(self, e: ft.ControlEvent):
+        """
+        Manipula o evento de mudança do TextField, executando a validação
+        e chamando o callback `on_change_validated` se o campo for válido.
+        """
         self.validate()
         if self._is_valid and self._on_change_validated:
             self._on_change_validated(self.text_field.value or "")
 
     def _handle_blur(self, e: ft.ControlEvent):
+        """
+        Manipula o evento de perda de foco (blur) do TextField,
+        executando a validação e exibindo o erro se o campo for inválido.
+        """
         self.validate(show_error=True) # Sempre mostra o erro no blur se inválido
 
     def validate(self, show_error: bool = True) -> bool:
@@ -495,6 +542,9 @@ class ValidatedTextField(ft.Column):
 
     @property
     def value(self) -> Optional[str]:
+        """
+        Retorna o valor atual do campo de texto.
+        """
         return self.text_field.value
 
     @value.setter
@@ -506,9 +556,15 @@ class ValidatedTextField(ft.Column):
 
     @property
     def is_valid(self) -> bool:
+        """
+        Retorna True se o campo de texto é válido, False caso contrário.
+        """
         return self._is_valid
 
     def focus(self):
+        """
+        Define o foco no campo de texto interno.
+        """
         self.text_field.focus()
 
 ### ManagedFilePicker: ---------------------------------------------------------------------------------------
@@ -579,7 +635,7 @@ class ManagedFilePicker:
         
         current_dialog_title = dialog_title_override or self.pick_dialog_title
 
-        logger.info(f"[DEBUG] Abrindo FilePicker: title='{current_dialog_title}', multiple={allow_multiple}, ext={current_allowed_extensions_normalized}")
+        logger.debug(f"Abrindo FilePicker: title='{current_dialog_title}', multiple={allow_multiple}, ext={current_allowed_extensions_normalized}")
         self.file_picker.pick_files(
             dialog_title=current_dialog_title,
             allow_multiple=allow_multiple,
@@ -601,9 +657,9 @@ class ManagedFilePicker:
             self._files_expected_in_current_batch = 0
             return
 
-        logger.info(f"--- ManagedFilePicker: FilePicker retornou {len(e.files)} arquivo(s) ---")
+        logger.debug(f"ManagedFilePicker: FilePicker retornou {len(e.files)} arquivo(s).")
         for i, f_obj in enumerate(e.files):
-            logger.info(f"[DEBUG]   Arquivo {i}: Nome='{f_obj.name}', Tamanho={f_obj.size}, PathCliente='{f_obj.path}'")
+            logger.debug(f"  Arquivo {i}: Nome='{f_obj.name}', Tamanho={f_obj.size}, PathCliente='{f_obj.path}'")
 
         # Limpa a fila e reseta o estado do lote ANTES de adicionar novos arquivos
         self.files_to_process_queue.clear()
@@ -614,13 +670,13 @@ class ManagedFilePicker:
         for f_obj in e.files:
             self.files_to_process_queue.append(f_obj)
 
-        logger.info(f"{len(e.files)} arquivo(s) adicionado(s) à fila (total na fila agora: {len(self.files_to_process_queue)}).")
+        logger.debug(f"{len(e.files)} arquivo(s) adicionado(s) à fila (total na fila agora: {len(self.files_to_process_queue)}).")
 
         # Inicia o processamento da fila se houver arquivos.
         # A flag is_first_call_in_batch=True garante que o primeiro arquivo do novo lote
         # seja processado imediatamente.
         if self.files_to_process_queue:
-            logger.info("[DEBUG] Iniciando processamento da fila (primeiro arquivo sem delay).")
+            logger.debug("Iniciando processamento da fila (primeiro arquivo sem delay).")
             self._process_one_file_from_queue(is_first_call_in_batch=True)
         elif self.on_batch_complete: 
             # Isso só aconteceria se e.files fosse vazio, o que já foi tratado no início.
@@ -628,7 +684,14 @@ class ManagedFilePicker:
                 self.on_batch_complete([])
 
     def _record_file_result_and_check_batch_completion(self, success: bool, message: str, file_name: Optional[str]):
-        """Chamado internamente após cada tentativa de processamento de arquivo."""
+        """
+        Registra o resultado de um arquivo processado e verifica se o lote de uploads foi concluído.
+
+        Args:
+            success: Booleano indicando se o processamento do arquivo foi bem-sucedido.
+            message: Mensagem associada ao resultado (ex: caminho do arquivo, mensagem de erro).
+            file_name: O nome do arquivo processado.
+        """
         if file_name: # Só registra se tiver nome
             self._current_batch_results.append({
                 "name": file_name,
@@ -641,7 +704,7 @@ class ManagedFilePicker:
 
         # Verifica se o lote terminou
         if len(self._current_batch_results) >= self._files_expected_in_current_batch:
-            logger.info(f"Lote de {self._files_expected_in_current_batch} arquivos processado.")
+            logger.debug(f"Lote de {self._files_expected_in_current_batch} arquivos processado.")
             if self.on_batch_complete:
                 self.on_batch_complete(list(self._current_batch_results)) # Passa uma cópia
             self._current_batch_results = [] # Reseta para o próximo lote
@@ -649,24 +712,27 @@ class ManagedFilePicker:
             
     def _process_one_file_from_queue(self, is_first_call_in_batch: bool = False):
         """
-        Processa um único arquivo da fila.
-        Aplica delay para arquivos subsequentes em um lote.
+        Processa um único arquivo da fila de uploads.
+        Aplica um pequeno delay para arquivos subsequentes em um lote para evitar sobrecarga da UI.
+
+        Args:
+            is_first_call_in_batch: Se True, processa o arquivo imediatamente sem delay.
         """
         if not self.files_to_process_queue:
-            logger.info("[DEBUG] Fila de processamento de arquivos está vazia. Nada a fazer.")
+            logger.debug("Fila de processamento de arquivos está vazia. Nada a fazer.")
             return
 
         def _execute_logic():
             # Esta função interna contém a lógica de processamento de UM arquivo
             if not self.files_to_process_queue: # Verificação dupla
-                logger.info("[DEBUG] Fila esvaziou antes da execução agendada/imediata.")
+                logger.debug("Fila esvaziou antes da execução agendada/imediata.")
                 return
 
             selected_file = self.files_to_process_queue.pop(0)
             file_name = selected_file.name
             original_file_path_on_client = selected_file.path
 
-            logger.info(f"Processando da fila: '{file_name}', Path cliente: '{original_file_path_on_client}'")
+            logger.debug(f"Processando da fila: '{file_name}', Path cliente: '{original_file_path_on_client}'")
 
             if self._is_uploading_map.get(file_name):
                 logger.warning(f"Upload de '{file_name}' já está em progresso (skip).")
@@ -688,13 +754,12 @@ class ManagedFilePicker:
                     return
 
             if original_file_path_on_client: # MODO DESKTOP
-                logger.info(f"Modo Desktop para '{file_name}'.")
+                logger.debug(f"Modo Desktop para '{file_name}'.")
                 if self.on_upload_progress: self.on_upload_progress(file_name, 1.0)
-                #self.on_individual_file_complete (True, original_file_path_on_client, file_name)
                 self._record_file_result_and_check_batch_completion(True, original_file_path_on_client, file_name)
                 self._process_one_file_from_queue() # Agenda o próximo (com delay implícito)
             else: # MODO WEB
-                logger.info(f"Modo Web. Preparando upload para: {file_name}")
+                logger.debug(f"Modo Web. Preparando upload para: {file_name}")
                 self._is_uploading_map[file_name] = True
 
                 server_target_path = os.path.join(self.upload_dir, file_name)
@@ -733,8 +798,11 @@ class ManagedFilePicker:
             threading.Timer(delay, _execute_logic).start()
 
     def _handle_picker_upload(self, e: ft.FilePickerUploadEvent):
-        """Callback para o evento on_upload do FilePicker."""
-        logger.info(f"Evento _handle_picker_upload: File='{e.file_name}', Prog={e.progress}, Err='{e.error}', Tracked={self._is_uploading_map.get(e.file_name)}")
+        """
+        Callback para o evento on_upload do FilePicker.
+        Gerencia o progresso e a conclusão do upload de arquivos.
+        """
+        logger.debug(f"Evento _handle_picker_upload: File='{e.file_name}', Prog={e.progress}, Err='{e.error}', Tracked={self._is_uploading_map.get(e.file_name)}")
 
         # Mesmo se não estiver no _is_uploading_map, se houver erro, precisamos reportar e tentar o próximo.
         if e.error:
@@ -751,13 +819,13 @@ class ManagedFilePicker:
             return
 
         if e.progress is not None and e.progress < 1.0:
-            logger.info(f"[DEBUG] Progresso do upload para '{e.file_name}': {e.progress*100:.1f}%")
+            logger.debug(f"Progresso do upload para '{e.file_name}': {e.progress*100:.1f}%")
             if self.on_upload_progress:
                 self.on_upload_progress(e.file_name, e.progress)
             return # Aguarda próximo evento
 
         # Upload para Flet concluído (progress é 1.0 ou None, sem erro)
-        logger.info(f"Upload para Flet de '{e.file_name}' parece concluído. Verificando no servidor...")
+        logger.debug(f"Upload para Flet de '{e.file_name}' parece concluído. Verificando no servidor...")
         server_final_path = os.path.join(self.upload_dir, e.file_name)
         file_found_on_server = False
         max_retries = 5
@@ -766,13 +834,13 @@ class ManagedFilePicker:
         for attempt in range(max_retries):
             if os.path.exists(server_final_path):
                 file_found_on_server = True
-                logger.info(f"Arquivo '{e.file_name}' confirmado no servidor (tentativa {attempt + 1}). Path: {server_final_path}")
+                logger.debug(f"Arquivo '{e.file_name}' confirmado no servidor (tentativa {attempt + 1}). Path: {server_final_path}")
                 break
-            logger.warning(f"Arquivo '{e.file_name}' ainda não no servidor (tentativa {attempt + 1}). Aguardando...")
+            logger.debug(f"Arquivo '{e.file_name}' ainda não no servidor (tentativa {attempt + 1}). Aguardando...")
             time.sleep(retry_delay_seconds)
 
         self._is_uploading_map.pop(e.file_name, None) # Limpa rastreamento
-        logger.info(f"[DEBUG] '{e.file_name}' removido do rastreamento _is_uploading_map.")
+        logger.debug(f"'{e.file_name}' removido do rastreamento _is_uploading_map.")
 
         if file_found_on_server:
             #self.on_individual_file_complete (True, server_final_path, e.file_name)
@@ -789,7 +857,7 @@ class ManagedFilePicker:
         """Remove um arquivo do mapa de rastreamento de uploads."""
         if file_name in self._is_uploading_map:
             del self._is_uploading_map[file_name]
-            logger.info(f"Estado de upload para '{file_name}' limpo do ManagedFilePicker.")
+            logger.debug(f"Estado de upload para '{file_name}' limpo do ManagedFilePicker.")
             
     def clear_upload_directory(self):
         """Remove todos os arquivos e subdiretórios do diretório de upload."""
@@ -806,7 +874,7 @@ class ManagedFilePicker:
                         shutil.rmtree(file_path)
                 except Exception as e:
                     logger.error(f"Falha ao remover {file_path} do diretório de upload: {e}")
-            logger.info(f"Diretório de upload '{self.upload_dir}' limpo.")
+            logger.debug(f"Diretório de upload '{self.upload_dir}' limpo.")
         except Exception as e:
             logger.error(f"Erro ao tentar limpar o diretório de upload '{self.upload_dir}': {e}")
     
@@ -814,43 +882,43 @@ class ManagedFilePicker:
     '''
     def _on_file_picker_result(self, e: ft.FilePickerResultEvent):
         if not e.files:
-            logger.warning("Seleção de arquivo cancelada (TESTE SIMPLES).")
+            logger.debug("Seleção de arquivo cancelada (TESTE SIMPLES).")
             self.on_upload_complete(False, "Seleção cancelada", None) # Notifica a view
             return
 
         selected_file = e.files[0]
         self.current_test_file_name = selected_file.name # Armazena para _on_file_picker_upload
-        logger.info(f"TESTE SIMPLES: Arquivo selecionado: {self.current_test_file_name}")
+        logger.debug(f"TESTE SIMPLES: Arquivo selecionado: {self.current_test_file_name}")
 
         if selected_file.path: # Modo Desktop
-            logger.info("TESTE SIMPLES: Modo Desktop.")
+            logger.debug("TESTE SIMPLES: Modo Desktop.")
             self.on_upload_complete(True, selected_file.path, self.current_test_file_name)
             return
         else: # Modo Web
-            logger.info("TESTE SIMPLES: Modo Web.")
+            logger.debug("TESTE SIMPLES: Modo Web.")
             try:
                 upload_url = self.page.get_upload_url(self.current_test_file_name, 300)
-                logger.info(f"TESTE SIMPLES: URL de Upload: {upload_url}")
+                logger.debug(f"TESTE SIMPLES: URL de Upload: {upload_url}")
                 if not upload_url:
                     self.on_upload_complete(False, "URL de upload vazia (TESTE SIMPLES)", self.current_test_file_name)
                     return
 
                 # Sem snackbar, sem timer, chamada direta
-                logger.info("TESTE SIMPLES: Chamando file_picker.upload() diretamente...")
+                logger.debug("TESTE SIMPLES: Chamando file_picker.upload() diretamente...")
                 self.file_picker.upload([
                     ft.FilePickerUploadFile(name=self.current_test_file_name, upload_url=upload_url)
                 ])
-                logger.info("TESTE SIMPLES: Comando de upload enviado ao Flet.")
+                logger.debug("TESTE SIMPLES: Comando de upload enviado ao Flet.")
                 # Adicionando um update aqui para ver se ajuda
                 self.page.update()
-                logger.info("TESTE SIMPLES: self.page.update() chamado após upload.")
+                logger.debug("TESTE SIMPLES: self.page.update() chamado após upload.")
 
             except Exception as ex:
                 logger.error(f"TESTE SIMPLES: Erro em _on_file_picker_result: {ex}", exc_info=True)
                 self.on_upload_complete(False, f"Erro: {ex}", self.current_test_file_name)
 
     def _on_file_picker_upload(self, e: ft.FilePickerUploadEvent):
-        logger.critical(f"TESTE SIMPLES: _on_file_picker_upload ACIONADO! File: {e.file_name}, Prog: {e.progress}, Err: {e.error}")
+        logger.debug(f"TESTE SIMPLES: _on_file_picker_upload ACIONADO! File: {e.file_name}, Prog: {e.progress}, Err: {e.error}")
         
         # Lógica mínima para chamar on_upload_complete
         if e.error:
@@ -870,7 +938,7 @@ class ManagedFilePicker:
         for i in range(3): # Tenta por ~1 segundo
             if os.path.exists(server_final_path):
                 file_exists_on_server = True
-                logger.info(f"TESTE SIMPLES: Arquivo {e.file_name} encontrado no servidor.")
+                logger.debug(f"TESTE SIMPLES: Arquivo {e.file_name} encontrado no servidor.")
                 break
             time.sleep(0.3)
         
@@ -894,12 +962,12 @@ def open_nested_dialog(
     chama uma função para abrir um diálogo filho.
     Útil para transições suaves entre diálogos aninhados.
     """
-    logger.info(f"[DEBUG] Fechando diálogo pai (Título: {parent_dialog.title.value if isinstance(parent_dialog.title, ft.Text) else 'N/A'}) para abrir filho.")
+    logger.debug(f"Fechando diálogo pai (Título: {parent_dialog.title.value if isinstance(parent_dialog.title, ft.Text) else 'N/A'}) para abrir filho.")
     parent_dialog.open = False
     page.update(parent_dialog) # Atualiza só o pai para fechar
 
     def _open_child():
-        logger.info("[DEBUG] Delay concluído. Abrindo diálogo filho.")
+        logger.debug("Delay concluído. Abrindo diálogo filho.")
         child_dialog_open_callable() # Esta função deve conter child.open=True e page.update()
 
     threading.Timer(delay, _open_child).start()
@@ -925,18 +993,18 @@ def reopen_parent_dialog(
         logic_before_reopen_callable: Função opcional a ser executada ANTES de reabrir o pai.
         delay: Pequeno atraso antes de tentar reabrir o pai.
     """
-    logger.info(f"[DEBUG] Agendando reabertura do diálogo pai (Título: {parent_dialog.title.value if isinstance(parent_dialog.title, ft.Text) else 'N/A'}).")
+    logger.debug(f"Agendando reabertura do diálogo pai (Título: {parent_dialog.title.value if isinstance(parent_dialog.title, ft.Text) else 'N/A'}).")
 
     def _reopen_parent_action():
         if logic_before_reopen_callable:
-            logger.info("[DEBUG] Executando lógica customizada antes de reabrir o diálogo pai.")
+            logger.debug("Executando lógica customizada antes de reabrir o diálogo pai.")
             try:
                 logic_before_reopen_callable()
             except Exception as e:
                 logger.error(f"Erro na 'logic_before_reopen_callable' ao reabrir diálogo pai: {e}", exc_info=True)
                 # Decide se continua ou aborta. Por segurança, continua a reabrir.
-
-        logger.info(f"[DEBUG] Delay concluído. Reabrindo diálogo pai.")
+ 
+        logger.debug(f"Delay concluído. Reabrindo diálogo pai.")
         if parent_dialog not in page.overlay: # Garante que está no overlay
              page.overlay.append(parent_dialog)
 
@@ -1079,7 +1147,13 @@ class SectionCollapsible(ft.Column):
             self.content_control # Adiciona diretamente, visibilidade controla
         ]
 
-    def _toggle_section(self, e: Optional[ft.ControlEvent] = None): # e pode ser None se chamado programaticamente
+    def _toggle_section(self, e: Optional[ft.ControlEvent] = None):
+        """
+        Alterna o estado de expansão/recolhimento da seção.
+
+        Args:
+            e: Evento de controle (opcional, se chamado programaticamente).
+        """
         self._is_expanded = not self._is_expanded
         self.toggle_icon.icon = ft.Icons.EXPAND_LESS if self._is_expanded else ft.Icons.EXPAND_MORE
         self.content_control.visible = self._is_expanded
@@ -1095,6 +1169,9 @@ class SectionCollapsible(ft.Column):
 
     @property
     def is_expanded(self) -> bool:
+        """
+        Retorna True se a seção está expandida, False caso contrário.
+        """
         return self._is_expanded
 
     @is_expanded.setter
@@ -1127,6 +1204,13 @@ class KeyValueDisplay(ft.Column):
         self._build_display(data, value_selectable)
 
     def _build_display(self, data: Dict[str, Any], value_selectable: bool):
+        """
+        Constrói os controles de exibição de chave-valor com base nos dados fornecidos.
+
+        Args:
+            data: Dicionário de chave-valor a ser exibido.
+            value_selectable: Se o texto do valor deve ser selecionável.
+        """
         self.controls.clear()
         for key, value in data.items():
             self.controls.append(
@@ -1330,6 +1414,12 @@ class SearchableDropdown(ft.Column):
         return height
 
     def _populate_filtered_list(self, options_to_show: List[ft.dropdown.Option]):
+        """
+        Popula a lista de opções filtradas no dropdown.
+
+        Args:
+            options_to_show: Lista de opções (ft.dropdown.Option) a serem exibidas.
+        """
         self.filtered_options_list.controls.clear()
         if not options_to_show:
             self.filtered_options_list.controls.append(
@@ -1357,6 +1447,13 @@ class SearchableDropdown(ft.Column):
             self.filtered_options_list.update()
 
     def _on_search_text_change(self, e: ft.ControlEvent):
+        """
+        Manipula a mudança no texto do campo de busca, filtrando as opções
+        e atualizando a lista.
+
+        Args:
+            e: Evento de controle.
+        """
         search_term = e.control.value.lower()
         if not self._is_open:
             self._open_dropdown_list() # Abre se estava fechado e começou a digitar
@@ -1382,6 +1479,12 @@ class SearchableDropdown(ft.Column):
 
 
     def _on_option_selected(self, e: ft.ControlEvent):
+        """
+        Manipula a seleção de uma opção na lista do dropdown.
+
+        Args:
+            e: Evento de controle.
+        """
         selected_opt: ft.dropdown.Option = e.control.data
         self._selected_option = selected_opt
         self.text_field.value = selected_opt.text
@@ -1398,6 +1501,12 @@ class SearchableDropdown(ft.Column):
 
 
     def _open_dropdown_list(self, e: Optional[ft.ControlEvent] = None):
+        """
+        Abre a lista de opções do dropdown, adicionando-a ao overlay da página.
+
+        Args:
+            e: Evento de controle (opcional).
+        """
         if self._is_open: return
         self._is_open = True
         # self.text_field.read_only = False # Garante que pode digitar
@@ -1451,6 +1560,9 @@ class SearchableDropdown(ft.Column):
             else: self.page.update()
 
     def _close_dropdown_list(self):
+        """
+        Fecha a lista de opções do dropdown, removendo-a do overlay da página.
+        """
         if not self._is_open: return
         self._is_open = False
         self.dropdown_container.visible = False
@@ -1468,6 +1580,12 @@ class SearchableDropdown(ft.Column):
             else: self.page.update()
 
     def _toggle_dropdown_list(self, e: ft.ControlEvent):
+        """
+        Alterna a visibilidade da lista de opções do dropdown.
+
+        Args:
+            e: Evento de controle.
+        """
         if self._is_open:
             self._close_dropdown_list()
         else:
@@ -1475,12 +1593,13 @@ class SearchableDropdown(ft.Column):
             self.text_field.focus() # Foca para permitir digitação
 
     def _on_textfield_blur(self, e: ft.ControlEvent):
-        # Fecha o dropdown se o foco sair do textfield E não for para o dropdown em si.
-        # O Flet não nos dá o 'relatedTarget' do evento blur como no JS.
-        # Uma forma de lidar com isso é fechar após um pequeno delay,
-        # e se uma opção for clicada nesse meio tempo, o clique cancela o fechamento
-        # ou o fechamento ocorre mas a seleção já foi processada.
-        # Solução mais simples: se o texto não corresponder a uma opção selecionada, limpe.
+        """
+        Manipula o evento de perda de foco do campo de texto.
+        Fecha o dropdown quando o campo perde o foco.
+
+        Args:
+            e: Evento de controle.
+        """
         if self._is_open:
             # Usar um pequeno delay para permitir cliques na lista de opções
             # threading.Timer(0.15, self._close_dropdown_list_if_not_focused_on_list).start()
@@ -1504,7 +1623,9 @@ class SearchableDropdown(ft.Column):
 
     @property
     def value(self) -> Optional[str]:
-        """Retorna a CHAVE (key) da opção selecionada."""
+        """
+        Retorna a CHAVE (key) da opção selecionada.
+        """
         return self._selected_option.key if self._selected_option else None
 
     @value.setter
@@ -1584,6 +1705,9 @@ class ProgressSteps(ft.Row):
         self._build_steps()
 
     def _build_steps(self):
+        """
+        Constrói a representação visual dos passos do progresso.
+        """
         self.controls.clear()
         for i, step_name in enumerate(self.steps_data):
             is_completed = i < self._current_step_index
@@ -1644,6 +1768,12 @@ class ProgressSteps(ft.Row):
             else: self.page.update()
 
     def _handle_step_click(self, e: ft.ControlEvent):
+        """
+        Manipula o clique em um passo, chamando o callback on_step_change.
+
+        Args:
+            e: Evento de controle.
+        """
         clicked_index = e.control.data["index"]
         clicked_name = e.control.data["name"]
 
@@ -1661,6 +1791,9 @@ class ProgressSteps(ft.Row):
 
     @property
     def current_step_index(self) -> int:
+        """
+        Retorna o índice do passo atual.
+        """
         return self._current_step_index
 
     @current_step_index.setter
@@ -1774,26 +1907,32 @@ class ManagedAlertDialog(ft.AlertDialog):
         )]
 
     def _trigger_close_with_timer(self):
-        """Fecha visualmente e agenda _finish_close_action."""
+        """
+        Inicia o processo de fechamento do diálogo, fechando-o visualmente
+        e agendando a execução de `_finish_close_action` após um pequeno delay.
+        """
         if self.open:
             self.open = False
             self.page_ref.update(self) # Atualiza apenas o diálogo para processar o open=False
-            logger.info(f"[DEBUG] ManagedAlertDialog: Fechamento visual iniciado. Agendando finalização.")
+            logger.debug(f"ManagedAlertDialog: Fechamento visual iniciado. Agendando finalização.")
             threading.Timer(self.close_delay_seconds, self._finish_close_action).start()
         else:
-             logger.info("[DEBUG] ManagedAlertDialog: _trigger_close_with_timer chamado, mas diálogo já estava fechado.")
+             logger.debug("ManagedAlertDialog: _trigger_close_with_timer chamado, mas diálogo já estava fechado.")
 
 
     def _finish_close_action(self):
-        """Executado pelo timer após o fechamento visual."""
-        logger.info(f"[DEBUG] ManagedAlertDialog: Timer finalizado.")
+        """
+        Executado por um timer após o fechamento visual do diálogo.
+        Remove o diálogo do overlay e executa o callback `on_dialog_fully_closed`.
+        """
+        logger.debug(f"ManagedAlertDialog: Timer finalizado.")
         if self in self.page_ref.overlay: # Remove do overlay
             self.page_ref.overlay.remove(self)
             # Não chamar page_ref.update() aqui se on_dialog_fully_closed vai fazer (via snackbar etc.)
 
         if self.on_dialog_fully_closed:
             try:
-                logger.info(f"[DEBUG] ManagedAlertDialog: Chamando on_dialog_fully_closed com dados: {self._result_data_for_callback}")
+                logger.debug(f"ManagedAlertDialog: Chamando on_dialog_fully_closed com dados: {self._result_data_for_callback}")
                 self.on_dialog_fully_closed(self._result_data_for_callback)
             except Exception as e:
                 logger.error(f"ManagedAlertDialog: Erro ao executar on_dialog_fully_closed: {e}", exc_info=True)
@@ -1815,7 +1954,7 @@ class ManagedAlertDialog(ft.AlertDialog):
         if update_lock:
             with update_lock: self.page_ref.update()
         else: self.page_ref.update()
-        logger.info(f"ManagedAlertDialog '{self.title.value if isinstance(self.title, ft.Text) else ''}' ABERTO.")
+        logger.debug(f"ManagedAlertDialog '{self.title.value if isinstance(self.title, ft.Text) else ''}' ABERTO.")
 
     # Método para fechar programaticamente sem passar por um botão (ex: de um callback interno)
     def close_programmatically(self, result_data_for_callback: Any = None):
@@ -1823,14 +1962,24 @@ class ManagedAlertDialog(ft.AlertDialog):
         self._trigger_close_with_timer()
 
 
-def wrapper_cotainer_1(int_content):
+def wrapper_cotainer_1(int_content: ft.Control) -> ft.Container:
+    """
+    Cria um container wrapper com layout padronizado para conteúdo interno,
+    incluindo centralização, padding e scroll.
+
+    Args:
+        int_content: O controle Flet a ser envolvido.
+
+    Returns:
+        Um ft.Container configurado.
+    """
     return ft.Container(
             content=ft.Column( # Container para centralizar e aplicar padding
                     [ ft.Container(
-                            content=int_content, 
+                            content=int_content,
                             padding=ft.padding.only(right=15), #padding.right para distanciar o scroll
                             alignment=ft.alignment.top_center,
-                            expand=True, 
+                            expand=True,
 
                         ) 
                     ],   
@@ -1895,7 +2044,7 @@ class FileListManager:
             self.status_extraction_text.value = ""
         
         for k in keys_to_clear:
-            if self.page.session.contains_key(k): 
+            if self.page.session.contains_key(k):
                 self.page.session.remove(k)
         _logger.debug("Caches de resultados de análise (combinada) limpos.")
         
@@ -1903,10 +2052,18 @@ class FileListManager:
         self.status_text_analysis.value = ""
         self.status_llm_text.value = ""
         self.result_textfield.value = ""
-        # CHECK: A atualização da página será feita pelo chamador ou em um ponto consolidado
+        # A atualização da página será feita pelo chamador ou em um ponto consolidado
         self.page.update(self.status_extraction_text, self.status_text_analysis, self.status_llm_text, self.result_textfield, self.text_reordenar)
 
     def update_selected_files_display(self, files_ordered: Optional[List[Dict[str, Any]]] = None):
+        """
+        Atualiza a exibição da lista de arquivos PDF selecionados, incluindo
+        funcionalidades de reordenação e remoção.
+
+        Args:
+            files_ordered: Uma lista opcional de dicionários de arquivos para exibir.
+                           Se None, tenta obter da sessão.
+        """
         self.selected_files_list_view.controls.clear()
         _files = files_ordered or self.page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED) or []
 
@@ -1978,7 +2135,7 @@ class FileListManager:
                     # on_move=None, # Removido ou pode ser usado para outros feedbacks visuais durante o arraste sobre o alvo
                 )
                  
-                _logger.info(f"VIEW_DEBUG: Criado file_name_text com value: '{file_name_text.value}' para idx {idx}")
+                _logger.debug(f"Criado file_name_text com value: '{file_name_text.value}' para idx {idx}")
                 self.selected_files_list_view.controls.append(drop_target_item)
 
             if len(_files) == 1: 
@@ -1995,7 +2152,16 @@ class FileListManager:
         # A atualização da página (page.update) será feita de forma mais global
         # self.page.update(self.current_batch_name_text, self.selected_files_list_view, self.analyze_button)
 
-    def _create_drag_handlers_for_item(self, target_item_idx: int) -> Tuple[callable, callable, callable]:
+    def _create_drag_handlers_for_item(self, target_item_idx: int) -> Tuple[Callable, Callable, Callable]:
+        """
+        Cria os manipuladores de eventos de arrastar e soltar para um item da lista de arquivos.
+
+        Args:
+            target_item_idx: O índice do item na lista que será o alvo do drop.
+
+        Returns:
+            Uma tupla contendo as funções on_will_accept, on_accept e on_leave.
+        """
         def on_drag_will_accept(e: ft.ControlEvent):
             e.control.content.border = ft.border.all(2, ft.colors.PINK_ACCENT_200 if e.data == "true" else ft.colors.BLACK26)
             e.control.update()
@@ -2042,11 +2208,18 @@ class FileListManager:
         return on_drag_will_accept, on_drag_accept_handler, on_drag_leave
 
     def move_file_in_list(self, index: int, direction: int):
+        """
+        Move um arquivo na lista de arquivos selecionados.
+
+        Args:
+            index: O índice atual do arquivo a ser movido.
+            direction: A direção do movimento (-1 para cima, 1 para baixo).
+        """
         current_files = list(self.page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED) or [])
         
         # if not (0 <= index < len(current_files)): return
         new_index = index + direction
-        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)): 
+        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)):
             return
         
         current_files.insert(new_index, current_files.pop(index))
@@ -2056,12 +2229,18 @@ class FileListManager:
         self.page.update(self.current_batch_name_text, self.selected_files_list_view) # Atualiza a UI aqui
 
     def remove_file_from_list(self, index: int):
+        """
+        Remove um arquivo da lista de arquivos selecionados.
+
+        Args:
+            index: O índice do arquivo a ser removido.
+        """
         current_files = list(self.page.session.get(KEY_SESSION_CURRENT_PDF_FILES_ORDERED) or [])
         
         if not (0 <= index < len(current_files)): return
         
         removed_file_info = current_files.pop(index)
-        removed_file_name = removed_file_info['name'] 
+        removed_file_name = removed_file_info['name']
 
         self.page.session.set(KEY_SESSION_CURRENT_PDF_FILES_ORDERED, current_files)
         
@@ -2106,6 +2285,9 @@ class CompactKeyValueTable(ft.Column):
         self._build_table()
 
     def _build_table(self):
+        """
+        Constrói a estrutura da tabela com base nos dados fornecidos.
+        """
         self.controls.clear()
         for key_text, value_obj in self.data:
             key_control = ft.Container(
@@ -2236,4 +2418,4 @@ class ReadOnlySelectableTextField(ft.Column):
             self.text_field.update()
 
 execution_time = perf_counter() - start_time
-print(f"Carregado COMPONENTS.py em {execution_time:.4f}s")
+logger.debug(f"Carregado COMPONENTS.py em {execution_time:.4f}s")
