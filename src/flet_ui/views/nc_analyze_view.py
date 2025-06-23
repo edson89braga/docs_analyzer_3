@@ -16,7 +16,7 @@ from enum import Enum
 from src.flet_ui.components import (
     show_snackbar, show_loading_overlay, hide_loading_overlay,
     ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable,
-    CardWithHeader, show_confirmation_dialog 
+    CardWithHeader, show_confirmation_dialog, ReadOnlySelectableTextField
 )
 from src.flet_ui import theme
 
@@ -298,7 +298,7 @@ class AnalyzePDFViewContent(ft.Column):
             border=ft.border.all(1, theme.COLOR_WARNING),
             bgcolor=ft.colors.with_opacity(0.05, theme.COLOR_WARNING),
             visible=False,  # Começa invisível
-            margin=ft.margin.only(right=12)
+            #margin=ft.margin.only(right=0)
         )
 
         self.gui_controls[CTL_LLM_STATUS_INFO] = ft.Text("Aguardando para exibir os resultados...", italic=True, size=14, expand=True)
@@ -440,10 +440,11 @@ class AnalyzePDFViewContent(ft.Column):
             content_value_cleaned = content_value.replace("\n{input_text}\n", "[CONTEÚDO_DO_PDF_é_INSERIDO_AQUI]")
 
             prompt_text_fields.append(
-                ft.TextField(
+                #ft.TextField(
+                ReadOnlySelectableTextField(
                     label=name_str,
                     value=content_value_cleaned,
-                    multiline=True, read_only=False,
+                    multiline=True, # read_only=False,
                     min_lines=2, max_lines=10, 
                     border=ft.InputBorder.OUTLINE,
                     text_size=12, # Tamanho de texto menor para acomodar mais
@@ -1512,7 +1513,7 @@ class InternalAnalysisController:
             if vectorization_model == "text-embedding-3-small":
                 if not decrypted_api_key: 
                     decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
-                    assert decrypted_api_key
+                    assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
 
                 loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
                 ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
@@ -1680,7 +1681,7 @@ class InternalAnalysisController:
                 _logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
             else:
                 decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
-                assert decrypted_api_key
+                assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
 
             loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
 
@@ -2273,6 +2274,13 @@ class SettingsDrawerManager:
 
     def _handle_setting_change_drawer(self, e: Optional[ft.ControlEvent] = None):
         """Chamado quando qualquer configuração no drawer é alterada pelo usuário."""
+        if not self.page.session.get("is_admin"):
+            show_snackbar(self.page, "Alteração de configurações restrita à usuários administradores.", color=theme.COLOR_WARNING)
+            # Recarrega os valores da sessão para reverter a alteração na UI
+            current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
+            self._load_settings_into_drawer_controls(current_settings)
+            return
+        
         if e:
              _logger.debug(f"SettingsDrawerManager: Configuração alterada - Controle: {type(e.control).__name__}, Valor: {e.control.value}")
 
@@ -2296,6 +2304,12 @@ class SettingsDrawerManager:
 
     def _handle_provider_change_drawer(self, e: ft.ControlEvent):
         """Handler para a mudança de provedor LLM no dropdown do drawer."""
+        if not self.page.session.get("is_admin"):
+            show_snackbar(self.page, "Alteração de configurações restrita à usuários administradores.", color=theme.COLOR_WARNING)
+            # Recarrega os valores da sessão para reverter a alteração na UI
+            current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
+            self._load_settings_into_drawer_controls(current_settings)
+            return
         selected_provider_system_name = e.control.value
         self._populate_models_for_selected_provider(selected_provider_system_name, new_provider_selected=True)
         self._handle_setting_change_drawer(e)

@@ -3,6 +3,7 @@
 import flet as ft
 from typing import Optional
 
+from src.settings import ALLOWED_EMAIL_DOMAINS
 from src.services.firebase_client import FbManagerAuth
 from src.flet_ui.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField
 from src.flet_ui import theme
@@ -74,7 +75,32 @@ def create_signup_view(page: ft.Page) -> ft.View:
         is_password_valid = password_field.validate(show_error=True)
         is_confirm_password_valid = confirm_password_field.validate(show_error=True) # Valida se coincide
 
-        if not all([is_display_name_valid, is_email_valid, is_password_valid, is_confirm_password_valid]):
+        # Se a validação básica do formato de email já falhou, não prossiga.
+        if not is_email_valid:
+            show_snackbar(page, "Por favor, corrija os erros no formulário.", color=theme.COLOR_ERROR)
+            return
+        
+        email = email_field.value or ""
+
+        try:
+            domain = email.split('@')[1]
+            if domain.lower() not in [d.lower() for d in ALLOWED_EMAIL_DOMAINS]:
+                error_msg = f"Cadastro permitido apenas para emails do(s) domínio(s): {', '.join(ALLOWED_EMAIL_DOMAINS)}"
+                show_snackbar(page, error_msg, color=theme.COLOR_ERROR, duration=7000)
+                email_field.text_field.error_text = "Domínio de email não permitido."
+                email_field.text_field.update()
+                _logger.warning(f"Tentativa de cadastro com domínio não permitido: {domain}")
+                return
+            else:
+                # Limpa o erro de domínio se o usuário corrigiu
+                email_field.text_field.error_text = None
+                email_field.text_field.update()
+        except IndexError:
+            # O validador de formato de email já deve pegar isso, mas é uma segurança extra.
+            show_snackbar(page, "Formato de email inválido.", color=theme.COLOR_ERROR)
+            return
+        
+        if not all([is_display_name_valid, is_password_valid, is_confirm_password_valid]):
             show_snackbar(page, "Por favor, corrija os erros no formulário.", color=theme.COLOR_ERROR)
             _logger.warning("Tentativa de signup com formulário inválido.")
             return
@@ -90,26 +116,42 @@ def create_signup_view(page: ft.Page) -> ft.View:
             creation_response = auth_manager.create_user(email, password, display_name)
             hide_loading_overlay(page)
 
-            if creation_response and creation_response.get("localId"): # Sucesso se tem localId
+            if creation_response and creation_response.get("localId"): # Sucesso
                 _logger.info(f"Conta criada com sucesso para {email}. User ID: {creation_response['localId']}")
-                show_snackbar(page, "Conta criada com sucesso! Você será redirecionado para o login.", color=theme.COLOR_SUCCESS, duration=5000)
-                # Opcional: Fazer login automático aqui e ir para /home,
-                # ou redirecionar para /login para o usuário entrar.
-                # Redirecionar para login é mais simples por agora.
+                success_message = (
+                    "Conta criada com sucesso! Um email de verificação foi enviado para "
+                    f"{email}. Verifique sua caixa de entrada para ativar a conta."
+                )
+                show_snackbar(page, success_message, color=theme.COLOR_SUCCESS, duration=12000)
                 page.go("/login")
-            else:
-                error_message = "Não foi possível criar a conta."
-                if isinstance(creation_response, dict) and creation_response.get("error"):
-                    api_error = creation_response["error"].get("message", "ERRO_DESCONHECIDO_API")
-                    if api_error == "EMAIL_EXISTS":
-                        error_message = "Este email já está em uso."
-                    elif api_error.startswith("WEAK_PASSWORD"):
-                        error_message = "A senha é muito fraca (mínimo 6 caracteres)."
-                    else:
-                        error_message = f"Erro ao criar conta: {api_error}"
+            
+            elif creation_response and creation_response.get("error"): # Falha da API Firebase
+                api_error_code = creation_response.get("error", "UNKNOWN_ERROR")
                 
-                _logger.warning(f"Falha na criação da conta para {email}. Erro: {error_message}")
+                # Mapeia códigos de erro da API para mensagens amigáveis
+                if api_error_code == "EMAIL_EXISTS":
+                    error_message = "Este email já está em uso por outra conta."
+                elif api_error_code.startswith("WEAK_PASSWORD"):
+                    error_message = "A senha é muito fraca. Tente uma senha mais forte."
+                elif api_error_code == "INVALID_EMAIL":
+                    error_message = "O formato do email fornecido é inválido."
+                else:
+                    error_message = "Não foi possível criar a conta. Por favor, tente novamente."
+                    _logger.error(f"Erro não mapeado da API de signup: {api_error_code}")
+                
+                _logger.warning(f"Falha na criação da conta para {email}. Erro: {api_error_code}")
                 show_snackbar(page, error_message, color=theme.COLOR_ERROR, duration=7000)
+
+            elif creation_response and creation_response.get("error_type"): # Falha de conexão/requisição
+                error_type = creation_response.get("error_type")
+                if error_type == "CONNECTION_ERROR":
+                    show_snackbar(page, "Erro de conexão. Verifique sua internet/proxy e tente novamente.", color=theme.COLOR_ERROR, duration=7000)
+                else:
+                    show_snackbar(page, "Ocorreu um erro de comunicação. Tente novamente mais tarde.", color=theme.COLOR_ERROR, duration=7000)
+
+            else: # Outro tipo de falha
+                show_snackbar(page, "Não foi possível criar a conta. Resposta inesperada do servidor.", color=theme.COLOR_ERROR, duration=7000)
+                _logger.error(f"Resposta inesperada ao criar usuário: {creation_response}")
 
         except Exception as ex:
             hide_loading_overlay(page)

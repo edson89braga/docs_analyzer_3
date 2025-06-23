@@ -1,8 +1,10 @@
 # src/flet_ui/views/login_view.py
 
 import flet as ft
-import time, threading
+import time, threading, jwt
 from typing import Optional, Dict, Any
+
+from src.settings import PATH_IMAGE_LOGO_DEPARTAMENTO, APP_TITLE, APP_VERSION
 
 from src.services.firebase_client import FbManagerAuth # Ajuste o caminho se FbManagerAuth estiver em outro lugar
 from src.flet_ui.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField
@@ -60,6 +62,15 @@ def create_login_view(page: ft.Page) -> ft.View:
 
     remember_me_checkbox = ft.Checkbox(label="Lembrar de mim", value=True) # Default True
 
+    def _resend_verification_email(id_token: str):
+        show_loading_overlay(page, "Reenviando email de verificação...")
+        success = auth_manager.send_verification_email(id_token)
+        hide_loading_overlay(page)
+        if success:
+            show_snackbar(page, "Novo email de verificação enviado. Verifique sua caixa de entrada.", color=theme.COLOR_SUCCESS, duration=8000)
+        else:
+            show_snackbar(page, "Não foi possível reenviar o email de verificação. Tente novamente mais tarde.", color=theme.COLOR_ERROR)
+
     # --- Função de Callback para o Botão de Login ---
     def handle_login_click(e: ft.ControlEvent):
         _logger.info("Botão de login clicado.")
@@ -82,8 +93,61 @@ def create_login_view(page: ft.Page) -> ft.View:
         try:
             auth_response: Optional[Dict[str, Any]] = auth_manager.authenticate_user_get_all_data(email, password)
             hide_loading_overlay(page)
-
+            _logger.info(f"[DEBUG] Resposta da autenticação: {auth_response}")
             if auth_response and auth_response.get("idToken") and auth_response.get("localId"):
+                
+                #is_email_verified = auth_response.get("emailVerified", False)
+                id_token = auth_response["idToken"]
+                
+                decoded_and_verified_token = auth_manager.verify_id_token(id_token)
+                if not decoded_and_verified_token:
+                    _logger.error("Falha na verificação da assinatura do token de autenticação. Login abortado por segurança.")
+                    show_snackbar(page, "Falha na verificação de segurança da sessão. Tente novamente.", color=theme.COLOR_ERROR)
+                    return # Bloqueia o login
+                
+                is_email_verified = decoded_and_verified_token.get("email_verified", False)
+                
+                is_admin = decoded_and_verified_token.get("admin", False)
+                _logger.info(f"Status de Administrador do usuário verificado: {is_admin}")
+
+                #try:
+                #    # Decodifica o JWT sem verificar a assinatura (apenas para extrair dados)
+                #    # Em produção, você pode querer verificar a assinatura
+                #    decoded_token = jwt.decode(id_token, options={"verify_signature": False})
+                #    is_email_verified = decoded_token.get("email_verified", False)
+                #    _logger.info(f"Email verificado (do token JWT): {is_email_verified}")
+                #except Exception as jwt_error:
+                #    _logger.error(f"Erro ao decodificar token JWT: {jwt_error}")
+                #    # Fallback: usar o valor da resposta da API (se disponível)
+                #    is_email_verified = auth_response.get("emailVerified", False)
+
+                if not is_email_verified:
+                    _logger.warning(f"Tentativa de login bloqueada para {email}: email não verificado.")
+
+                    # Usa o SnackBar global de forma mais avançada
+                    snackbar_instance = page.data.get("global_snackbar")
+                    if snackbar_instance:
+                        snackbar_instance.content = ft.Text(
+                            "Sua conta ainda não foi ativada. Verifique seu email para continuar."
+                        )
+                        snackbar_instance.bgcolor = theme.COLOR_WARNING
+                        snackbar_instance.duration = 8000
+                        # Adiciona o botão de ação
+                        id_token_for_resend = auth_response.get("idToken")
+                        if id_token_for_resend:
+                            snackbar_instance.action = "REENVIAR EMAIL"
+                            snackbar_instance.on_action = lambda _: _resend_verification_email(id_token_for_resend)
+                        else:
+                            snackbar_instance.action = None
+                            snackbar_instance.on_action = None
+
+                        snackbar_instance.open = True
+                        page.update()
+                    else: # Fallback se o snackbar global não for encontrado
+                        show_snackbar(page, "Sua conta ainda não foi ativada. Verifique seu email.", color=theme.COLOR_WARNING, duration=12000)
+
+                    return # Bloqueia o login
+            
                 id_token = auth_response["idToken"]
                 user_id = auth_response["localId"]
                 refresh_token = auth_response.get("refreshToken") 
@@ -99,7 +163,8 @@ def create_login_view(page: ft.Page) -> ft.View:
                 # Limpar dados de autenticação antigos antes de definir novos
                 auth_keys_to_clear = [
                     "auth_id_token", "auth_user_id", "auth_user_email", 
-                    "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at"
+                    "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at",
+                    "is_admin"
                 ]
 
                 if page.client_storage:
@@ -113,6 +178,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                 _logger.info("Armazenando token e ID do usuário na sessão Flet.")
                 page.session.set("auth_id_token", id_token)
                 page.session.set("auth_user_id", user_id)
+                page.session.set("is_admin", is_admin)                
                 if refresh_token: 
                     page.session.set("auth_refresh_token", refresh_token) 
                 page.session.set("auth_id_token_expires_at", id_token_expires_at)
@@ -125,6 +191,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                     _logger.info("Opção 'Lembrar de mim' ativa. Armazenando também no client_storage.")
                     page.client_storage.set("auth_id_token", id_token)
                     page.client_storage.set("auth_user_id", user_id)
+                    page.client_storage.set("is_admin", is_admin)
                     if refresh_token: 
                         page.client_storage.set("auth_refresh_token", refresh_token)
                     page.client_storage.set("auth_id_token_expires_at", id_token_expires_at)
@@ -222,6 +289,49 @@ def create_login_view(page: ft.Page) -> ft.View:
         on_click=handle_create_account_click
     )
 
+    # --- Seção Superior: Identidade Visual (reutilizada da home_view) ---
+    try:
+        department_logo = ft.Image(
+            src=PATH_IMAGE_LOGO_DEPARTAMENTO, width=150, height=150,
+            fit=ft.ImageFit.CONTAIN,
+        )
+    except Exception:
+        department_logo = ft.Container()
+
+    welcome_title = ft.Text(
+        f"Bem-vindo à {APP_TITLE}",
+        style=ft.TextThemeStyle.HEADLINE_LARGE, text_align=ft.TextAlign.CENTER,
+        weight=ft.FontWeight.BOLD, color=theme.PRIMARY
+    )
+    intro_text = ft.Text(
+        "Plataforma de Agentes de IA especializados e Chats inteligentes\n"
+        "para análise de documentos e procedimentos da Polícia Federal.\n",
+        style=ft.TextThemeStyle.TITLE_MEDIUM, text_align=ft.TextAlign.CENTER,
+        color=ft.colors.with_opacity(0.85, ft.colors.ON_SURFACE)
+    )
+
+    version_text = ft.Text(
+        f"Versão: {APP_VERSION}",
+        style=ft.TextThemeStyle.BODY_MEDIUM,
+        text_align=ft.TextAlign.CENTER,
+        italic=True,
+        color=ft.colors.with_opacity(0.6, ft.colors.ON_SURFACE)
+    )
+
+    header_section = ft.Column(
+        [
+            department_logo,
+            ft.Container(height=15),
+            welcome_title,
+            ft.Container(height=5),
+            intro_text,
+            version_text
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        spacing=5
+    )
+
     # --- Layout da View de Login ---
     login_card_content = ft.Column(
         [
@@ -249,6 +359,23 @@ def create_login_view(page: ft.Page) -> ft.View:
         elevation=8,
         # margin=20 # Margem em volta do card
     )
+
+    main_layout = ft.Column(
+        [
+            ft.Container(expand=True), # Espaçador superior para empurrar para o centro
+            header_section,
+            ft.Container(height=30),
+            login_card,
+            ft.Container(expand=True), # Espaçador inferior
+        ],
+        expand=True,
+        alignment=ft.MainAxisAlignment.CENTER,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        spacing=0,
+        scroll=ft.ScrollMode.ADAPTIVE # Permite scroll se o conteúdo exceder a tela
+    )
+
+    return main_layout
 
     return ft.Container( # Container para centralizar o card
                 content=login_card,

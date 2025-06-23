@@ -142,6 +142,20 @@ Ao utilizar esta aplicação, você concorda e compreende os seguintes pontos:
 *   **Responsabilidade**: Todas as ações, decisões e documentos oficiais gerados a partir do uso desta ferramenta são de responsabilidade exclusiva do usuário que os executa e subscreve.
 *   O sistema registra métricas de uso para fins de auditoria e aprimoramento.
 *   As tipificações penais e classificações sugeridas pela IA são baseadas em padrões e não constituem parecer jurídico formal. A decisão final sobre o enquadramento legal cabe à autoridade competente.
+
+---
+
+### Políticas de Provedores de IA
+
+Ao utilizar a funcionalidade de análise via LLM, o conteúdo textual (anonimizado, se a opção estiver ativa) é enviado para processamento por provedores de IA de terceiros, como a OpenAI. O uso desta funcionalidade está sujeito às políticas do provedor selecionado.
+
+Para mais detalhes, consulte:
+*   [Política de Privacidade da OpenAI](https://openai.com/pt-BR/policies/row-privacy-policy/)
+*   [Termos de Uso da OpenAI](https://openai.com/pt-BR/policies/row-terms-of-use/)
+*   [Adendo de Processamento de Dados da OpenAI (DPA)](https://openai.com/policies/data-processing-addendum/)
+
+**Nota Importante:** Conforme a política da OpenAI, os dados enviados via API **não são utilizados** para treinar os modelos da OpenAI.
+
 """
         terms_dialog = ft.AlertDialog(
             modal=True,
@@ -151,6 +165,7 @@ Ao utilizar esta aplicação, você concorda e compreende os seguintes pontos:
                     terms_text,
                     selectable=True,
                     extension_set=ft.MarkdownExtensionSet.COMMON_MARK,
+                    auto_follow_links=True, #auto_follow_links_target="_blank"
                 ),
                 width=600, # Controla a largura para melhor leitura
             ),
@@ -158,6 +173,7 @@ Ao utilizar esta aplicação, você concorda e compreende os seguintes pontos:
                 ft.TextButton("Fechar", on_click=close_dialog),
             ],
             actions_alignment=ft.MainAxisAlignment.END,
+            scrollable=True
         )
 
         page.overlay.append(terms_dialog)
@@ -387,11 +403,17 @@ def handle_logout(page: ft.Page):
                     _logger.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
 
         # Limpa do client_storage se existir
-        # auth_keys_to_clear = [
-        #     "auth_id_token", "auth_user_id", "auth_user_email", 
-        #     "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at" # Adicionar novas chaves
-        # ]
-        auth_keys_to_clear = page.session.get_keys() # Pega todas as chaves
+        auth_keys_to_clear = [
+            "auth_id_token", "auth_user_id", "auth_user_email", 
+            "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at",
+            "is_admin" # Adicionar a flag de admin também
+        ]
+        #auth_keys_to_clear = page.session.get_keys() # Pega todas as chaves
+        
+        # Busca e remove qualquer chave de API descriptografada da sessão
+        decrypted_api_keys = [k for k in page.session.get_keys() if k.startswith("decrypted_api_key_")]
+        auth_keys_to_clear.extend(decrypted_api_keys)
+
         if page.client_storage:
             for key in auth_keys_to_clear:
                 if key.startswith("auth_") or key.startswith("decrypted_api_key_"):

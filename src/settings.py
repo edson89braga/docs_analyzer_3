@@ -22,6 +22,7 @@ APP_VERSION = "0.2" # Versão inicial do MVP
 APP_TITLE = "IA Assistente - COR/SR/PF/SP" # Análise de Documentos
 FLET_SECRET_KEY = "minha_chave_secreta_de_teste_temporaria_123"
 PATH_IMAGE_LOGO_DEPARTAMENTO = "logo_pf_orgao.png" # Caminho para a imagem (ajuste conforme necessário, pode estar em 'assets')
+ALLOWED_EMAIL_DOMAINS = ["pf.gov.br", "dpf.gov.br"]
 
 # --- Configurações de Diretórios e Arquivos ---
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,7 +51,6 @@ except Exception as e:
 
 ENCRYPTED_SERVICE_KEY_FILENAME = "firebase_service_key.enc"
 ENCRYPTED_SERVICE_KEY_PATH = os.path.join(APP_DATA_DIR, ENCRYPTED_SERVICE_KEY_FILENAME)
-
 
 # --- Configurações do Firebase ---
 # ATENÇÃO: Obtenha esta chave no Console do Firebase -> Configurações do Projeto -> Geral -> Seus apps -> Configuração do SDK

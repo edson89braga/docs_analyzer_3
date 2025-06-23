@@ -61,11 +61,11 @@ def show_confirmation_dialog(
 
     def close_dialog(e):
         confirm_dialog.open = False
-        page.overlay.remove(confirm_dialog) # Remove do overlay ao fechar
         update_lock = page.data.get("global_update_lock")
         if update_lock:
             with update_lock: page.update()
         else: page.update()
+        page.overlay.remove(confirm_dialog) # Remove do overlay ao fechar
         if hasattr(e.control, 'data') and e.control.data == "confirm" and on_confirm:
             on_confirm() # Chama o callback de confirmação
 
@@ -2149,6 +2149,91 @@ class CompactKeyValueTable(ft.Column):
         if self.page: # Só atualiza se o componente estiver na página
             self.update()
 
+class ReadOnlySelectableTextField(ft.Column):
+    """
+    Um TextField que simula o comportamento 'read_only' mas permite a seleção de texto.
+    Qualquer alteração feita pelo usuário é revertida quando o campo perde o foco.
+
+    Este componente herda de ft.Column para encapsular o ft.TextField e sua lógica.
+    """
+    def __init__(
+        self,
+        value: Optional[str] = None,
+        label: Optional[str] = None,
+        multiline: Optional[bool] = False,
+        min_lines: Optional[int] = None,
+        max_lines: Optional[int] = None,
+        text_size: Optional[Union[int, float]] = None,
+        border: Optional[ft.border.Border] = None,
+        border_color: Optional[str] = None,
+        expand: Union[None, bool, int] = None,
+        **kwargs  # Permite passar outros argumentos do ft.TextField
+    ):
+        """
+        Inicializa o campo de texto de seleção somente leitura.
+
+        Args:
+            value: O valor inicial do campo de texto.
+            label: O rótulo a ser exibido acima do campo.
+            multiline: Se o campo de texto deve ter várias linhas.
+            min_lines: O número mínimo de linhas a serem exibidas.
+            max_lines: O número máximo de linhas a serem exibidas.
+            text_size: O tamanho da fonte do texto.
+            border_color: A cor da borda do campo.
+            expand: Se o componente deve expandir para preencher o espaço.
+        """
+        super().__init__(spacing=0, expand=expand) # Column pai sem espaçamento
+
+        # Armazena o valor original que será restaurado
+        self._original_value = value if value is not None else ""
+
+        # Cria a instância interna do TextField
+        self.text_field = ft.TextField(
+            value=self._original_value,
+            label=label,
+            multiline=multiline,
+            min_lines=min_lines,
+            max_lines=max_lines,
+            text_size=text_size,
+            border=border,
+            border_color=border_color,
+            expand=expand,
+            # Eventos que acionam a restauração do valor original
+            on_blur=self._restore_original_value,
+            on_submit=self._restore_original_value,
+            **kwargs
+        )
+
+        # Adiciona o TextField como o único controle desta Coluna
+        self.controls = [self.text_field]
+
+    def _restore_original_value(self, e: ft.ControlEvent):
+        """
+        Restaura o valor do campo de texto para o valor original armazenado.
+        Este método é chamado pelos eventos on_blur e on_submit.
+        """
+        # Se o valor visível for diferente do original, restaura e atualiza
+        if self.text_field.value != self._original_value:
+            self.text_field.value = self._original_value
+            if self.page: # Só atualiza se o controle estiver na página
+                self.text_field.update()
+
+    @property
+    def value(self) -> Optional[str]:
+        """Retorna o valor original (e verdadeiro) do campo."""
+        return self._original_value
+
+    @value.setter
+    def value(self, new_value: Optional[str]):
+        """
+
+        Define um novo valor para o campo, atualizando tanto o valor original
+        quanto o texto visível.
+        """
+        self._original_value = new_value if new_value is not None else ""
+        self.text_field.value = self._original_value
+        if self.page: # Só atualiza se o controle estiver na página
+            self.text_field.update()
 
 execution_time = perf_counter() - start_time
 print(f"Carregado COMPONENTS.py em {execution_time:.4f}s")

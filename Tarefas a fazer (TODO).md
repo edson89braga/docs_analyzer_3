@@ -1,9 +1,7 @@
 ======================================================================================
 # TODO: Próximas Tarefas:
 
-> padrões fixos? perfil adm?
-> Contas somente @pg.gov.br
-> Fix: CreateUser: Tratar erro "message": "EMAIL_EXISTS"
+> Subir prompts para firestore
 
 > revisar sistemática do logging em nuvem;
 

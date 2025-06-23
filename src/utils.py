@@ -548,7 +548,6 @@ def get_sigla_uf(nome_estado_ou_sigla: Optional[str]) -> Optional[str]:
     normalizado = unidecoder(nome_estado_ou_sigla.strip()).lower()
     return ESTADO_PARA_SIGLA.get(normalizado)
 
-
 ### ========================================================================================================
   
 def convert_moeda(valor):
@@ -770,7 +769,86 @@ def testando_similaridade_rouge_l():
     print(f"\nSimilaridade (longo) entre original e similar: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_similar):.4f}")
     print(f"\nSimilaridade (longo) entre original e diferente: {calcular_similaridade_rouge_l(long_txt_orig, long_txt_edit_diferente):.4f}")
 
+### ========================================================================================================
 
+import sys, tkinter
+import tkinter.messagebox
+
+def check_app_version() -> None:
+    """
+    Verifica se a versão local do aplicativo corresponde à versão mais recente
+    definida no Firestore. Se não corresponder, exibe um alerta e encerra.
+    Permite a continuação se a verificação online falhar (para uso offline).
+    """
+    # NOVO IMPORT LOCALIZADO
+    from tkinter import messagebox
+
+    from src.settings import APP_VERSION, PROJECT_ID, FIREBASE_WEB_API_KEY
+    import requests
+
+    logger.info(f"Verificando versão da aplicação. Versão local: {APP_VERSION}")
+
+    # A verificação de versão não deve usar proxy, pois é um pré-requisito da aplicação.
+    # Desabilitar temporariamente as variáveis de ambiente de proxy para esta chamada.
+    http_proxy_bkp = os.environ.pop('HTTP_PROXY', None)
+    https_proxy_bkp = os.environ.pop('HTTPS_PROXY', None)
+    
+    logger.debug("Proxy temporariamente desabilitado para verificação de versão.")
+
+    # URL base do documento no Firestore
+    firestore_url_base = (
+        f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}"
+        f"/databases/(default)/documents/app_config/version_control"
+    )
+    
+    # Adiciona a chave de API como um parâmetro na URL
+    firestore_url_with_key = f"{firestore_url_base}?key={FIREBASE_WEB_API_KEY}"
+
+    try:
+        response = requests.get(firestore_url_with_key, timeout=5)
+        response.raise_for_status()
+
+        data = response.json()
+        latest_version = data.get("fields", {}).get("latest_version", {}).get("stringValue")
+
+        if not latest_version:
+            logger.warning("Não foi possível encontrar o campo 'latest_version' no Firestore. Permitindo execução.")
+            return
+
+        logger.info(f"Versão mais recente na nuvem: {latest_version}")
+
+        if latest_version != APP_VERSION:
+            logger.critical(f"VERSÃO DESATUALIZADA! Local: {APP_VERSION}, Nuvem: {latest_version}. Encerrando aplicação.")
+            
+            # CORREÇÃO: Cria a janela raiz do Tkinter ANTES de usar o messagebox
+            root = tkinter.Tk()
+            root.withdraw() # Esconde a janela raiz, queremos apenas o popup
+            
+            # CORREÇÃO: Usa a referência direta do submódulo importado
+            messagebox.showerror(
+                "Versão Desatualizada",
+                f"Sua versão do aplicativo ({APP_VERSION}) está desatualizada. "
+                f"A versão necessária é a {latest_version}.\n\n"
+                "Por favor, contate o administrador para obter a nova versão."
+            )
+            sys.exit(1)
+
+        logger.info("Versão da aplicação compatível.")
+
+    except requests.exceptions.RequestException as e:
+        logger.warning(f"Não foi possível verificar a versão do aplicativo online: {e}. Permitindo a execução para modo offline.")
+    except Exception as e:
+        logger.error(f"Erro inesperado ao verificar a versão do aplicativo: {e}. Permitindo a execução por segurança.")
+    
+    finally:
+        # Restaura as configurações de proxy originais, se existiam
+        if http_proxy_bkp:
+            os.environ['HTTP_PROXY'] = http_proxy_bkp
+        if https_proxy_bkp:
+            os.environ['HTTPS_PROXY'] = https_proxy_bkp
+        logger.debug("Configurações de proxy restauradas após verificação de versão.")
+        
+### ========================================================================================================
 
 execution_time = perf_counter() - start_time
 print(f"Carregado UTILS em {execution_time:.4f}s")

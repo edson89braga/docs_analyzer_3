@@ -4,8 +4,10 @@ print(f"{start_time:.4f}s - Iniciando firebase_manager.py")
 
 import os, json, logging
 import firebase_admin
-from firebase_admin import credentials, storage, firestore # db, auth as firebase_auth
+from firebase_admin import credentials, storage, firestore # db,
+from firebase_admin import auth as firebase_auth
 from threading import Lock
+
 
 from src.utils import with_proxy
 from src.services import credentials_manager
@@ -332,6 +334,63 @@ class FbManagerFirestore:
             return None
         
 
+# No arquivo src/services/firebase_manager.py, após a classe FbManagerFirestore, adicione:
+
+class FbManagerAdminAuth:
+    """
+    Gerencia operações administrativas de autenticação com o Firebase Admin SDK.
+    Requer que o Firebase Admin SDK tenha sido inicializado.
+    """
+    def __init__(self):
+        """
+        Inicializa o gerenciador de autenticação de administrador.
+        """
+        inicializar_firebase()
+        from src.logger.logger import LoggerSetup
+        self.logger = LoggerSetup.get_logger(__name__)
+
+    def set_admin_claim(self, user_email: str, is_admin: bool) -> bool:
+        """
+        Define ou remove o custom claim de 'admin' para um usuário.
+        Esta é uma operação administrativa e deve ser chamada de um ambiente seguro.
+
+        Args:
+            user_email (str): O email do usuário a ser modificado.
+            is_admin (bool): True para adicionar o claim, False para remover.
+
+        Returns:
+            bool: True se a operação foi bem-sucedida, False caso contrário.
+        """
+        if not firebase_admin._apps:
+            self.logger.error("Admin SDK não inicializado. Não é possível definir claims.")
+            return False
+        
+        try:
+            user = firebase_auth.get_user_by_email(user_email)
+            uid = user.uid
+            
+            # Define o custom claim. Se o valor for None, o claim é removido.
+            claim_to_set = {'admin': True} if is_admin else None
+            firebase_auth.set_custom_user_claims(uid, claim_to_set)
+            
+            # É uma boa prática armazenar o papel também no Firestore para
+            # fácil acesso pela UI, sem precisar decodificar o token no cliente.
+            # A segurança real é garantida pelo claim no token.
+            firestore_db = firestore.client()
+            user_doc_ref = firestore_db.collection('users').document(uid)
+            user_doc_ref.set({'isAdmin': is_admin}, merge=True)
+            
+            self.logger.info(f"Custom claim 'admin' definido como {is_admin} para o usuário {user_email} (UID: {uid}).")
+            self.logger.info("O usuário precisará fazer login novamente ou atualizar seu token para que a mudança tenha efeito.")
+            return True
+        except firebase_auth.UserNotFoundError:
+            self.logger.error(f"Usuário com email {user_email} não encontrado ao tentar definir claim.")
+            return False
+        except Exception as e:
+            self.logger.error(f"Erro ao definir custom claim para {user_email}: {e}", exc_info=True)
+            return False
+        
+
 from rich.prompt import Confirm        
 def sync_local_and_storage_files(
     storage_manager: FbManagerStorage,
@@ -418,7 +477,6 @@ def sync_local_and_storage_files(
                 storage_manager.upload_file(local_full_path, storage_full_path)
     
     logger.info("Sincronização concluída.")
-
 
 # Exemplo de uso da função:
 

@@ -509,7 +509,15 @@ class LLMSettingsViewContent(ft.Column):
             self._last_pref_error_message = "Erro de sessão ao salvar."
             self._update_status_preferences_display()
             return
+
         id_token, user_id = context
+
+        if not self.page.session.get("is_admin"):
+            show_snackbar(self.page, "Apenas administradores podem alterar as preferências padrão de LLM.", color=theme.COLOR_WARNING, duration=5000)
+            _logger.warning(f"Usuário não-admin (ID: {self.page.session.get('auth_user_id')}) tentou salvar preferências de LLM.")
+            # Opcional: Reverter a seleção na UI para refletir as preferências salvas
+            self._update_preference_dropdowns_from_session()
+            return
 
         selected_provider = self.default_provider_dropdown.value
         selected_model = self.default_model_dropdown.value

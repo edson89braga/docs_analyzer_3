@@ -288,6 +288,11 @@ def route_change_content_only(
     """
     logger.info(f"Router (content_only): Navegando para rota '{route}'")
 
+    # Ignora rotas de ação de autenticação do Firebase para que o SDK JS do cliente possa lidar com elas.
+    if "/__/auth/action" in route:
+        logger.info("Router: Rota de ação do Firebase detectada. Ignorando para manipulação pelo cliente.")
+        return
+    
     # --- 1. Validações e Redirecionamento ---
     upload_dir_base_url_path = f"/{Path(UPLOAD_TEMP_DIR).name}/"
     if route.startswith(upload_dir_base_url_path):

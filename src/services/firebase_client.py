@@ -15,6 +15,9 @@ from src.utils import with_proxy
 
 from flet import Page as ft_Page
 
+import jwt # PyJWT
+from threading import Lock
+
 # --- Constantes para APIs REST ---
 FIRESTORE_BASE_URL = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
 STORAGE_BASE_URL = f"https://firebasestorage.googleapis.com/v0/b/{FB_STORAGE_BUCKET}/o"
@@ -81,10 +84,23 @@ class FirebaseClientStorage:
         """
         from src.logger.logger import LoggerSetup
         self.logger = LoggerSetup.get_logger(__name__)
-
+        self.auth_manager = FbManagerAuth()
         # Nenhuma inicialização complexa necessária aqui, pois usaremos requests.
         self.logger.info(f"FirebaseClientStorage inicializado. Target Bucket: {FB_STORAGE_BUCKET}")
 
+    def _verify_and_get_uid(self, user_token: str) -> Optional[str]:
+        """Verifica o token e retorna o UID se válido."""
+        if not user_token:
+            self.logger.error("Token de usuário não fornecido para verificação.")
+            return None
+        
+        verified_token_payload = self.auth_manager.verify_id_token(user_token)
+        if not verified_token_payload:
+            self.logger.error("A verificação do token falhou. Ação não autorizada.")
+            return None
+        
+        return verified_token_payload.get("user_id")
+    
     @with_proxy() # Aplica proxy e tratamento SSL se configurado
     def _make_storage_request(
         self,
@@ -167,6 +183,11 @@ class FirebaseClientStorage:
         Returns:
             bool: True se o upload for bem-sucedido, False caso contrário.
         """
+        verified_uid = self._verify_and_get_uid(user_token)
+        if not verified_uid or verified_uid != user_id:
+            self.logger.error(f"Não autorizado: O token verificado (UID: {verified_uid}) não corresponde ao UID da solicitação ({user_id}).")
+            return False
+        
         if not all([user_token, user_id, storage_path_suffix]):
             self.logger.error("upload_text_user: Argumentos inválidos (token, user_id ou path suffix faltando).")
             return False
@@ -202,6 +223,11 @@ class FirebaseClientStorage:
         Returns:
             Optional[str]: Conteúdo do arquivo ou None se não existir ou erro.
         """
+        verified_uid = self._verify_and_get_uid(user_token)
+        if not verified_uid or verified_uid != user_id:
+            self.logger.error(f"Não autorizado: O token verificado (UID: {verified_uid}) não corresponde ao UID da solicitação ({user_id}).")
+            return False
+        
         if not all([user_token, user_id, storage_path_suffix]):
             self.logger.error("get_text_user: Argumentos inválidos.")
             return None
@@ -243,8 +269,21 @@ class FirebaseClientFirestore:
         """
         from src.logger.logger import LoggerSetup
         self.logger = LoggerSetup.get_logger(__name__)
-
+        self.auth_manager = FbManagerAuth()
         self.logger.info(f"FirebaseClientFirestore inicializado. Target Project: {PROJECT_ID}")
+
+    def _verify_and_get_uid(self, user_token: str) -> Optional[str]:
+        """Verifica o token e retorna o UID se válido."""
+        if not user_token:
+            self.logger.error("Token de usuário não fornecido para verificação.")
+            return None
+        
+        verified_token_payload = self.auth_manager.verify_id_token(user_token)
+        if not verified_token_payload:
+            self.logger.error("A verificação do token falhou. Ação não autorizada.")
+            return None
+        
+        return verified_token_payload.get("user_id")
 
     @with_proxy()
     def _make_firestore_request(
@@ -319,6 +358,11 @@ class FirebaseClientFirestore:
         Returns:
             bool: True se sucesso, False caso contrário.
         """
+        verified_uid = self._verify_and_get_uid(user_token)
+        if not verified_uid or verified_uid != user_id:
+            self.logger.error(f"Não autorizado: O token verificado (UID: {verified_uid}) não corresponde ao UID da solicitação ({user_id}).")
+            return False
+        
         if not all([user_token, user_id, service_name, encrypted_api_key_bytes]):
             self.logger.error("save_user_api_key_client: Argumentos inválidos.")
             return False
@@ -426,6 +470,11 @@ class FirebaseClientFirestore:
             Optional[bytes]: A chave API criptografada como bytes, ou None se não encontrada/erro.
                              A descriptografia é responsabilidade do chamador.
         """
+        verified_uid = self._verify_and_get_uid(user_token)
+        if not verified_uid or verified_uid != user_id:
+            self.logger.error(f"Não autorizado: O token verificado (UID: {verified_uid}) não corresponde ao UID da solicitação ({user_id}).")
+            return None
+        
         if not all([user_token, user_id, service_name]):
             self.logger.error("get_user_api_key_client: Argumentos inválidos.")
             return None
@@ -683,6 +732,10 @@ class FbManagerAuth:
     Gerencia a autenticação de usuários com o Firebase Authentication
     utilizando a API REST.
     """
+    _public_keys_cache: Dict[str, Any] = {}
+    _public_keys_lock: Lock = Lock()
+    _public_keys_expiry: Optional[float] = None
+
     def __init__(self):
         """
         Inicializador do FirebaseManagerAuth.
@@ -695,8 +748,126 @@ class FbManagerAuth:
         if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
            self.logger.critical("Firebase Web API Key não configurada em config/settings.py. Autenticação falhará.")
             # Considerar levantar um erro se a chave for essencial para a classe funcionar.
+        self.project_id = PROJECT_ID
 
         self.identity_toolkit_base_url = "https://identitytoolkit.googleapis.com/v1/accounts"
+
+    def verify_id_token(self, id_token: str) -> Optional[Dict[str, Any]]:
+        """
+        Verifica a assinatura e os claims de um Firebase ID token.
+
+        Busca as chaves públicas do Google (com cache) e valida o token.
+
+        Args:
+            id_token: O token JWT a ser verificado.
+
+        Returns:
+            O payload decodificado do token como um dicionário se a verificação for bem-sucedida,
+            ou None em caso de falha.
+        """
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+
+        try:
+            # 1. Obter o 'kid' do cabeçalho
+            unverified_header = jwt.get_unverified_header(id_token)
+            kid = unverified_header.get("kid")
+            if not kid:
+                self.logger.error("Token JWT inválido: 'kid' não encontrado no cabeçalho.")
+                return None
+
+            # 2. Obter as chaves públicas do Google
+            with self._public_keys_lock:
+                if not self._public_keys_cache or (self._public_keys_expiry and time.time() > self._public_keys_expiry):
+                    self.logger.info("Cache de chaves públicas do Firebase expirado ou vazio. Buscando novas chaves.")
+                    keys_url = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+                    response = requests.get(keys_url, timeout=10)
+                    response.raise_for_status()
+                    self._public_keys_cache = response.json()
+                    
+                    # Definir expiração baseada no cache-control do response
+                    cache_control = response.headers.get('cache-control', '')
+                    max_age = 3600  # Default 1 hora
+                    if 'max-age=' in cache_control:
+                        try:
+                            max_age = int(cache_control.split('max-age=')[1].split(',')[0])
+                        except (ValueError, IndexError):
+                            pass
+                    
+                    self._public_keys_expiry = time.time() + max_age
+                
+                public_keys = self._public_keys_cache
+
+            # 3. Encontrar o certificado PEM correto
+            certificate_pem = public_keys.get(kid)
+            if not certificate_pem:
+                self.logger.error(f"Certificado com kid '{kid}' não encontrado. O token pode ser antigo ou inválido.")
+                with self._public_keys_lock:
+                    self._public_keys_expiry = 0  # Força refresh do cache
+                return None
+            
+            # 4. CORREÇÃO: Extrair a chave pública do certificado X.509
+            try:
+                # Parse do certificado X.509
+                cert = x509.load_pem_x509_certificate(certificate_pem.encode('utf-8'))
+                # Extrair a chave pública
+                public_key = cert.public_key()
+                # Serializar a chave pública em formato PEM
+                public_key_pem = public_key.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo
+                )
+            except Exception as cert_error:
+                self.logger.error(f"Erro ao processar certificado X.509: {cert_error}")
+                return None
+            
+            # 5. Verificar o token com a chave pública extraída
+            decoded_token = jwt.decode(
+                id_token,
+                key=public_key_pem,  # Usa a chave pública extraída
+                algorithms=["RS256"],
+                audience=self.project_id,
+                issuer=f"https://securetoken.google.com/{self.project_id}",
+                # Verificações adicionais recomendadas
+                options={
+                    "verify_signature": True,
+                    "verify_exp": True,
+                    "verify_aud": True,
+                    "verify_iss": True,
+                    "require": ["exp", "iat", "aud", "iss", "sub"]
+                }
+            )
+            
+            # 6. Verificações adicionais de segurança
+            current_time = time.time()
+            
+            # Verificar se o token não é muito antigo (opcional)
+            iat = decoded_token.get('iat', 0)
+            if current_time - iat > 3600:  # Token emitido há mais de 1 hora
+                self.logger.warning(f"Token muito antigo: emitido há {current_time - iat} segundos")
+            
+            # Verificar se auth_time existe (para tokens de autenticação)
+            auth_time = decoded_token.get('auth_time')
+            if auth_time and current_time - auth_time > 86400:  # 24 horas
+                self.logger.warning(f"Autenticação muito antiga: {current_time - auth_time} segundos")
+            
+            self.logger.info(f"Token JWT verificado com sucesso para usuário: {decoded_token.get('user_id')}")
+            return decoded_token
+
+        except jwt.ExpiredSignatureError:
+            self.logger.error("Falha na verificação do token: Token expirado.")
+        except jwt.InvalidAudienceError:
+            self.logger.error(f"Falha na verificação do token: 'audience' inválida. Esperado: {self.project_id}")
+        except jwt.InvalidIssuerError:
+            self.logger.error(f"Falha na verificação do token: 'issuer' inválido. Esperado: https://securetoken.google.com/{self.project_id}")
+        except jwt.InvalidTokenError as e:
+            self.logger.error(f"Token JWT inválido: {e}")
+        except requests.RequestException as e:
+            self.logger.error(f"Erro ao buscar chaves públicas do Firebase: {e}")
+        except Exception as e:
+            self.logger.error(f"Falha inesperada na verificação do token JWT: {e}", exc_info=True)
+
+        return None
 
     @with_proxy()
     def authenticate_user(self, email: str, password: str) -> Optional[str]:
@@ -823,12 +994,16 @@ class FbManagerAuth:
     def create_user(self, email: str, password: str, display_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Registra um novo usuário (signUp).
+        Retorna o dicionário de resposta da API em sucesso, ou um dicionário de erro em falha.
 
         Returns:
-            Optional[Dict[str, Any]]: Dicionário com 'localId', 'idToken', etc., ou None em falha.
+            - Em sucesso: Dict[str, Any] com 'localId', 'idToken', etc.
+            - Em falha: Dict[str, str] com 'error' e 'details'.
+            - Em falha crítica de conexão/request: Dict[str, str] com 'error_type' e 'message'.
         """
         self.logger.info(f"Tentando criar novo usuário: {email}")
-        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI": return None
+        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
+            return {"error": "CONFIG_ERROR", "details": "Firebase Web API Key não configurada."}
 
         rest_api_url = f"{self.identity_toolkit_base_url}:signUp?key={self.firebase_web_api_key}"
         payload_dict = {"email": email, "password": password, "returnSecureToken": True}
@@ -841,16 +1016,77 @@ class FbManagerAuth:
             response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
             response.raise_for_status()
             response_data = response.json()
+            
+            id_token_for_verification = response_data.get("idToken")
+            if id_token_for_verification:
+                self.send_verification_email(id_token_for_verification)
+            else:
+                self.logger.warning("Não foi possível enviar email de verificação: idToken não encontrado na resposta de criação.")
+            
             self.logger.info(f"Usuário {email} criado com sucesso. User ID: {response_data.get('localId')}")
             return response_data
-        except requests.exceptions.HTTPError as http_err:
-            # ... (tratamento de erro similar ao authenticate_user) ...
-            self.logger.error(f"Erro HTTP ao criar usuário {email}: {http_err.response.status_code} - {http_err.response.text}")
-            return None
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Erro de requisição ao criar usuário {email}: {e}", exc_info=True)
-            return None
 
+        except requests.exceptions.HTTPError as http_err:
+            try:
+                error_data = http_err.response.json().get("error", {})
+                api_error_code = error_data.get("message", "UNKNOWN_API_ERROR")
+                self.logger.warning(f"Erro HTTP ao criar usuário {email}: {http_err.response.status_code} - {api_error_code}")
+                # Retorna um dicionário estruturado para a UI tratar
+                return {"error": api_error_code, "details": "Falha na comunicação com o serviço de autenticação."}
+            except json.JSONDecodeError:
+                self.logger.error(f"Erro HTTP (resposta não JSON) ao criar usuário {email}: {http_err.response.text}")
+                return {"error": "NON_JSON_RESPONSE", "details": "Resposta inválida do servidor."}
+                
+        except requests.exceptions.ConnectionError as e:
+            self.logger.error(f"Erro de CONEXÃO ao criar usuário {email}: {e}", exc_info=True)
+            return {"error_type": "CONNECTION_ERROR", "message": str(e)}
+
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Erro de REQUISIÇÃO ao criar usuário {email}: {e}", exc_info=True)
+            return {"error_type": "REQUEST_EXCEPTION", "message": str(e)}
+
+    @with_proxy()
+    def send_verification_email(self, id_token: str) -> bool:
+        """
+        Envia um email de verificação para o usuário recém-criado ou logado,
+        incluindo uma URL de continuação.
+        
+        Args:
+            id_token (str): O ID Token válido do usuário.
+
+        Returns:
+            bool: True se a solicitação foi enviada com sucesso, False caso contrário.
+        """
+        self.logger.info(f"Solicitando envio de email de verificação.")
+        if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
+            return False
+
+        rest_api_url = f"{self.identity_toolkit_base_url}:sendOobCode?key={self.firebase_web_api_key}"
+        
+        # Define a URL para onde o usuário será redirecionado após a verificação.
+        # Deve ser um domínio autorizado no seu projeto Firebase.
+        # Para desenvolvimento local com Flet, aponte para a página de login.
+        continue_url = "http://localhost:8550/login"
+
+        payload = json.dumps({
+            "requestType": "VERIFY_EMAIL", 
+            "idToken": id_token,
+            "continueUrl": continue_url  # Adiciona a URL de continuação
+        })
+        headers = {"Content-Type": "application/json"}
+
+        try:
+            response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
+            response.raise_for_status()
+            self.logger.info(f"Solicitação de email de verificação enviada com sucesso para o usuário.")
+            return True
+        except requests.exceptions.HTTPError as http_err:
+            self.logger.error(f"Erro HTTP ao enviar email de verificação: {http_err.response.status_code} - {http_err.response.text}")
+            return False
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Erro de requisição ao enviar email de verificação: {e}", exc_info=True)
+            return False
+        
     @with_proxy()
     def send_password_reset_email(self, email: str) -> bool:
         """
