@@ -31,7 +31,7 @@ def scan_and_consolidate_python_files(output_file='python_files_consolidated.txt
                 if file in ('extract_pyfiles.py', 'run_dev.py', 'admin_llm_providers.py',
                             'cleanup_cloud_logs.py', 'teste_int.py', 'set_admin.py',
                             'test_layout_app.py', 'teste_interativo.py', '__init__.py', 'prompts.py',
-                            'testes_pdf_processor_and_ocr.py'):
+                            'testes_pdf_processor_and_ocr.py', 'upload_prompts.py'):
                     continue
                 if file.endswith('.py'):
                     file_path = os.path.join(root, file)

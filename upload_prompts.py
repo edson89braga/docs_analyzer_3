@@ -1,7 +1,7 @@
 # upload_prompts.py
 
 from src.services.firebase_manager import FbManagerFirestore
-from src.core.prompts import ALL_lists, ALL_prompts
+from OLD_prompts import ALL_lists, ALL_prompts
 from src.logger.logger import LoggerSetup
 from src.settings import PROMPTS_COLLECTION, PROMPTS_DOCUMENT_ID
 

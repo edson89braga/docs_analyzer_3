@@ -18,8 +18,22 @@ from typing import Optional, Dict, List, Type, Union
 # Prompts do escopo de Análise sobre Notícias-crimes:
 ...
 
+class SafeFormatter(dict):
+    """
+    Dicionário customizado para usar com str.format_map.
+    Se uma chave (placeholder) não for encontrada, retorna o próprio placeholder
+    (ex: '{chave_nao_encontrada}') em vez de levantar um KeyError.
+    """
+    def __missing__(self, key):
+        return f'{{{key}}}'
+    
 def replace_values_by_lists(dict_prompt, all_lists_dict):
-    dict_prompt['content'] = dict_prompt['content'].format(**all_lists_dict)
+    """
+    Substitui placeholders em um prompt usando as listas fornecidas,
+    ignorando placeholders que não estão no dicionário (como {input_text}).
+    """
+    formatter = SafeFormatter(all_lists_dict)
+    dict_prompt['content'] = dict_prompt['content'].format_map(formatter)
     return dict_prompt
 
 def get_prompts_for_initial_analysis(all_lists_dict, all_prompts_dict):

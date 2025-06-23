@@ -240,6 +240,7 @@ ALL_lists = {
     "lista_normativa_prometheus": lista_normativa_prometheus,
     "materias_prometheus": materias_prometheus,
     "tipos_envolvidos": tipos_envolvidos,
+    "lista_delegacias_especializadas": lista_delegacias_especializadas,
     "destinacoes_completas": destinacoes_completas,
     "exemplos_resumos": exemplos_resumos,
     "resumo_artigos_in_255": resumo_artigos_in_255,

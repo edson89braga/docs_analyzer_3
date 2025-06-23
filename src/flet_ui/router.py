@@ -445,7 +445,19 @@ def route_change_content_only(
         except Exception as e:
             # ... (código de tratamento de erro para final_content) ...
             logger.error(f"Erro ao criar conteúdo para rota '{target_route}': {e}", exc_info=True)
-            final_content = ft.Column(...) # Conteúdo de erro
+            final_content = ft.Column(
+                [
+                    ft.Icon(ft.Icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
+                    ft.Text(f"Erro ao carregar a página: {target_route}", size=20, weight=ft.FontWeight.BOLD),
+                    ft.Text(f"Detalhes: {e}", selectable=True, font_family="monospace"),
+                    ft.Container(height=20),
+                    ft.ElevatedButton("Voltar para o Início", on_click=lambda _: page_ref.go("/home"))
+                ],
+                alignment=ft.MainAxisAlignment.CENTER,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                expand=True,
+                spacing=15
+            )
 
         def _update_ui_with_new_content():
             """
