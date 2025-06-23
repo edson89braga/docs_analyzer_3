@@ -2,7 +2,7 @@ from time import perf_counter
 start_time = perf_counter()
 print(f"{start_time:.4f}s - Iniciando firebase_manager.py")
 
-import os, json, logging
+import os, json
 import firebase_admin
 from firebase_admin import credentials, storage, firestore # db,
 from firebase_admin import auth as firebase_auth
@@ -15,13 +15,15 @@ from src.settings import FB_STORAGE_BUCKET
 
 from typing import Optional, Dict, Any, List, Set
 
+import logging
+logger = logging.getLogger(__name__)
+
 @with_proxy()
 def inicializar_firebase():
     """
     Inicializa o Firebase Admin SDK usando as credenciais seguras do
     credentials_manager e aplicando configurações de proxy/SSL quando necessário.
     """
-    logger = logging.getLogger(__name__)
     if not firebase_admin._apps:  # Verifica se já foi inicializado
         try:
             # 1. Obter o JSON da chave de serviço descriptografado
@@ -85,8 +87,6 @@ class FbManagerStorage:
         self.lock = Lock()
         self.bucket_name = bucket_name            
         self.bucket = storage.bucket()
-        from src.logger.logger import LoggerSetup
-        self.logger = LoggerSetup.get_logger(__name__)
 
     def upload_file(self, local_file_path, storage_path):
         """
@@ -115,7 +115,7 @@ class FbManagerStorage:
             blob.upload_from_string(text, 
                                    content_type="text/plain; charset=utf-8", # 
                                    timeout=60)
-            self.logger.debug(f"Texto salvo em: {storage_path}")
+            logger.debug(f"Texto salvo em: {storage_path}")
 
     def download_file(self, storage_path, local_file_path):
         """
@@ -184,15 +184,13 @@ class FbManagerFirestore:
         Inicializador do FirebaseManagerFirestore.
         Assume que o Firebase Admin SDK já foi inicializado externamente.
         """
-        from src.logger.logger import LoggerSetup
-        self.logger = LoggerSetup.get_logger(__name__)
         inicializar_firebase() # Garante que o Firebase esteja inicializado
         if FbManagerFirestore._db_client is None:
             try:
                 FbManagerFirestore._db_client = firestore.client()
-                self.logger.info("Cliente Firestore obtido com sucesso.")
+                logger.info("Cliente Firestore obtido com sucesso.")
             except Exception as e:
-                self.logger.critical(f"Falha ao obter cliente Firestore. O Admin SDK foi inicializado corretamente? Erro: {e}", exc_info=True)
+                logger.critical(f"Falha ao obter cliente Firestore. O Admin SDK foi inicializado corretamente? Erro: {e}", exc_info=True)
                 # Poderia levantar um erro aqui para impedir a instanciação se o cliente é crucial
         self.db = FbManagerFirestore._db_client
 
@@ -202,12 +200,12 @@ class FbManagerFirestore:
         Salva (ou atualiza) a chave de API de um serviço LLM para um usuário, criptografando-a.
         """
         if not self.db:
-            self.logger.error("Firestore não inicializado, impossível salvar chave.")
+            logger.error("Firestore não inicializado, impossível salvar chave.")
             return False
 
         encrypted_key_bytes = credentials_manager.encrypt(api_key) # type: ignore
         if encrypted_key_bytes is None:
-            self.logger.error(f"Falha ao criptografar a chave API para {user_id}/{service_name}.")
+            logger.error(f"Falha ao criptografar a chave API para {user_id}/{service_name}.")
             return False
 
         try:
@@ -216,10 +214,10 @@ class FbManagerFirestore:
             # Firestore armazena bytes como strings se não for Blob; decode para evitar problemas com certos bytes.
             # Alternativamente, use firestore.Blob(encrypted_key_bytes)
             # doc_ref.set({service_name: firestore.Blob(encrypted_key_bytes)}, merge=True)
-            self.logger.info(f"Chave API (criptografada) para {user_id}/{service_name} salva no Firestore.")
+            logger.info(f"Chave API (criptografada) para {user_id}/{service_name} salva no Firestore.")
             return True
         except Exception as e:
-            self.logger.error(f"Erro ao salvar chave no Firestore para {user_id}/{service_name}: {e}", exc_info=True)
+            logger.error(f"Erro ao salvar chave no Firestore para {user_id}/{service_name}: {e}", exc_info=True)
             return False
 
     def get_user_api_key(self, user_id: str, service_name: str) -> Optional[str]:
@@ -227,7 +225,7 @@ class FbManagerFirestore:
         Recupera e descriptografa a chave de API de um serviço LLM para um usuário.
         """
         if not self.db:
-            self.logger.error("Firestore não inicializado, impossível obter chave.")
+            logger.error("Firestore não inicializado, impossível obter chave.")
             return None
 
         try:
@@ -244,19 +242,19 @@ class FbManagerFirestore:
 
                     decrypted_key = credentials_manager.decrypt(encrypted_key_bytes) # type: ignore
                     if decrypted_key:
-                        self.logger.info(f"Chave API descriptografada para {user_id}/{service_name}.")
+                        logger.info(f"Chave API descriptografada para {user_id}/{service_name}.")
                         return decrypted_key
                     else:
-                        self.logger.error(f"Falha ao descriptografar chave API para {user_id}/{service_name}.")
+                        logger.error(f"Falha ao descriptografar chave API para {user_id}/{service_name}.")
                         return None
                 else:
-                    self.logger.info(f"Chave API para {service_name} não encontrada no documento de {user_id}.")
+                    logger.info(f"Chave API para {service_name} não encontrada no documento de {user_id}.")
                     return None
             else:
-                self.logger.info(f"Documento de chaves API não encontrado para user {user_id}.")
+                logger.info(f"Documento de chaves API não encontrado para user {user_id}.")
                 return None
         except Exception as e:
-            self.logger.error(f"Erro ao obter chave do Firestore para {user_id}/{service_name}: {e}", exc_info=True)
+            logger.error(f"Erro ao obter chave do Firestore para {user_id}/{service_name}: {e}", exc_info=True)
             return None
 
     def save_metrics(self, metric_data: Dict[str, Any]) -> bool:
@@ -264,14 +262,14 @@ class FbManagerFirestore:
         Salva dados de métricas operacionais no Firestore.
         """
         if not self.db:
-            self.logger.error("Firestore não inicializado, impossível salvar métricas.")
+            logger.error("Firestore não inicializado, impossível salvar métricas.")
             return False
         try:
             self.db.collection('metrics').add(metric_data)
-            self.logger.info(f"Métrica salva no Firestore: {metric_data.get('event_type', 'N/A')}")
+            logger.info(f"Métrica salva no Firestore: {metric_data.get('event_type', 'N/A')}")
             return True
         except Exception as e:
-            self.logger.error(f"Erro ao salvar métrica no Firestore: {e}", exc_info=True)
+            logger.error(f"Erro ao salvar métrica no Firestore: {e}", exc_info=True)
             return False
 
     def get_user_prompts(self, user_id: str) -> Optional[Dict[str, str]]:
@@ -279,20 +277,20 @@ class FbManagerFirestore:
         Recupera os prompts customizados salvos por um usuário do Firestore.
         """
         if not self.db:
-            self.logger.error("Firestore não inicializado, impossível obter prompts.")
+            logger.error("Firestore não inicializado, impossível obter prompts.")
             return None
         try:
             doc_ref = self.db.collection('user_prompts').document(user_id)
             doc = doc_ref.get()
             if doc.exists:
                 prompts = doc.to_dict()
-                self.logger.info(f"Prompts customizados recuperados para user {user_id}.")
+                logger.info(f"Prompts customizados recuperados para user {user_id}.")
                 return prompts # type: ignore
             else:
-                self.logger.info(f"Nenhum prompt customizado encontrado para user {user_id}.")
+                logger.info(f"Nenhum prompt customizado encontrado para user {user_id}.")
                 return None
         except Exception as e:
-            self.logger.error(f"Erro ao obter prompts do Firestore para {user_id}: {e}", exc_info=True)
+            logger.error(f"Erro ao obter prompts do Firestore para {user_id}: {e}", exc_info=True)
             return None
 
     def save_user_prompts(self, user_id: str, prompts: Dict[str, str]) -> bool:
@@ -300,15 +298,15 @@ class FbManagerFirestore:
         Salva (ou atualiza) os prompts customizados de um usuário no Firestore.
         """
         if not self.db:
-            self.logger.error("Firestore não inicializado, impossível salvar prompts.")
+            logger.error("Firestore não inicializado, impossível salvar prompts.")
             return False
         try:
             doc_ref = self.db.collection('user_prompts').document(user_id)
             doc_ref.set(prompts, merge=True)
-            self.logger.info(f"Prompts customizados salvos para user {user_id}.")
+            logger.info(f"Prompts customizados salvos para user {user_id}.")
             return True
         except Exception as e:
-            self.logger.error(f"Erro ao salvar prompts no Firestore para {user_id}: {e}", exc_info=True)
+            logger.error(f"Erro ao salvar prompts no Firestore para {user_id}: {e}", exc_info=True)
             return False
 
     def get_user_settings(self, user_id: str) -> Optional[Dict[str, Any]]:
@@ -316,20 +314,20 @@ class FbManagerFirestore:
         Recupera configurações gerais definidas para um usuário do Firestore.
         """
         if not self.db:
-            self.logger.error("Firestore não inicializado, impossível obter settings.")
+            logger.error("Firestore não inicializado, impossível obter settings.")
             return None
         try:
             doc_ref = self.db.collection('user_settings').document(user_id)
             doc = doc_ref.get()
             if doc.exists:
                 settings_data = doc.to_dict()
-                self.logger.info(f"Configurações recuperadas para user {user_id}.")
+                logger.info(f"Configurações recuperadas para user {user_id}.")
                 return settings_data
             else:
-                self.logger.info(f"Nenhuma configuração encontrada para user {user_id}.")
+                logger.info(f"Nenhuma configuração encontrada para user {user_id}.")
                 return None # Ou um dict default
         except Exception as e:
-            self.logger.error(f"Erro ao obter settings do Firestore para {user_id}: {e}", exc_info=True)
+            logger.error(f"Erro ao obter settings do Firestore para {user_id}: {e}", exc_info=True)
             return None
         
 # No arquivo src/services/firebase_manager.py, após a classe FbManagerFirestore, adicione:
@@ -344,8 +342,6 @@ class FbManagerAdminAuth:
         Inicializa o gerenciador de autenticação de administrador.
         """
         inicializar_firebase()
-        from src.logger.logger import LoggerSetup
-        self.logger = LoggerSetup.get_logger(__name__)
 
     def set_admin_claim(self, user_email: str, is_admin: bool) -> bool:
         """
@@ -360,7 +356,7 @@ class FbManagerAdminAuth:
             bool: True se a operação foi bem-sucedida, False caso contrário.
         """
         if not firebase_admin._apps:
-            self.logger.error("Admin SDK não inicializado. Não é possível definir claims.")
+            logger.error("Admin SDK não inicializado. Não é possível definir claims.")
             return False
         
         try:
@@ -378,14 +374,14 @@ class FbManagerAdminAuth:
             user_doc_ref = firestore_db.collection('users').document(uid)
             user_doc_ref.set({'isAdmin': is_admin}, merge=True)
             
-            self.logger.info(f"Custom claim 'admin' definido como {is_admin} para o usuário {user_email} (UID: {uid}).")
-            self.logger.info("O usuário precisará fazer login novamente ou atualizar seu token para que a mudança tenha efeito.")
+            logger.info(f"Custom claim 'admin' definido como {is_admin} para o usuário {user_email} (UID: {uid}).")
+            logger.info("O usuário precisará fazer login novamente ou atualizar seu token para que a mudança tenha efeito.")
             return True
         except firebase_auth.UserNotFoundError:
-            self.logger.error(f"Usuário com email {user_email} não encontrado ao tentar definir claim.")
+            logger.error(f"Usuário com email {user_email} não encontrado ao tentar definir claim.")
             return False
         except Exception as e:
-            self.logger.error(f"Erro ao definir custom claim para {user_email}: {e}", exc_info=True)
+            logger.error(f"Erro ao definir custom claim para {user_email}: {e}", exc_info=True)
             return False
         
 from rich.prompt import Confirm        
@@ -404,7 +400,6 @@ def sync_local_and_storage_files(
         bucket_prefix (str): Prefixo no bucket do Firebase Storage para comparar.
                              Ex: "dados/imagens/" (deve terminar com / se for um "diretório").
     """
-    logger = logging.getLogger(__name__)
     if not storage_manager or not storage_manager.bucket:
         logger.error("Gerenciador de Storage inválido ou não inicializado.")
         return

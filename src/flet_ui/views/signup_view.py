@@ -7,9 +7,9 @@ from src.settings import ALLOWED_EMAIL_DOMAINS
 from src.services.firebase_client import FbManagerAuth
 from src.flet_ui.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField
 from src.flet_ui import theme
-from src.logger.logger import LoggerSetup
 
-_logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 # Validadores (podem ser movidos para um utils_validators.py se usados em mais lugares)
 def email_validator(email: str) -> Optional[str]:
@@ -31,7 +31,7 @@ def create_signup_view(page: ft.Page) -> ft.View:
     """
     Cria e retorna a ft.View para a tela de criação de conta (signup).
     """
-    _logger.info("Criando a view de Signup.")
+    logger.info("Criando a view de Signup.")
     auth_manager = FbManagerAuth()
 
     display_name_field = ValidatedTextField(
@@ -67,7 +67,7 @@ def create_signup_view(page: ft.Page) -> ft.View:
     )
 
     def handle_signup_click(e: ft.ControlEvent):
-        _logger.info("Botão de signup clicado.")
+        logger.info("Botão de signup clicado.")
         page.update()
 
         is_display_name_valid = display_name_field.validate(show_error=True)
@@ -89,7 +89,7 @@ def create_signup_view(page: ft.Page) -> ft.View:
                 show_snackbar(page, error_msg, color=theme.COLOR_ERROR, duration=7000)
                 email_field.text_field.error_text = "Domínio de email não permitido."
                 email_field.text_field.update()
-                _logger.warning(f"Tentativa de cadastro com domínio não permitido: {domain}")
+                logger.warning(f"Tentativa de cadastro com domínio não permitido: {domain}")
                 return
             else:
                 # Limpa o erro de domínio se o usuário corrigiu
@@ -102,7 +102,7 @@ def create_signup_view(page: ft.Page) -> ft.View:
         
         if not all([is_display_name_valid, is_password_valid, is_confirm_password_valid]):
             show_snackbar(page, "Por favor, corrija os erros no formulário.", color=theme.COLOR_ERROR)
-            _logger.warning("Tentativa de signup com formulário inválido.")
+            logger.warning("Tentativa de signup com formulário inválido.")
             return
 
         display_name = display_name_field.value or ""
@@ -110,14 +110,14 @@ def create_signup_view(page: ft.Page) -> ft.View:
         password = password_field.value or ""
 
         show_loading_overlay(page, "Criando conta...")
-        _logger.info(f"Tentando criar conta para: {email} com nome {display_name}")
+        logger.info(f"Tentando criar conta para: {email} com nome {display_name}")
 
         try:
             creation_response = auth_manager.create_user(email, password, display_name)
             hide_loading_overlay(page)
 
             if creation_response and creation_response.get("localId"): # Sucesso
-                _logger.info(f"Conta criada com sucesso para {email}. User ID: {creation_response['localId']}")
+                logger.info(f"Conta criada com sucesso para {email}. User ID: {creation_response['localId']}")
                 success_message = (
                     "Conta criada com sucesso! Um email de verificação foi enviado para "
                     f"{email}. Verifique sua caixa de entrada para ativar a conta."
@@ -137,9 +137,9 @@ def create_signup_view(page: ft.Page) -> ft.View:
                     error_message = "O formato do email fornecido é inválido."
                 else:
                     error_message = "Não foi possível criar a conta. Por favor, tente novamente."
-                    _logger.error(f"Erro não mapeado da API de signup: {api_error_code}")
+                    logger.error(f"Erro não mapeado da API de signup: {api_error_code}")
                 
-                _logger.warning(f"Falha na criação da conta para {email}. Erro: {api_error_code}")
+                logger.warning(f"Falha na criação da conta para {email}. Erro: {api_error_code}")
                 show_snackbar(page, error_message, color=theme.COLOR_ERROR, duration=7000)
 
             elif creation_response and creation_response.get("error_type"): # Falha de conexão/requisição
@@ -151,11 +151,11 @@ def create_signup_view(page: ft.Page) -> ft.View:
 
             else: # Outro tipo de falha
                 show_snackbar(page, "Não foi possível criar a conta. Resposta inesperada do servidor.", color=theme.COLOR_ERROR, duration=7000)
-                _logger.error(f"Resposta inesperada ao criar usuário: {creation_response}")
+                logger.error(f"Resposta inesperada ao criar usuário: {creation_response}")
 
         except Exception as ex:
             hide_loading_overlay(page)
-            _logger.error(f"Erro inesperado durante o signup: {ex}", exc_info=True)
+            logger.error(f"Erro inesperado durante o signup: {ex}", exc_info=True)
             show_snackbar(page, "Ocorreu um erro inesperado. Tente novamente.", color=theme.COLOR_ERROR)
 
     signup_button = ft.ElevatedButton(

@@ -13,6 +13,11 @@ from typing import List, Dict, Any, Optional
 # Importa definições de tema se necessário (ex: para padding ou cores)
 from src.flet_ui import theme
 
+import logging
+logger = logging.getLogger(__name__)
+
+from src.logger.logger import LoggerSetup
+
 SIZE_ICONS_NAVRAIL = 30
 
 icones_navegacao: List[Dict[str, Any]] = [
@@ -387,8 +392,6 @@ def create_footer(page: ft.Page) -> ft.BottomAppBar:
 import threading
 from src.flet_ui.components import hide_loading_overlay
 from src.logger.cloud_logger_handler import ClientLogUploader
-from src.logger.logger import LoggerSetup # Adicionado
-_logger = LoggerSetup.get_logger(__name__)
 
 def handle_logout(page: ft.Page):
     """Limpa o estado de autenticação e redireciona para a tela de login."""
@@ -396,7 +399,7 @@ def handle_logout(page: ft.Page):
         hide_loading_overlay(page)
         user_id_logged_out = page.session.get("auth_user_id") or \
                             (page.client_storage.get("auth_user_id") if page.client_storage else "Desconhecido")
-        _logger.info(f"Usuário {user_id_logged_out} deslogando.")
+        logger.info(f"Usuário {user_id_logged_out} deslogando.")
 
         # FLUSH ANTES DE LIMPAR O CONTEXTO DO USUÁRIO
         if LoggerSetup._active_cloud_handler_instance: # Verifica se o handler foi criado e está ativo
@@ -404,13 +407,13 @@ def handle_logout(page: ft.Page):
             # Só faz flush se o uploader for o ClientLogUploader, pois ele depende do token do usuário
             # que está prestes a ser removido. O AdminLogUploader pode continuar logando depois.
             if isinstance(uploader_in_use, ClientLogUploader) and uploader_in_use._current_user_token:
-                _logger.info("Logout: Forçando flush do CloudLogHandler para logs do usuário atual (ClientUploader)...")
+                logger.info("Logout: Forçando flush do CloudLogHandler para logs do usuário atual (ClientUploader)...")
                 try:
                     LoggerSetup._active_cloud_handler_instance.flush()
-                    _logger.debug("Flush solicitado. O upload ocorrerá em segundo plano.")
+                    logger.debug("Flush solicitado. O upload ocorrerá em segundo plano.")
                     # Não adicionar time.sleep() aqui, pois o flush é para a thread fazer.
                 except Exception as e_flush:
-                    _logger.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
+                    logger.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
 
         # Limpa do client_storage se existir
         auth_keys_to_clear = [
@@ -429,32 +432,32 @@ def handle_logout(page: ft.Page):
                 if key.startswith("auth_") or key.startswith("decrypted_api_key_"):
                     if page.client_storage.contains_key(key): 
                         page.client_storage.remove(key)
-            _logger.debug("Dados de autenticação removidos do client_storage (se existiam).")
+            logger.debug("Dados de autenticação removidos do client_storage (se existiam).")
         
         for key in auth_keys_to_clear:
             if key.startswith("auth_") or key.startswith("decrypted_api_key_"):
                 if page.session.contains_key(key):
                     page.session.remove(key) 
-        _logger.debug("Dados de autenticação removidos da sessão Flet.")
+        logger.debug("Dados de autenticação removidos da sessão Flet.")
         
         LoggerSetup.set_cloud_user_context(None, None) # Limpa contexto do logger de nuvem
-        _logger.info("Contexto do logger de nuvem limpo.")
+        logger.info("Contexto do logger de nuvem limpo.")
         
         page.go("/login") # Esta chamada de page.go() é segura aqui porque _logout_logic será executada pela thread principal via page.run_thread 
 
     # Verifica se esta função está sendo chamada da thread principal ou de uma thread de background
     if threading.current_thread() is threading.main_thread():
-        _logger.debug("handle_logout chamado da thread principal.")
+        logger.debug("handle_logout chamado da thread principal.")
         _logout_logic()
     else:
-        _logger.debug("handle_logout chamado de uma thread de background. Agendando na thread principal.")
+        logger.debug("handle_logout chamado de uma thread de background. Agendando na thread principal.")
         page.run_thread(_logout_logic) # Garante que a lógica de logout (incluindo page.go) rode na thread principal
 
 from src.flet_ui.components import show_snackbar, ValidatedTextField, ManagedAlertDialog
 
 def show_proxy_settings_dialog(page: ft.Page):
     # dialog_funtion substituído por uma view própria
-    _logger.info("Abrindo diálogo de configurações de proxy.")
+    logger.info("Abrindo diálogo de configurações de proxy.")
 
     from src.settings import (K_PROXY_ENABLED, K_PROXY_PASSWORD_SAVED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, K_PROXY_PASSWORD, 
                             PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT)
@@ -520,7 +523,7 @@ def show_proxy_settings_dialog(page: ft.Page):
     )
 
     def on_save_button_click(e):
-        _logger.info("Botão Salvar (proxy) clicado - lógica interna.")
+        logger.info("Botão Salvar (proxy) clicado - lógica interna.")
         is_enabled = proxy_enabled_switch.value
         host_valid = True
         port_valid = True
@@ -546,16 +549,16 @@ def show_proxy_settings_dialog(page: ft.Page):
             new_settings[K_PROXY_PASSWORD] = proxy_password_field.value
         
         if save_proxy_settings(new_settings):
-            _logger.info("Configurações de proxy salvas no Keyring.")
+            logger.info("Configurações de proxy salvas no Keyring.")
             # Retorna dados para o on_dialog_fully_closed
             return {"action": "saved", "message": "Configurações de proxy salvas com sucesso!", "color": theme.COLOR_SUCCESS}
         else:
-            _logger.error("Falha ao salvar configurações de proxy no Keyring.")
+            logger.error("Falha ao salvar configurações de proxy no Keyring.")
             show_snackbar(page, "Erro ao salvar configurações de proxy.", color=theme.COLOR_ERROR)
             return False # Não fecha o diálogo
 
     def on_delete_button_click(e):
-        _logger.info("Botão Remover Tudo (proxy) clicado - lógica interna.")
+        logger.info("Botão Remover Tudo (proxy) clicado - lógica interna.")
         settings_to_delete = { # ... (como antes) ...
             K_PROXY_ENABLED: False, 
             K_PROXY_IP_URL: PROXY_URL_DEFAULT, 
@@ -565,7 +568,7 @@ def show_proxy_settings_dialog(page: ft.Page):
             K_PROXY_PASSWORD_SAVED: False
         }
         if save_proxy_settings(settings_to_delete):
-            _logger.info("Configurações de proxy removidas do Keyring.")
+            logger.info("Configurações de proxy removidas do Keyring.")
             proxy_enabled_switch.value = False
             proxy_host_field.value = PROXY_URL_DEFAULT
             proxy_port_field.value = PROXY_PORT_DEFAULT
@@ -584,21 +587,21 @@ def show_proxy_settings_dialog(page: ft.Page):
 
             return {"action": "deleted", "message": "Configurações de proxy removidas.", "color": theme.COLOR_INFO}
         else:
-            _logger.error("Falha ao remover configurações de proxy.")
+            logger.error("Falha ao remover configurações de proxy.")
             show_snackbar(page, "Erro ao remover configurações de proxy.", color=theme.COLOR_ERROR)
             return False # Não fecha
 
     def on_cancel_button_click(e):
-        _logger.info("Botão Cancelar (proxy) clicado.")
+        logger.info("Botão Cancelar (proxy) clicado.")
         return {"action": "cancelled"} # Sinaliza para fechar e passar "cancelled"
     
     # Callback que executa DEPOIS que o diálogo é totalmente fechado
     def after_proxy_dialog_closed(result_data: Any):
-        _logger.info(f"Callback after_proxy_dialog_closed chamado com: {result_data}")
+        logger.info(f"Callback after_proxy_dialog_closed chamado com: {result_data}")
         if isinstance(result_data, dict) and result_data.get("message"):
             show_snackbar(page, result_data["message"], color=result_data.get("color", theme.COLOR_INFO))
         elif result_data == "cancelled":
-             _logger.info("Operação de proxy cancelada pelo usuário.")
+             logger.info("Operação de proxy cancelada pelo usuário.")
         # Aqui você pode adicionar qualquer outra lógica que precise rodar após o diálogo fechar e após a ação principal (salvar/deletar) ter sido concluída.
 
     actions_list = [

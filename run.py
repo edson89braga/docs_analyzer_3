@@ -3,10 +3,7 @@ from time import perf_counter
 start_time = perf_counter()
 print(f"{start_time:.4f}s - Iniciando run.py")
 
-import logging, os
-import flet as ft
-# Importa a função 'main' do seu módulo app dentro de flet_ui
-from src.flet_ui.app import main
+DEV_MODE = True
 
 # REMOVIDO daqui managers de storage para tentar tornar a inicialização da aplicação mais rápida (movido para app.py):
 # from src.services.firebase_client import FirebaseClientStorage
@@ -28,10 +25,13 @@ from src.flet_ui.app import main
 # if not _client_storage_for_logger and not _admin_storage_for_logger:
 #     print("AVISO CRÍTICO em run.py: Nenhum gerenciador de storage Firebase disponível. Logs na nuvem DESABILITADOS.")
 
+import logging, os
 from src.logger.logger import LoggerSetup
+
 try:
     LoggerSetup.initialize(
         routine_name="DocsAnalyzer3",
+        dev_mode = DEV_MODE, 
         #firebase_client_storage=_client_storage_for_logger,
         #fb_manager_storage_admin=_admin_storage_for_logger
     )
@@ -44,6 +44,10 @@ except Exception as e:
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logging.error("Logger principal falhou ao inicializar. Usando fallback básico.")
     # Não levantar exceção aqui para permitir que a app Flet tente iniciar mesmo assim.
+
+import flet as ft
+# Importa a função 'main' do seu módulo app dentro de flet_ui
+from src.flet_ui.app import main
 
 # Silencia logs de bibliotecas 
 logging.getLogger("flet_core").setLevel(logging.WARNING)

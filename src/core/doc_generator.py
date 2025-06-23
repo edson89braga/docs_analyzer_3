@@ -11,8 +11,8 @@ from docx import Document
 from src.core.prompts import formatted_initial_analysis # Para type hinting e acesso aos campos
 from src.settings import ASSETS_DIR_ABS # Para acessar a pasta de assets
 
-from src.logger.logger import LoggerSetup
-_logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 TEMPLATES_SUBDIR = "templates_docx"
 
@@ -57,7 +57,7 @@ class DocxExporter:
         Returns:
             bool: True se a exportação for bem-sucedida, False caso contrário.
         """
-        _logger.info(f"Iniciando exportação simples para DOCX em: {output_path}")
+        logger.info(f"Iniciando exportação simples para DOCX em: {output_path}")
         try:
             document = Document()
             document.add_heading('Relatório de Análise do Documento', level=1)
@@ -117,10 +117,10 @@ class DocxExporter:
                         document.add_paragraph() # Espaço extra
 
             document.save(output_path)
-            _logger.info(f"DOCX simples salvo com sucesso em: {output_path}")
+            logger.info(f"DOCX simples salvo com sucesso em: {output_path}")
             return True
         except Exception as e:
-            _logger.error(f"Erro ao exportar DOCX simples para '{output_path}': {e}", exc_info=True)
+            logger.error(f"Erro ao exportar DOCX simples para '{output_path}': {e}", exc_info=True)
             return False
 
     def get_available_templates(self) -> List[Tuple[str, str]]:
@@ -133,7 +133,7 @@ class DocxExporter:
         """
         templates = []
         if not os.path.isdir(self.templates_dir):
-            _logger.warning(f"Diretório de templates '{self.templates_dir}' não encontrado.")
+            logger.warning(f"Diretório de templates '{self.templates_dir}' não encontrado.")
             return templates
 
         for filename in os.listdir(self.templates_dir):
@@ -143,7 +143,7 @@ class DocxExporter:
                 friendly_name = filename[:-len(".docx")].replace("_", " ").title()
                 templates.append((friendly_name, full_path))
         
-        _logger.info(f"Encontrados {len(templates)} templates em '{self.templates_dir}'.")
+        logger.info(f"Encontrados {len(templates)} templates em '{self.templates_dir}'.")
         return templates
 
     def export_from_template_docx(self, data: formatted_initial_analysis, template_path: str, output_path: str) -> Tuple[bool, List[str]]:
@@ -158,11 +158,11 @@ class DocxExporter:
         Returns:
             Tuple[bool, List[str]]: (True se sucesso False caso contrário, Lista de chaves não encontradas no template mas com valor nos dados)
         """
-        _logger.info(f"Iniciando exportação baseada no template '{template_path}' para '{output_path}'")
+        logger.info(f"Iniciando exportação baseada no template '{template_path}' para '{output_path}'")
         missing_keys_with_values: List[str] = []
         try:
             if not os.path.exists(template_path):
-                _logger.error(f"Template '{template_path}' não encontrado.")
+                logger.error(f"Template '{template_path}' não encontrado.")
                 return False, ["Template não encontrado"]
 
             # Copia o template para o local de saída para não modificar o original
@@ -286,13 +286,13 @@ class DocxExporter:
 
 
             document.save(output_path)
-            _logger.info(f"DOCX a partir de template salvo com sucesso em: {output_path}")
+            logger.info(f"DOCX a partir de template salvo com sucesso em: {output_path}")
             if missing_keys_with_values:
-                 _logger.warning(f"Algumas chaves com valor nos dados não foram encontradas como placeholders no template: {missing_keys_with_values}")
+                 logger.warning(f"Algumas chaves com valor nos dados não foram encontradas como placeholders no template: {missing_keys_with_values}")
             return True, missing_keys_with_values
 
         except Exception as e:
-            _logger.error(f"Erro ao exportar DOCX de template '{template_path}' para '{output_path}': {e}", exc_info=True)
+            logger.error(f"Erro ao exportar DOCX de template '{template_path}' para '{output_path}': {e}", exc_info=True)
             return False, ["Erro interno durante a exportação."]
 
 execution_time = perf_counter() - start_time

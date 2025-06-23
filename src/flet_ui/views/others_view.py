@@ -6,8 +6,9 @@ from src.flet_ui import theme # Para COLOR_WARNING
 from src.flet_ui.theme import COLOR_WARNING
 
 from src.flet_ui.views.nc_analyze_view import KEY_SESSION_CURRENT_BATCH_NAME
-from src.logger.logger import LoggerSetup
-logger = LoggerSetup.get_logger(__name__)
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 def create_chat_pdf_content(page: ft.Page) -> ft.Control:

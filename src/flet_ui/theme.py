@@ -10,6 +10,9 @@ print(f"{start_time:.4f}s - Iniciando themes.py")
 import flet as ft
 from datetime import datetime
 
+import logging
+logger = logging.getLogger(__name__)
+
 # --- Paleta de Cores Principal (Exemplo - Azul) ---
 # Você pode definir suas cores hexadecimais aqui ou usar as pré-definidas do Flet
 SEED_COLOR = ft.Colors.BLUE_700 # Cor base para gerar o esquema de cores

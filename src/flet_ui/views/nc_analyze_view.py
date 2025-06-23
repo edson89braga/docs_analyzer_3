@@ -58,8 +58,8 @@ from sentence_transformers import SentenceTransformer
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
 municipios_list = get_municipios_por_uf_cached()
 
-from src.logger.logger import LoggerSetup
-_logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 # Dicionário para servir como cache no lado do servidor para dados pesados da sessão.
 # A chave será o ID da sessão do Flet (page.session_id).
@@ -78,9 +78,9 @@ def clear_user_cache(page: ft.Page):
     session_id = page.session_id
     if session_id in _SERVER_SIDE_CACHE:
         del _SERVER_SIDE_CACHE[session_id]
-        _logger.info(f"Cache do lado do servidor limpo para a sessão {session_id}.")
+        logger.info(f"Cache do lado do servidor limpo para a sessão {session_id}.")
     else:
-        _logger.debug(f"Nenhum cache do lado do servidor encontrado para a sessão {session_id} para limpar.")
+        logger.debug(f"Nenhum cache do lado do servidor encontrado para a sessão {session_id} para limpar.")
         
 # Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
 KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
@@ -187,7 +187,7 @@ class AnalyzePDFViewContent(ft.Column):
 
     def _build_gui_structure(self):
         """Constrói a estrutura visual (GUI) da view."""
-        _logger.info("Construindo estrutura da UI para Análise de PDF.")
+        logger.info("Construindo estrutura da UI para Análise de PDF.")
         
         default_icon_size_bar = 25
         width_btn_bar = 180
@@ -400,7 +400,7 @@ class AnalyzePDFViewContent(ft.Column):
 
     def _create_prompt_display_layout(self) -> ft.Container:
         """Cria o layout para exibir os prompts estruturados."""
-        _logger.info("Criando layout de visualização do prompt.")
+        logger.info("Criando layout de visualização do prompt.")
 
         prompt_variables_to_display = [                       
             ("System_prompt", core_prompts.system_prompt_A0),
@@ -471,16 +471,16 @@ class AnalyzePDFViewContent(ft.Column):
         para gerenciar as operações de exportação, utilizando a instância global
         do FilePicker da página.
         """
-        _logger.info("Inicializando FilePickers (Managed para upload, Global para exportação).")
+        logger.info("Inicializando FilePickers (Managed para upload, Global para exportação).")
         
         # Primeiro, obtenha a referência ao picker global
         self.global_file_picker_instance = self.page.data.get("global_file_picker")
         if not self.global_file_picker_instance:
-            _logger.critical("FilePicker global NÃO encontrado em page.data! Upload e Exportação podem falhar.")
+            logger.critical("FilePicker global NÃO encontrado em page.data! Upload e Exportação podem falhar.")
             show_snackbar(self.page, "Erro crítico: FilePicker não inicializado.", theme.COLOR_ERROR)
             return
         else:
-             _logger.info("Referência ao FilePicker GLOBAL para exportação e upload armazenada.")
+             logger.info("Referência ao FilePicker GLOBAL para exportação e upload armazenada.")
 
         # Configura o ManagedFilePicker para UPLOADS, passando a instância global
         if self.global_file_picker_instance: # Só instancia se o picker global existir
@@ -495,7 +495,7 @@ class AnalyzePDFViewContent(ft.Column):
                     file_name: O nome original do arquivo.
                 """
                 if success and file_name and path_or_msg:
-                    _logger.info(f"Upload individual de '{file_name}' OK. Path: {path_or_msg}")
+                    logger.info(f"Upload individual de '{file_name}' OK. Path: {path_or_msg}")
                     current_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
                     if not isinstance(current_files, list): 
                         current_files = []                    
@@ -506,9 +506,9 @@ class AnalyzePDFViewContent(ft.Column):
                         current_files.append(new_file_entry)
                         self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
                 elif path_or_msg == "Seleção cancelada":
-                    _logger.info("Seleção de arquivos cancelada.")
+                    logger.info("Seleção de arquivos cancelada.")
                 else:
-                    _logger.error(f"Falha no upload de '{file_name}': {path_or_msg}")
+                    logger.error(f"Falha no upload de '{file_name}': {path_or_msg}")
 
             def batch_upload_complete_cb(batch_results: List[Dict[str, Any]]):
                 """
@@ -519,7 +519,7 @@ class AnalyzePDFViewContent(ft.Column):
                 Args:
                     batch_results: Lista de dicionários com os resultados de cada arquivo no lote.
                 """
-                _logger.info(f"Upload_Batch Completo (ManagedFilePicker): {len(batch_results)} resultados.")
+                logger.info(f"Upload_Batch Completo (ManagedFilePicker): {len(batch_results)} resultados.")
                 hide_loading_overlay(self.page)
                 
                 successful_uploads = [r for r in batch_results if r['success']]
@@ -536,7 +536,7 @@ class AnalyzePDFViewContent(ft.Column):
                     final_message = f"Todos os {failed_count} uploads falharam."
                     final_color = theme.COLOR_ERROR
                 elif not batch_results:
-                    _logger.info("Nenhum arquivo selecionado.")
+                    logger.info("Nenhum arquivo selecionado.")
                     final_message = "Nenhum arquivo selecionado."
                     final_color = theme.COLOR_WARNING
                 
@@ -562,9 +562,9 @@ class AnalyzePDFViewContent(ft.Column):
                 on_batch_complete=batch_upload_complete_cb,
                 allowed_extensions=["pdf"]
             )
-            _logger.info("ManagedFilePicker para UPLOAD instanciado usando o picker global.")
+            logger.info("ManagedFilePicker para UPLOAD instanciado usando o picker global.")
         else:
-            _logger.warning("ManagedFilePicker para UPLOAD não pôde ser instanciado pois o picker global não foi encontrado.")
+            logger.warning("ManagedFilePicker para UPLOAD não pôde ser instanciado pois o picker global não foi encontrado.")
         
         # Inicializa o InternalExportManager passando as dependências necessárias
         self.export_manager = InternalExportManager(self, self.docx_exporter, self.global_file_picker_instance)
@@ -572,7 +572,7 @@ class AnalyzePDFViewContent(ft.Column):
     # --- Handlers de Eventos (Implementações Iniciais) ---
     def _setup_event_handlers(self):
         """Configura os handlers de eventos para os controles da UI."""
-        _logger.info("Configurando handlers de eventos da UI.")
+        logger.info("Configurando handlers de eventos da UI.")
         self.gui_controls[CTL_UPLOAD_BTN].on_click = self._handle_upload_click
         self.gui_controls[CTL_PROCESS_BTN].on_click = self._handle_process_content_click
         self.gui_controls[CTL_ANALYZE_BTN].on_click = self._handle_analyze_click
@@ -583,7 +583,7 @@ class AnalyzePDFViewContent(ft.Column):
 
     def _handle_upload_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Carregar Arquivo(s)'."""
-        _logger.info("Botão 'Carregar Arquivo(s)' clicado.")
+        logger.info("Botão 'Carregar Arquivo(s)' clicado.")
 
         def primary_upload_action():            
             if self.managed_file_picker:
@@ -604,13 +604,13 @@ class AnalyzePDFViewContent(ft.Column):
                                 step_type: str, # "process_only", "analyze_only", "process_and_analyze"
                                 event: Optional[ft.ControlEvent] = None): # Evento original, para logging se necessário
         
-        _logger.info(f"Iniciando etapa de análise: '{step_type}'")
+        logger.info(f"Iniciando etapa de análise: '{step_type}'")
 
         # 1. Verificar se há arquivos carregados (necessário para todas as etapas)
         ordered_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED)
         if not ordered_files and step_type != "analyze_only": # "analyze_only" pode teoricamente rodar se já processado
             show_snackbar(self.page, "Nenhum PDF carregado para esta ação.", theme.COLOR_WARNING)
-            _logger.warning(f"Ação '{step_type}' abortada: Nenhum PDF carregado.")
+            logger.warning(f"Ação '{step_type}' abortada: Nenhum PDF carregado.")
             return
         
         pdf_paths = [f['path'] for f in ordered_files] if ordered_files else []
@@ -622,7 +622,7 @@ class AnalyzePDFViewContent(ft.Column):
             # É uma reanálise se já existe uma resposta LLM no cache
             if self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE):
                 is_reanalysis = True
-                _logger.info("Detectada uma solicitação de REANÁLISE LLM.")
+                logger.info("Detectada uma solicitação de REANÁLISE LLM.")
 
         # 2. Definir a ação primária específica para a etapa
         primary_action_callable: Optional[Callable[[], None]] = None
@@ -643,7 +643,7 @@ class AnalyzePDFViewContent(ft.Column):
             # Esta etapa requer que os arquivos já tenham sido processados
             if not self._files_processed:
                 show_snackbar(self.page, "Conteúdo dos arquivos ainda não processado. Clique em 'Processar Conteúdo' primeiro.", theme.COLOR_WARNING, duration=5000)
-                _logger.warning("Ação 'analyze_only' abortada: Arquivos não processados.")
+                logger.warning("Ação 'analyze_only' abortada: Arquivos não processados.")
                 # Talvez chamar o _initiate_analysis_step("process_and_analyze") aqui?
                 # Por ora, apenas informa o usuário.
                 return # Retorna para o usuário clicar no botão correto.
@@ -673,7 +673,7 @@ class AnalyzePDFViewContent(ft.Column):
             primary_action_callable = primary_full_pipeline_action
         
         else:
-            _logger.error(f"Tipo de etapa de análise desconhecido: {step_type}")
+            logger.error(f"Tipo de etapa de análise desconhecido: {step_type}")
             return
 
         # 4. Chamar o FeedbackWorkflowManager (se existir e for aplicável)
@@ -690,14 +690,14 @@ class AnalyzePDFViewContent(ft.Column):
 
     def _handle_process_content_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Processar Conteúdo'."""
-        _logger.info("Botão 'Processar Conteúdo' clicado.")
+        logger.info("Botão 'Processar Conteúdo' clicado.")
         self._initiate_analysis_step(step_type="process_only", event=e)
 
     def _handle_analyze_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Solicitar Análise'."""
-        _logger.info("Botão 'Solicitar Análise' clicado.")
+        logger.info("Botão 'Solicitar Análise' clicado.")
         if not self._files_processed:
-            _logger.info("'Solicitar Análise' clicado, mas arquivos não processados. Redirecionando para 'process_and_analyze'.")
+            logger.info("'Solicitar Análise' clicado, mas arquivos não processados. Redirecionando para 'process_and_analyze'.")
             # Se os arquivos não foram processados, o clique em "Analisar" deve, na verdade,
             # executar o pipeline completo.
             self._initiate_analysis_step(step_type="process_and_analyze", event=e)
@@ -706,7 +706,7 @@ class AnalyzePDFViewContent(ft.Column):
             self._initiate_analysis_step(step_type="analyze_only", event=e)
 
     def _handle_restart_click(self, e: ft.ControlEvent):
-        _logger.info("Botão 'Reiniciar' clicado.")
+        logger.info("Botão 'Reiniciar' clicado.")
 
         def primary_restart_action():
             self._clear_all_data_and_gui()
@@ -784,7 +784,7 @@ class AnalyzePDFViewContent(ft.Column):
 
         self.settings_drawer_container.update()
         self.gui_controls[CTL_SETTINGS_BTN].update()
-        _logger.info(f"Drawer de configurações {'aberto' if self._is_drawer_open else 'fechado'}.")
+        logger.info(f"Drawer de configurações {'aberto' if self._is_drawer_open else 'fechado'}.")
 
     def _toggle_prompt_view(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Prompt Estruturado'."""
@@ -794,7 +794,7 @@ class AnalyzePDFViewContent(ft.Column):
         prompt_button = self.gui_controls.get(CTL_PROMPT_STRUCT_BTN)
 
         if self._is_prompt_view_active:
-            _logger.info("Ativando visualização do prompt estruturado.")
+            logger.info("Ativando visualização do prompt estruturado.")
             # Salva o layout original se ainda não foi salvo (já feito ao inicializar _original_main_layout_container)
             
             # Cria ou obtém o layout de exibição do prompt
@@ -805,7 +805,7 @@ class AnalyzePDFViewContent(ft.Column):
             if self.controls and self.controls[3] == self._original_main_layout_container: # Verifica se o controle esperado está lá
                 self.controls[3] = self._prompt_display_layout
             else:
-                _logger.error("Estrutura de controle inesperada ao tentar mostrar a visualização do prompt.")
+                logger.error("Estrutura de controle inesperada ao tentar mostrar a visualização do prompt.")
                 # Reverter e não fazer nada
                 self._is_prompt_view_active = False 
                 if prompt_button and prompt_button.page: 
@@ -819,13 +819,13 @@ class AnalyzePDFViewContent(ft.Column):
                 prompt_button.bgcolor = ft.Colors.with_opacity(0.25, theme.COLOR_INFO)
         
         else: # Voltando para a visualização normal
-            _logger.info("Desativando visualização do prompt, voltando para análise.")
+            logger.info("Desativando visualização do prompt, voltando para análise.")
             # Restaura layout original
             if self._original_main_layout_container and self._prompt_display_layout:
                 if self.controls and self.controls[3] == self._prompt_display_layout:
                      self.controls[3] = self._original_main_layout_container
                 else:
-                    _logger.error("Estrutura de controle inesperada ao tentar restaurar a visualização principal.")
+                    logger.error("Estrutura de controle inesperada ao tentar restaurar a visualização principal.")
                     if prompt_button and prompt_button.page: 
                         prompt_button.update()
                     self.update()
@@ -855,7 +855,7 @@ class AnalyzePDFViewContent(ft.Column):
                 if self.gui_controls[key].page and self.gui_controls[key].uid:
                     self.gui_controls[key].update()
             
-            _logger.info("[DEBUG] Estados dos botões atualizados (Prompt View Ativa).")
+            logger.info("[DEBUG] Estados dos botões atualizados (Prompt View Ativa).")
             return # Termina aqui se a visualização do prompt estiver ativa
 
         files_exist = bool(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED))
@@ -895,7 +895,7 @@ class AnalyzePDFViewContent(ft.Column):
         if self.llm_result_title.page and self.llm_result_title.uid:
             self.llm_result_title.update()
 
-        _logger.info("[DEBUG] Estados dos botões atualizados.")
+        logger.info("[DEBUG] Estados dos botões atualizados.")
 
     def _update_processing_metadata_display(self, proc_meta: Optional[Dict[str, Any]] = None):
         """
@@ -1100,7 +1100,7 @@ class AnalyzePDFViewContent(ft.Column):
                 structured_result.visible = True
                 warning_balloon.visible = True
             else:
-                _logger.error("Controle CTL_LLM_STRUCTURED_RESULT_DISPLAY não é uma instância de LLMStructuredResultDisplay.")
+                logger.error("Controle CTL_LLM_STRUCTURED_RESULT_DISPLAY não é uma instância de LLMStructuredResultDisplay.")
                 text_result.value = "Erro interno ao exibir resultado estruturado."
                 text_result.visible = True
         elif isinstance(result_data, str):
@@ -1109,7 +1109,7 @@ class AnalyzePDFViewContent(ft.Column):
             warning_balloon.visible = True
         else: # Caso padrão, mostra balão
             balloon.visible = True
-            _logger.warning(f"Tipo de result_data inesperado: {type(result_data)}")
+            logger.warning(f"Tipo de result_data inesperado: {type(result_data)}")
         
         # Atualiza o container que contém o Stack e outros elementos
         for ctl in [self.llm_result_container, warning_balloon]:
@@ -1119,7 +1119,7 @@ class AnalyzePDFViewContent(ft.Column):
     def _reset_processing_and_llm_results(self):
         """Limpa os resultados do processamento PDF e da análise LLM."""
         # NOVO MÉTODO (a ser usado quando a lista de arquivos muda)
-        _logger.debug("Resetando resultados de processamento e LLM.")
+        logger.debug("Resetando resultados de processamento e LLM.")
         
         self.user_cache = get_user_cache(self.page)
         self.user_cache.pop(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, None)
@@ -1141,7 +1141,7 @@ class AnalyzePDFViewContent(ft.Column):
     def _reset_llm_results(self):
         """Limpa apenas os resultados da análise LLM."""
         # NOVO MÉTODO (a ser usado quando uma nova análise LLM é solicitada)
-        _logger.debug("Resetando resultados da LLM.")
+        logger.debug("Resetando resultados da LLM.")
         
         self.user_cache = get_user_cache(self.page)
         self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE, None)
@@ -1164,7 +1164,7 @@ class AnalyzePDFViewContent(ft.Column):
         Atualiza toda a GUI da view com base no estado atual salvo na sessão.
         Este método centraliza todas as chamadas de atualização da GUI.
         """
-        _logger.info("Atualizando GUI a partir do estado da sessão...")
+        logger.info("Atualizando GUI a partir do estado da sessão...")
         hide_loading_overlay(self.page)
         
         # Atualiza flags internas com base na sessão Flet
@@ -1201,12 +1201,12 @@ class AnalyzePDFViewContent(ft.Column):
         # with update_lock:
         #     self.page.update()
 
-        _logger.info("Atualização da GUI a partir do estado concluída.")
+        logger.info("Atualização da GUI a partir do estado concluída.")
         
     # --- Gerenciamento de Estado e Limpeza ---
     def _restore_state_from_session(self):
         """Restaura o estado da view a partir dos dados salvos na sessão."""
-        _logger.info("Restaurando estado da view Análise PDF da sessão.")    
+        logger.info("Restaurando estado da view Análise PDF da sessão.")    
         
         # Carrega as configurações para o drawer (isso não afeta o estado principal da análise)
         analysis_settings_from_session = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
@@ -1220,7 +1220,7 @@ class AnalyzePDFViewContent(ft.Column):
 
     def _clear_all_data_and_gui(self):
         """Limpa todos os dados da sessão e reseta a UI para o estado inicial."""
-        _logger.info("Limpando todos os dados e resetando UI da Análise PDF.")
+        logger.info("Limpando todos os dados e resetando UI da Análise PDF.")
         
         # Limpa o cache do servidor para este usuário
         clear_user_cache(self.page)
@@ -1424,7 +1424,7 @@ class InternalAnalysisController:
         """Busca as configurações de análise atuais da sessão."""
         settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
         if not settings or not isinstance(settings, dict):
-            _logger.warning("Configurações de análise não encontradas na sessão ou formato inválido. Usando fallbacks.")
+            logger.warning("Configurações de análise não encontradas na sessão ou formato inválido. Usando fallbacks.")
             return FALLBACK_ANALYSIS_SETTINGS.copy() # Retorna uma cópia
         
         # Garante que os tipos numéricos estejam corretos, pois podem vir de TextFields como string
@@ -1482,7 +1482,7 @@ class InternalAnalysisController:
             analyze_llm_after: Se True, inicia a análise LLM após o processamento.
         """
         current_analysis_settings = self._get_current_analysis_settings()
-        _logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
+        logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
         pdf_extractor = current_analysis_settings.get("pdf_extractor", FALLBACK_ANALYSIS_SETTINGS["pdf_extractor"])
         provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
         vectorization_model = current_analysis_settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
@@ -1495,16 +1495,16 @@ class InternalAnalysisController:
         
         if pdf_extractor == 'PdfPlumber':
             self.pdf_analyzer.extractor = PdfPlumberExtractor()
-            _logger.info("Alterando pdf_extractor para PdfPlumber!")
+            logger.info("Alterando pdf_extractor para PdfPlumber!")
 
         decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}") 
         if decrypted_api_key:
-            _logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+            logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
 
         try:
             start_time = perf_counter()
 
-            _logger.info(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
+            logger.info(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
             self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
 
             processed_files_metadata, all_indices, all_texts_to_storage, all_texts_to_loop = \
@@ -1534,11 +1534,11 @@ class InternalAnalysisController:
 
             if tokens_embeddings:
                 self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
-                _logger.info(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
+                logger.info(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
             else:
                 if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
                     self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
-                    _logger.info("Tokens de embedding removidos da sessão (não retornados pela análise).")
+                    logger.info("Tokens de embedding removidos da sessão (não retornados pela análise).")
                 
             if not processed_page_data_combined:
                 raise ValueError("Nenhum dado processável encontrado nos PDFs.")
@@ -1593,7 +1593,7 @@ class InternalAnalysisController:
             self.page.run_thread(self.parent_view._update_processing_metadata_display, proc_meta_for_ui)
 
             self.parent_view._files_processed = True
-            _logger.info(f"Thread: Processamento de PDF para '{batch_name}' concluído.")
+            logger.info(f"Thread: Processamento de PDF para '{batch_name}' concluído.")
 
             if perf_counter() - point_time < 1: sleep(1) 
             self.page.run_thread(self._update_status_callback, "Aguardando para exibir os resultados...", False, True)
@@ -1609,7 +1609,7 @@ class InternalAnalysisController:
                 self.page.run_thread(show_snackbar, self.page, f"Conteúdo de '{batch_name}' processado. Pronto para análise LLM.", theme.COLOR_SUCCESS)
         
         except Exception as ex_proc:
-            _logger.error(f"Thread: Erro no processamento de PDF para '{batch_name}': {ex_proc}", exc_info=True)
+            logger.error(f"Thread: Erro no processamento de PDF para '{batch_name}': {ex_proc}", exc_info=True)
             self.page.run_thread(self._update_status_callback, f"Erro ao processar PDFs: {ex_proc}", True, True)
             self.parent_view._files_processed = False # Falhou
         finally:
@@ -1667,25 +1667,25 @@ class InternalAnalysisController:
         import src.core.ai_orchestrator as ai_orchestrator
 
         current_analysis_settings = self._get_current_analysis_settings()
-        _logger.info(f"Usando configurações de análise para LLM: {current_analysis_settings}")
+        logger.info(f"Usando configurações de análise para LLM: {current_analysis_settings}")
         provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
         model_name = current_analysis_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
         temperature = current_analysis_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
         mode_prompt = current_analysis_settings.get("prompt_structure", FALLBACK_ANALYSIS_SETTINGS["prompt_structure"])
 
-        _logger.info(f"[DEBUG] mode_prompt: {mode_prompt}")  ,
+        logger.info(f"[DEBUG] mode_prompt: {mode_prompt}")  ,
 
         if mode_prompt == "sequential_prompts":
             selected_prompts = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
         else: # if mode_prompt == "prompt_unico":
             selected_prompts = "PROMPT_UNICO_for_INITIAL_ANALYSIS"
         try:
-            _logger.info(f"Thread: Iniciando análise LLM para '{batch_name}'...")
+            logger.info(f"Thread: Iniciando análise LLM para '{batch_name}'...")
             self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
 
             decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}") 
             if decrypted_api_key:
-                _logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+                logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
             else:
                 decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
                 assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
@@ -1731,7 +1731,7 @@ class InternalAnalysisController:
                 self.page.run_thread(show_snackbar, self.page, "Erro na consulta à LLM.", theme.COLOR_ERROR)
                 self.parent_view._analysis_requested = False
         except Exception as ex_llm:
-            _logger.error(f"Thread: Erro na análise LLM para '{batch_name}': {ex_llm}", exc_info=True)
+            logger.error(f"Thread: Erro na análise LLM para '{batch_name}': {ex_llm}", exc_info=True)
             self.parent_view._analysis_requested = False
             self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
             self.page.run_thread(self._update_status_callback,  f"Erro na consulta à LLM: {ex_llm}", True, True)
@@ -1822,10 +1822,10 @@ class InternalExportManager:
             data_to_export: Os dados estruturados da análise a serem exportados.
             template_path: O caminho para o arquivo de template DOCX (obrigatório para exportação com template).
         """
-        _logger.info(f"ExportManager: start_export. Op: {operation_type}, Web: {self.page.web}")
+        logger.info(f"ExportManager: start_export. Op: {operation_type}, Web: {self.page.web}")
 
         if not data_to_export: # Verificação de segurança
-            _logger.error("ExportManager (start_export): Dados para exportação ausentes ou inválidos.")
+            logger.error("ExportManager (start_export): Dados para exportação ausentes ou inválidos.")
             show_snackbar(self.page, "Erro: Dados para exportação inválidos.", theme.COLOR_ERROR)
             return
         
@@ -1842,7 +1842,7 @@ class InternalExportManager:
             try: 
                 os.makedirs(temp_exports_dir, exist_ok=True)
             except OSError as e:
-                _logger.error(f"EXPORT_MANAGER (Web): Falha ao criar diretório de exportações temporárias '{temp_exports_dir}': {e}")
+                logger.error(f"EXPORT_MANAGER (Web): Falha ao criar diretório de exportações temporárias '{temp_exports_dir}': {e}")
                 hide_loading_overlay(self.page)
                 show_snackbar(self.page, "Erro ao preparar diretório para download.", theme.COLOR_ERROR)
                 return
@@ -1857,7 +1857,7 @@ class InternalExportManager:
                 server_save_path = os.path.join(temp_exports_dir, temp_server_filename)
                 export_success_on_server, missing_keys_on_server = self.docx_exporter.export_from_template_docx(data_to_export, template_path, server_save_path)
             else: 
-                _logger.error(f"EXPORT_MANAGER (Web): Tipo de operação desconhecido ou template_path ausente: {operation_type}")
+                logger.error(f"EXPORT_MANAGER (Web): Tipo de operação desconhecido ou template_path ausente: {operation_type}")
                 hide_loading_overlay(self.page)
                 show_snackbar(self.page, "Erro: Tipo de exportação inválido.", theme.COLOR_ERROR)
                 return
@@ -1877,7 +1877,7 @@ class InternalExportManager:
                             ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)], tight=True),
                         confirm_text="OK", cancel_text=None )).start()
             else: 
-                _logger.error(f"ExportManager (Web): Falha ao gerar DOCX: {server_save_path}")
+                logger.error(f"ExportManager (Web): Falha ao gerar DOCX: {server_save_path}")
                 show_snackbar(self.page, "Falha ao gerar arquivo para download.", theme.COLOR_ERROR)
                     
         else: # Desktop
@@ -1885,7 +1885,7 @@ class InternalExportManager:
 
     def handle_add_new_template_click(self):
         """Handler para o clique no item 'Adicionar Novo Template'."""
-        _logger.info("Botão 'Adicionar Novo Template' clicado.")
+        logger.info("Botão 'Adicionar Novo Template' clicado.")
         if not self.global_file_picker:
             show_snackbar(self.page, "Erro: Seletor de arquivos não pronto.", theme.COLOR_ERROR)
             return
@@ -1921,7 +1921,7 @@ class InternalExportManager:
             try: 
                 os.remove(temp_target)
             except OSError as er: 
-                _logger.warning(f"Não remover temp anterior '{temp_target}': {er}")
+                logger.warning(f"Não remover temp anterior '{temp_target}': {er}")
         try:
             upload_url = self.page.get_upload_url(file_name, expires=300)
             if not upload_url: 
@@ -1932,7 +1932,7 @@ class InternalExportManager:
             show_loading_overlay(self.page, f"Fazendo upload de '{file_name}'...")
             self.page.update()
         except Exception as ex: 
-            _logger.error(f"Erro upload template web: {ex}", exc_info=True)
+            logger.error(f"Erro upload template web: {ex}", exc_info=True)
             show_snackbar(self.page, f"Erro upload: {ex}", theme.COLOR_ERROR)
             hide_loading_overlay(self.page)
 
@@ -1960,7 +1960,7 @@ class InternalExportManager:
             time.sleep(0.3)
         
         if not file_found: 
-            _logger.error(f"Template '{e.file_name}' não encontrado em '{source_path_server}'.")
+            logger.error(f"Template '{e.file_name}' não encontrado em '{source_path_server}'.")
             show_snackbar(self.page, "Erro: Arquivo não confirmado no servidor.", theme.COLOR_ERROR)
             return
         
@@ -1982,7 +1982,7 @@ class InternalExportManager:
 
         if not self.page.web:
             if not source_path: 
-                _logger.error("Desktop: source_path None.")
+                logger.error("Desktop: source_path None.")
                 show_snackbar(self.page, "Erro caminho template.", theme.COLOR_ERROR)
                 return
             self.copy_template_to_assets(source_path, original_name)
@@ -2005,21 +2005,21 @@ class InternalExportManager:
             self.parent_view._update_export_button_menu() # Acessa via parent_view
             if self.page: self.page.update()
         except Exception as ex: 
-            _logger.error(f"Erro ao copiar template '{original_filename}': {ex}", exc_info=True)
+            logger.error(f"Erro ao copiar template '{original_filename}': {ex}", exc_info=True)
             show_snackbar(self.page, f"Falha: {ex}", theme.COLOR_ERROR)
         finally:
             if is_web_upload_temp and source_path.startswith(os.path.abspath(UPLOAD_TEMP_DIR)):
                 try: 
                     os.remove(source_path)
                 except OSError as er: 
-                    _logger.warning(f"Não remover temp template '{source_path}': {er}")
+                    logger.warning(f"Não remover temp template '{source_path}': {er}")
 
     def _trigger_feedback_and_export(self, export_operation: ExportOperation, template_path: Optional[str]): 
-        _logger.info(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
+        logger.info(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
 
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
         if not isinstance(llm_display_component, LLMStructuredResultDisplay):
-            _logger.error("ExportManager: LLMStructuredResultDisplay não encontrado.")
+            logger.error("ExportManager: LLMStructuredResultDisplay não encontrado.")
             show_snackbar(self.page, "Erro interno: Display de resultados não operacional.", theme.COLOR_ERROR)
             return
 
@@ -2079,7 +2079,7 @@ class InternalExportManager:
         Args:
             e: O evento do controle.
         """
-        _logger.info(f"ExportManager: Item de exportação selecionado - Data: {e.control.data}")
+        logger.info(f"ExportManager: Item de exportação selecionado - Data: {e.control.data}")
         selected_action_data = e.control.data
                    
         operation: Optional[ExportOperation] = None
@@ -2094,7 +2094,7 @@ class InternalExportManager:
             self.handle_add_new_template_click()
             return
         else:
-            _logger.warning(f"Ação de exportação desconhecida: {selected_action_data}")
+            logger.warning(f"Ação de exportação desconhecida: {selected_action_data}")
             return
 
         if not operation: # Se a operação não foi definida (ex: manage_templates já retornou)
@@ -2131,7 +2131,7 @@ class SettingsDrawerManager:
         Returns:
             Um ft.Column contendo todos os controles de configuração.
         """
-        _logger.info("SettingsDrawerManager: Construindo conteúdo do drawer.")
+        logger.info("SettingsDrawerManager: Construindo conteúdo do drawer.")
         default_width = 260
         current_analysis_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
         loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
@@ -2262,7 +2262,7 @@ class SettingsDrawerManager:
 
     def setup_event_handlers(self):
         """Configura os handlers de eventos para os controles dentro do drawer."""
-        _logger.info("SettingsDrawerManager: Configurando handlers de eventos.")
+        logger.info("SettingsDrawerManager: Configurando handlers de eventos.")
         controls_to_watch = [
             "proc_vectorization_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider", 
             "prompt_structure_rg", "similarity_threshold_slider"
@@ -2289,7 +2289,7 @@ class SettingsDrawerManager:
             return
         
         if e:
-             _logger.debug(f"SettingsDrawerManager: Configuração alterada - Controle: {type(e.control).__name__}, Valor: {e.control.value}")
+             logger.debug(f"SettingsDrawerManager: Configuração alterada - Controle: {type(e.control).__name__}, Valor: {e.control.value}")
 
         if e and isinstance(e.control, ft.Slider) and e.control == self.gui_controls_drawer.get("temperature_slider"):
             slider_val = float(e.control.value) / 10.0 # Converte de 0-20 para 0.0-2.0
@@ -2306,7 +2306,7 @@ class SettingsDrawerManager:
 
         new_settings = self._get_settings_from_drawer_controls()
         self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, new_settings)
-        _logger.info(f"SettingsDrawerManager: Configurações da sessão atualizadas: {new_settings}")
+        logger.info(f"SettingsDrawerManager: Configurações da sessão atualizadas: {new_settings}")
         self._update_reset_button_visibility()
 
     def _handle_provider_change_drawer(self, e: ft.ControlEvent):
@@ -2410,7 +2410,7 @@ class SettingsDrawerManager:
         Args:
             settings_to_load: O dicionário de configurações a ser carregado.
         """
-        _logger.info("SettingsDrawerManager: Carregando configurações para o drawer.")
+        logger.info("SettingsDrawerManager: Carregando configurações para o drawer.")
         loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
         provider_options_drawer = [
             ft.dropdown.Option(key=p['system_name'], text=p.get('name_display', p['system_name']))
@@ -2461,7 +2461,7 @@ class SettingsDrawerManager:
 
     def _handle_reset_settings_click(self, e: ft.ControlEvent):
         """Handler para o clique no botão 'Resetar para Padrões'."""
-        _logger.info("SettingsDrawerManager: Botão 'Resetar Configurações' clicado.")
+        logger.info("SettingsDrawerManager: Botão 'Resetar Configurações' clicado.")
         cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
         if cloud_defaults:
             self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, cloud_defaults.copy())
@@ -2497,7 +2497,7 @@ class SettingsDrawerManager:
                     elif isinstance(val_cloud, float): val_session = float(val_session)
                 except ValueError: pass
             if val_session != val_cloud:
-                _logger.debug(f"Diferença para reset (Drawer): Chave='{key}', Sessão='{val_session}', Nuvem='{val_cloud}'")
+                logger.debug(f"Diferença para reset (Drawer): Chave='{key}', Sessão='{val_session}', Nuvem='{val_cloud}'")
                 are_different = True
                 break
         reset_button.visible = are_different
@@ -2616,10 +2616,10 @@ class LLMStructuredResultDisplay(ft.Column):
         "sm": 12 (Small): Em telas pequenas (como um celular), a coluna ocupará todas as 12 partes, efetivamente empilhando os itens verticalmente.
         """
         # data aqui é o objeto FormatAnaliseInicial como recebido (após parsing inicial da resposta da LLM)
-        _logger.info(f"LLMStructuredResultDisplay.update_data chamado. is_new_llm_response={is_new_llm_response}, data_is_none={data_to_display_in_gui is None}")
+        logger.info(f"LLMStructuredResultDisplay.update_data chamado. is_new_llm_response={is_new_llm_response}, data_is_none={data_to_display_in_gui is None}")
         
         if data_to_display_in_gui is None:
-            _logger.warning("LLMStructuredResultDisplay.update_data: data_to_display_in_ui é None. Limpando display e snapshots.")
+            logger.warning("LLMStructuredResultDisplay.update_data: data_to_display_in_ui é None. Limpando display e snapshots.")
             self.original_llm_data_snapshot = None
             self.data = None
             
@@ -2639,19 +2639,19 @@ class LLMStructuredResultDisplay(ft.Column):
             # É uma resposta fresca da LLM, este é o nosso "original" definitivo.
             self.original_llm_data_snapshot = data_to_display_in_gui.model_copy(deep=True)
             self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = self.original_llm_data_snapshot
-            _logger.info("Snapshot dos dados ORIGINAIS da LLM capturado e salvo na sessão (is_new_llm_response=True).")
+            logger.info("Snapshot dos dados ORIGINAIS da LLM capturado e salvo na sessão (is_new_llm_response=True).")
         else:
             # Não é uma nova resposta LLM (ex: restauração de sessão, ou após edição do usuário).
             # Tentamos carregar o snapshot da sessão dedicada.
             snapshot_from_session = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
             if snapshot_from_session and isinstance(snapshot_from_session, formatted_initial_analysis):
                 self.original_llm_data_snapshot = snapshot_from_session
-                _logger.info("Snapshot original da LLM restaurado da sessão dedicada.")
+                logger.info("Snapshot original da LLM restaurado da sessão dedicada.")
             else:
                 # Se não há snapshot na sessão dedicada, e não é uma nova resposta LLM,
                 # este é o caso "tardio". Usamos os dados atuais (data_to_display_in_ui) como base, com warning.
                 self.original_llm_data_snapshot = data_to_display_in_gui.model_copy(deep=True)
-                _logger.warning("LLMStructuredResultDisplay.update_data: Snapshot original não encontrado na sessão dedicada e dados não são 'is_new_llm_response'. "
+                logger.warning("LLMStructuredResultDisplay.update_data: Snapshot original não encontrado na sessão dedicada e dados não são 'is_new_llm_response'. "
                                 "Capturando snapshot com dados atuais da UI como base. O feedback pode ser impreciso se os dados já foram editados anteriormente e o snapshot original não foi salvo corretamente.")
                 # Opcional: Salvar este snapshot "tardio" na sessão dedicada também, para consistência na sessão atual,
                 # mas sabendo que pode não ser o "verdadeiro" original da LLM.
@@ -2805,7 +2805,7 @@ class LLMStructuredResultDisplay(ft.Column):
             - None: Se self.data base não estiver definido.
         """
         if not self.data: # Se não há dados base (ex: LLM não retornou nada)
-            _logger.warning("get_current_form_data: self.data não está definido. Não é possível coletar dados da UI.")
+            logger.warning("get_current_form_data: self.data não está definido. Não é possível coletar dados da UI.")
             return None
 
         # Passo 1: Coletar valores dos campos da UI (self.ui_fields)
@@ -2824,14 +2824,14 @@ class LLMStructuredResultDisplay(ft.Column):
             # "tipificacao_penal" e "assunto_re" são Optional[str] no FormatAnaliseInicial
             # "pessoas_envolvidas", "linha_do_tempo", "observacoes" são Optional[List[str]]
         ]
-        _logger.debug(f"Campos definidos como obrigatórios para exportação: {required_fields_for_export}")
+        logger.debug(f"Campos definidos como obrigatórios para exportação: {required_fields_for_export}")
 
         for field_name, control in self.gui_fields.items():
             value = None
             is_dropdown = isinstance(control, ft.Dropdown)
             if isinstance(control, (ft.TextField, ft.Dropdown)):
                 value = control.value
-                _logger.debug(f"Coletando para '{field_name}': '{value}' (Tipo: {type(value)}, É Dropdown: {is_dropdown})")
+                logger.debug(f"Coletando para '{field_name}': '{value}' (Tipo: {type(value)}, É Dropdown: {is_dropdown})")
             
             # Validação para exportação
             if validate_for_export and field_name in required_fields_for_export:
@@ -2847,7 +2847,7 @@ class LLMStructuredResultDisplay(ft.Column):
                         is_empty = True
                 
                 if is_empty:
-                    _logger.warning(f"Campo obrigatório '{field_name}' está vazio. Valor atual: '{value}'")
+                    logger.warning(f"Campo obrigatório '{field_name}' está vazio. Valor atual: '{value}'")
                     invalid_fields_for_export.append((field_name, control))
 
             # Tratamentos específicos de tipo (continua como antes)
@@ -2859,7 +2859,7 @@ class LLMStructuredResultDisplay(ft.Column):
             collected_values_from_ui[field_name] = value
 
         if validate_for_export and invalid_fields_for_export:
-            _logger.warning(f"Validação para exportação falhou. Campos vazios: {[f[0] for f in invalid_fields_for_export]}")
+            logger.warning(f"Validação para exportação falhou. Campos vazios: {[f[0] for f in invalid_fields_for_export]}")
             # Retorna a lista de tuplas (nome_do_campo, instancia_do_controle)
             return invalid_fields_for_export 
 
@@ -2891,22 +2891,22 @@ class LLMStructuredResultDisplay(ft.Column):
                 else:
                      final_data_for_pydantic[pydantic_field_name] = None
         try:
-            _logger.debug(f"Dados para instanciar FormatAnaliseInicial: {final_data_for_pydantic}")
+            logger.debug(f"Dados para instanciar FormatAnaliseInicial: {final_data_for_pydantic}")
 
             self.data = formatted_initial_analysis(**final_data_for_pydantic)  # Atualiza o self.data da instância com os dados atuais da UI, já validados por Pydantic
-            _logger.info("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
+            logger.info("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
 
             # Atualiza também a sessão com a representação mais recente (objeto Pydantic)
             self.user_cache = get_user_cache(self.page)
             self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL] = self.data
-            _logger.info("KEY_SESSION_PDF_LLM_RESPONSE atualizado na sessão com os dados da UI.")
+            logger.info("KEY_SESSION_PDF_LLM_RESPONSE atualizado na sessão com os dados da UI.")
             return self.data
         except Exception as pydantic_error: # Use ValidationError de Pydantic se importado
-            _logger.error(f"Erro de validação Pydantic FINAL ao criar FormatAnaliseInicial: {pydantic_error}", exc_info=False)
+            logger.error(f"Erro de validação Pydantic FINAL ao criar FormatAnaliseInicial: {pydantic_error}", exc_info=False)
             # ... (logar erros pydantic detalhados)
             if hasattr(pydantic_error, 'errors'): # Se for ValidationError do Pydantic
                  for error in pydantic_error.errors():
-                    _logger.error(f"  - Pydantic Detail: Campo: {'.'.join(map(str, error['loc'])) if error.get('loc') else 'N/A'}, Erro: {error['msg']}")
+                    logger.error(f"  - Pydantic Detail: Campo: {'.'.join(map(str, error['loc'])) if error.get('loc') else 'N/A'}, Erro: {error['msg']}")
 
             if validate_for_export:
                 return [("pydantic_validation_error_final", None)] 
@@ -2959,7 +2959,7 @@ class FeedbackDialog(ft.AlertDialog):
         self._build_dialog_actions()
 
     def _build_dialog_content(self):
-        _logger.debug(f"FeedbackDialog: Construindo conteúdo com {len(self.fields_feedback_data)} campos.")
+        logger.debug(f"FeedbackDialog: Construindo conteúdo com {len(self.fields_feedback_data)} campos.")
         
         intro_text = ft.Text(
             "Sua avaliação é importante para aprimorar a ferramenta.\n"
@@ -3074,7 +3074,7 @@ class FeedbackDialog(ft.AlertDialog):
         self.actions = actions
 
     def _handle_action_click(self, action: FeedbackDialogAction):
-        _logger.info(f"FeedbackDialog: Ação '{action.value}' selecionada.")
+        logger.info(f"FeedbackDialog: Ação '{action.value}' selecionada.")
         self.open = False
         if self.page_ref and self.uid: # Garante que está na árvore da UI para atualizar
             self.page_ref.update(self) # Atualiza para fechar visualmente
@@ -3096,7 +3096,7 @@ class FeedbackDialog(ft.AlertDialog):
         threading.Timer(0.15, delayed_callback).start() # Pequeno delay
 
     def show(self):
-        _logger.info("FeedbackDialog: Solicitado para mostrar.")
+        logger.info("FeedbackDialog: Solicitado para mostrar.")
         if self not in self.page_ref.overlay:
             self.page_ref.overlay.append(self)
         self.open = True
@@ -3121,12 +3121,12 @@ class FeedbackWorkflowManager:
     ):
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
         if not isinstance(llm_display_component, LLMStructuredResultDisplay):
-            _logger.error("_prepare_and_show_feedback_dialog: LLMStructuredResultDisplay não encontrado.")
+            logger.error("_prepare_and_show_feedback_dialog: LLMStructuredResultDisplay não encontrado.")
             on_feedback_flow_completed(FeedbackDialogAction.CANCELLED_OR_ERROR, None)
             return
 
         if not feedback_fields_list_prepared:
-            _logger.warning("_prepare_and_show_feedback_dialog: Nenhum dado de campo preparado para o diálogo de feedback.")
+            logger.warning("_prepare_and_show_feedback_dialog: Nenhum dado de campo preparado para o diálogo de feedback.")
             on_feedback_flow_completed(FeedbackDialogAction.CANCELLED_OR_ERROR, None)
             return
         
@@ -3157,21 +3157,21 @@ class FeedbackWorkflowManager:
         """ 
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
         if not isinstance(llm_display_component, LLMStructuredResultDisplay):
-            _logger.error(f"FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado para '{action_context_name}'. Prosseguindo sem feedback.")
+            logger.error(f"FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado para '{action_context_name}'. Prosseguindo sem feedback.")
             primary_action_callable()
             return
 
         # 1. Garante que os dados da UI estejam carregados no componente de display
         current_form_data_or_errors = llm_display_component.get_current_form_data(validate_for_export=False)
         if not isinstance(current_form_data_or_errors, formatted_initial_analysis):
-            _logger.warning(f"FeedbackWorkflowManager: Dados do formulário inválidos ou não disponíveis para '{action_context_name}'. Prosseguindo sem feedback.")
+            logger.warning(f"FeedbackWorkflowManager: Dados do formulário inválidos ou não disponíveis para '{action_context_name}'. Prosseguindo sem feedback.")
             primary_action_callable()
             return
 
         # 2. Prepara os dados para o diálogo de feedback
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
         if not isinstance(llm_display_component, LLMStructuredResultDisplay):
-            _logger.error("FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado.")
+            logger.error("FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado.")
             feedback_fields_data = None
         else:
             # Acessa o snapshot original e os dados atuais da UI através do llm_display_component
@@ -3183,25 +3183,25 @@ class FeedbackWorkflowManager:
             feedback_fields_data = get_prepared_feedback_data(original_snapshot, current_data_ui, llm_display_component.gui_fields)
 
         if not feedback_fields_data:
-            _logger.warning(f"FeedbackWorkflowManager: Não foi possível preparar dados para feedback para '{action_context_name}'. Prosseguindo sem feedback.")
+            logger.warning(f"FeedbackWorkflowManager: Não foi possível preparar dados para feedback para '{action_context_name}'. Prosseguindo sem feedback.")
             primary_action_callable()
             return
 
         if self.page.session.get(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS):
-            _logger.info(f"FeedbackWorkflowManager: Feedback já coletado para '{action_context_name}'. Prosseguindo com ação primária.")
+            logger.info(f"FeedbackWorkflowManager: Feedback já coletado para '{action_context_name}'. Prosseguindo com ação primária.")
             primary_action_callable()
             return
 
         # Só pede feedback se houver uma análise LLM anterior
         user_cache = get_user_cache(self.page)
         if not user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE):
-            _logger.info(f"FeedbackWorkflowManager: Nenhuma análise LLM anterior para '{action_context_name}'. Prosseguindo com ação primária.")
+            logger.info(f"FeedbackWorkflowManager: Nenhuma análise LLM anterior para '{action_context_name}'. Prosseguindo com ação primária.")
             primary_action_callable()
             return
 
         # 3. Chama o diálogo de feedback
         def on_feedback_dialog_closed_final_logic(action_taken: FeedbackDialogAction, collected_feedback_data: Optional[List[Dict[str, Any]]]):
-            _logger.info(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado com ação: {action_taken.value}")
+            logger.info(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado com ação: {action_taken.value}")
             
             if action_taken == FeedbackDialogAction.CONFIRM_AND_CONTINUE:
                 if collected_feedback_data:
@@ -3217,7 +3217,7 @@ class FeedbackWorkflowManager:
                     if self.firestore_client.save_feedback_data(user_id, user_token, collected_feedback_data, llm_metadata_session, reanalysis_occurrence, related_batch_name):
                         self.page.session.set(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, True)
                     else: 
-                        _logger.error("Falha ao salvar feedback no Firestore. A flag de 'feedback coletado' não será setada para esta sessão de análise.")
+                        logger.error("Falha ao salvar feedback no Firestore. A flag de 'feedback coletado' não será setada para esta sessão de análise.")
                         show_snackbar(self.page, "Erro: Não foi possível registrar sua avaliação.", theme.COLOR_ERROR)
 
                 primary_action_callable()
@@ -3226,10 +3226,10 @@ class FeedbackWorkflowManager:
                 primary_action_callable()
             
             elif action_taken == FeedbackDialogAction.RETURN_TO_EDIT:
-                _logger.info(f"FeedbackWorkflowManager (final_logic): Usuário escolheu retornar para edição para '{action_context_name}'. Ação primária cancelada.")
+                logger.info(f"FeedbackWorkflowManager (final_logic): Usuário escolheu retornar para edição para '{action_context_name}'. Ação primária cancelada.")
             
             elif action_taken == FeedbackDialogAction.CANCELLED_OR_ERROR:
-                _logger.warning(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado inesperadamente. Ação primária não será executada.")
+                logger.warning(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado inesperadamente. Ação primária não será executada.")
 
         # Chama _prepare_and_show_feedback_dialog, passando o callback final
         self._prepare_and_show_feedback_dialog(
@@ -3248,7 +3248,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     Returns:
         Uma instância de AnalyzePDFViewContent.
     """
-    _logger.info("View Análise de PDF: Iniciando criação (nova estrutura).")
+    logger.info("View Análise de PDF: Iniciando criação (nova estrutura).")
     return AnalyzePDFViewContent(page)
 
 # Funções acessórias:
@@ -3272,25 +3272,25 @@ def get_api_key_in_firestore(page, provider, firestore_client):
     user_id = page.session.get("auth_user_id")
     
     service_name_firestore = f"{provider}" # Ou uma lógica de mapeamento mais robusta
-    _logger.debug(f"Buscando chave API criptografada para serviço: {service_name_firestore}")
+    logger.debug(f"Buscando chave API criptografada para serviço: {service_name_firestore}")
     encrypted_key_bytes = firestore_client.get_user_api_key_client(
         user_token, user_id, service_name_firestore
     )
 
     if not encrypted_key_bytes:
-        _logger.error(f"Chave API criptografada para '{service_name_firestore}' não encontrada no Firestore para o usuário {user_id}.")
+        logger.error(f"Chave API criptografada para '{service_name_firestore}' não encontrada no Firestore para o usuário {user_id}.")
         # A UI deve informar o usuário para configurar a chave.
         return None
 
-    _logger.debug("Descriptografando chave API...")
+    logger.debug("Descriptografando chave API...")
     decrypted_api_key = credentials_manager.decrypt(encrypted_key_bytes)
 
     if not decrypted_api_key:
-        _logger.error(f"Falha ao descriptografar a chave API para '{service_name_firestore}' do usuário {user_id}.")
+        logger.error(f"Falha ao descriptografar a chave API para '{service_name_firestore}' do usuário {user_id}.")
         # Pode indicar chave de criptografia local ausente ou corrompida.
         return None
 
-    _logger.info(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
+    logger.info(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
     
     page.session.set(f"decrypted_api_key_{provider}", decrypted_api_key)
     return decrypted_api_key
@@ -3307,7 +3307,7 @@ def get_prepared_feedback_data(original_snapshot, current_data_ui, gui_fields) -
     """
     
     if not original_snapshot or not current_data_ui:
-        _logger.warning("FeedbackWorkflowManager: Dados originais ou atuais da UI ausentes em LLMStructuredResultDisplay.")
+        logger.warning("FeedbackWorkflowManager: Dados originais ou atuais da UI ausentes em LLMStructuredResultDisplay.")
         return None
 
     feedback_field_data_prepared  = []
@@ -3342,7 +3342,7 @@ def get_prepared_feedback_data(original_snapshot, current_data_ui, gui_fields) -
         else: # Campos string ou dropdowns diretos
             foi_editado = (original_value != current_value_ui)
         
-        _logger.debug(f"Feedback Prep (Manager): Campo '{field_name}', Original: '{original_value}', Atual UI: '{current_value_ui}', Editado: {foi_editado}")
+        logger.debug(f"Feedback Prep (Manager): Campo '{field_name}', Original: '{original_value}', Atual UI: '{current_value_ui}', Editado: {foi_editado}")
 
         # Obter o label amigável e o tipo do campo
         label_campo = field_name.replace("_", " ").title() # Default label

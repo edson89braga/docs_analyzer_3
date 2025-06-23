@@ -11,9 +11,8 @@ from src.flet_ui.components import show_snackbar, show_loading_overlay, hide_loa
 from src.flet_ui import theme # Para cores de erro, etc.
 from src.logger.logger import LoggerSetup
 
-# Obtém uma instância de logger para este módulo
-# A inicialização do LoggerSetup deve ocorrer em run.py ou app.py antes daqui
-_logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 
 # Validador simples de email (pode ser mais robusto)
@@ -38,7 +37,7 @@ def create_login_view(page: ft.Page) -> ft.View:
     Cria e retorna a ft.View para a tela de login.
     """
     from src.services.firebase_client import FirebaseClientStorage
-    _logger.info("Criando a view de Login.")
+    logger.info("Criando a view de Login.")
 
     auth_manager = FbManagerAuth() # Instancia o gerenciador de autenticação
 
@@ -73,7 +72,7 @@ def create_login_view(page: ft.Page) -> ft.View:
 
     # --- Função de Callback para o Botão de Login ---
     def handle_login_click(e: ft.ControlEvent):
-        _logger.info("Botão de login clicado.")
+        logger.info("Botão de login clicado.")
         page.update() 
 
         is_email_valid = email_field.validate(show_error=True)
@@ -81,19 +80,19 @@ def create_login_view(page: ft.Page) -> ft.View:
 
         if not is_email_valid or not is_password_valid:
             show_snackbar(page, "Por favor, corrija os erros no formulário.", color=theme.COLOR_ERROR)
-            _logger.warning("Tentativa de login com formulário inválido.")
+            logger.warning("Tentativa de login com formulário inválido.")
             return
 
         email = email_field.value or ""
         password = password_field.value or ""
 
         show_loading_overlay(page, "Autenticando...")
-        _logger.info(f"Tentando autenticar usuário: {email}")
+        logger.info(f"Tentando autenticar usuário: {email}")
 
         try:
             auth_response: Optional[Dict[str, Any]] = auth_manager.authenticate_user_get_all_data(email, password)
             hide_loading_overlay(page)
-            _logger.info(f"[DEBUG] Resposta da autenticação: {auth_response}")
+            logger.info(f"[DEBUG] Resposta da autenticação: {auth_response}")
             if auth_response and auth_response.get("idToken") and auth_response.get("localId"):
                 
                 #is_email_verified = auth_response.get("emailVerified", False)
@@ -101,14 +100,14 @@ def create_login_view(page: ft.Page) -> ft.View:
                 
                 decoded_and_verified_token = auth_manager.verify_id_token(id_token)
                 if not decoded_and_verified_token:
-                    _logger.error("Falha na verificação da assinatura do token de autenticação. Login abortado por segurança.")
+                    logger.error("Falha na verificação da assinatura do token de autenticação. Login abortado por segurança.")
                     show_snackbar(page, "Falha na verificação de segurança da sessão. Tente novamente.", color=theme.COLOR_ERROR)
                     return # Bloqueia o login
                 
                 is_email_verified = decoded_and_verified_token.get("email_verified", False)
                 
                 is_admin = decoded_and_verified_token.get("admin", False)
-                _logger.info(f"Status de Administrador do usuário verificado: {is_admin}")
+                logger.info(f"Status de Administrador do usuário verificado: {is_admin}")
 
                 #try:
                 #    # Decodifica o JWT sem verificar a assinatura (apenas para extrair dados)
@@ -122,7 +121,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                 #    is_email_verified = auth_response.get("emailVerified", False)
 
                 if not is_email_verified:
-                    _logger.warning(f"Tentativa de login bloqueada para {email}: email não verificado.")
+                    logger.warning(f"Tentativa de login bloqueada para {email}: email não verificado.")
 
                     # Usa o SnackBar global de forma mais avançada
                     snackbar_instance = page.data.get("global_snackbar")
@@ -157,7 +156,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                 user_email_from_auth = auth_response.get("email", email) # Email confirmado pela auth
                 display_name = auth_response.get("displayName", user_email_from_auth)
 
-                _logger.info(f"Usuário {user_id} ({display_name}) autenticado com sucesso.")
+                logger.info(f"Usuário {user_id} ({display_name}) autenticado com sucesso.")
                 show_snackbar(page, f"Bem-vindo, {display_name}!", color=theme.COLOR_SUCCESS)
 
                 # Limpar dados de autenticação antigos antes de definir novos
@@ -175,7 +174,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                     if page.session.contains_key(key): page.session.remove(key)
 
                 # Armazenar na sessão Flet por padrão
-                _logger.info("Armazenando token e ID do usuário na sessão Flet.")
+                logger.info("Armazenando token e ID do usuário na sessão Flet.")
                 page.session.set("auth_id_token", id_token)
                 page.session.set("auth_user_id", user_id)
                 page.session.set("is_admin", is_admin)                
@@ -188,7 +187,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                 # Se "Lembrar de mim" estiver marcado e client_storage disponível,
                 # também armazena no client_storage.
                 if remember_me_checkbox.value and page.client_storage:
-                    _logger.info("Opção 'Lembrar de mim' ativa. Armazenando também no client_storage.")
+                    logger.info("Opção 'Lembrar de mim' ativa. Armazenando também no client_storage.")
                     page.client_storage.set("auth_id_token", id_token)
                     page.client_storage.set("auth_user_id", user_id)
                     page.client_storage.set("is_admin", is_admin)
@@ -198,15 +197,15 @@ def create_login_view(page: ft.Page) -> ft.View:
                     page.client_storage.set("auth_user_email", user_email_from_auth)
                     page.client_storage.set("auth_display_name", display_name)
                 elif remember_me_checkbox.value and not page.client_storage:
-                    _logger.warning("Opção 'Lembrar de mim' ativa, mas client_storage não está disponível (app não é Web/Desktop?).")
+                    logger.warning("Opção 'Lembrar de mim' ativa, mas client_storage não está disponível (app não é Web/Desktop?).")
 
                 # Chama a função de carregamento de configurações em uma thread
                 load_settings_func = page.data.get("load_settings_func")
                 if load_settings_func:
-                    _logger.info("Disparando carregamento de configurações de usuário em background após login.")
+                    logger.info("Disparando carregamento de configurações de usuário em background após login.")
                     threading.Thread(target=load_settings_func, args=(page,), daemon=True).start()
                 else:
-                    _logger.error("Função 'load_settings_func' não encontrada em page.data! As configurações do usuário podem não ser carregadas.")
+                    logger.error("Função 'load_settings_func' não encontrada em page.data! As configurações do usuário podem não ser carregadas.")
 
                 LoggerSetup.set_cloud_user_context(id_token, user_id)
                 # TENTA ADICIONAR CLOUD LOGGING AQUI
@@ -216,11 +215,11 @@ def create_login_view(page: ft.Page) -> ft.View:
                             user_token_for_client=id_token,
                             user_id_for_client=user_id
                         )
-                        _logger.info("Cloud logging (cliente) configurado após restaurar sessão.")
+                        logger.info("Cloud logging (cliente) configurado após restaurar sessão.")
                 except Exception as e_rcl:
-                    _logger.error(f"Falha ao configurar cloud logging (cliente) após restaurar sessão: {e_rcl}")
+                    logger.error(f"Falha ao configurar cloud logging (cliente) após restaurar sessão: {e_rcl}")
 
-                _logger.info(f"Contexto do logger de nuvem atualizado para usuário {user_id}.")
+                logger.info(f"Contexto do logger de nuvem atualizado para usuário {user_id}.")
 
                 page.go("/home")
 
@@ -236,12 +235,12 @@ def create_login_view(page: ft.Page) -> ft.View:
                     else: 
                         error_message = f"Erro de autenticação: {api_error}"
                 
-                _logger.warning(f"Falha na autenticação para {email}. Erro: {error_message}")
+                logger.warning(f"Falha na autenticação para {email}. Erro: {error_message}")
                 show_snackbar(page, error_message, color=theme.COLOR_ERROR, duration=7000)
 
         except Exception as ex:
             hide_loading_overlay(page)
-            _logger.error(f"Erro inesperado durante o login: {ex}", exc_info=True)
+            logger.error(f"Erro inesperado durante o login: {ex}", exc_info=True)
             show_snackbar(page, "Ocorreu um erro inesperado. Tente novamente.", color=theme.COLOR_ERROR)
 
     login_button = ft.ElevatedButton(
@@ -261,7 +260,7 @@ def create_login_view(page: ft.Page) -> ft.View:
             return
 
         show_loading_overlay(page, "Enviando email de redefinição...")
-        _logger.info(f"Solicitando redefinição de senha para: {email_val}")
+        logger.info(f"Solicitando redefinição de senha para: {email_val}")
         try:
             success = auth_manager.send_password_reset_email(email_val)
             hide_loading_overlay(page)
@@ -271,7 +270,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                 show_snackbar(page, "Não foi possível enviar o email de redefinição. Verifique o email ou tente mais tarde.", color=theme.COLOR_ERROR, duration=7000)
         except Exception as ex_reset:
             hide_loading_overlay(page)
-            _logger.error(f"Erro ao solicitar redefinição de senha para {email_val}: {ex_reset}", exc_info=True)
+            logger.error(f"Erro ao solicitar redefinição de senha para {email_val}: {ex_reset}", exc_info=True)
             show_snackbar(page, "Ocorreu um erro ao solicitar a redefinição.", color=theme.COLOR_ERROR)
 
     forgot_password_button = ft.TextButton(
@@ -281,7 +280,7 @@ def create_login_view(page: ft.Page) -> ft.View:
 
     # Link para "Criar conta" (implementação futura)
     def handle_create_account_click(e):
-        _logger.info("Botão 'Criar conta' clicado. Navegando para /signup.")
+        logger.info("Botão 'Criar conta' clicado. Navegando para /signup.")
         page.go("/signup") 
 
     create_account_button = ft.TextButton(

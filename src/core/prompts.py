@@ -9,6 +9,9 @@ print(f"{start_time:.4f}s - Iniciando prompts.py")
 
 from typing import Optional, Dict, List, Type
 
+import logging
+logger = logging.getLogger(__name__)
+
 # FORMATOS das saídas estruturadas:
 from pydantic import BaseModel, Field 
 class formatted_initial_analysis(BaseModel):
@@ -883,11 +886,8 @@ output_formats = {
 
 
 # FUNÇÕES AUXILIARES:
-import logging, json
+import json
 from src.utils import (get_sigla_uf, get_municipios_por_uf_cached, obter_string_normalizada_em_lista, clean_and_convert_to_float, convert_to_list_of_strings)
-
-from src.logger.logger import LoggerSetup
-logger = LoggerSetup.get_logger(__name__)
 
 def try_convert_to_pydantic_format(data, pydantic_format):
     # llm_response_data PODE ser um objeto FormatAnaliseInicial ou uma string

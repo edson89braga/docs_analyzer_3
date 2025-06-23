@@ -4,15 +4,14 @@ from time import perf_counter
 start_time = perf_counter()
 print(f"{start_time:.4f}s - Iniciando credentials_manager.py")
 
-import keyring, logging, json, os
+import keyring, json, os
 from cryptography.fernet import Fernet, InvalidToken
 from typing import Optional
 
 from src.settings import (APP_NAME, APP_DATA_DIR, KEYRING_SERVICE_FIREBASE, KEYRING_USER_ENCRYPTION_KEY, 
 ENCRYPTED_SERVICE_KEY_FILENAME, ENCRYPTED_SERVICE_KEY_PATH)
 
-#from src.logger.logger import LoggerSetup
-#logger = LoggerSetup.get_logger(__name__)
+import logging
 logger = logging.getLogger(__name__)
 
 logger.debug(f"Credentials Manager usando diretório de dados: {APP_DATA_DIR}")

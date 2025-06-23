@@ -28,9 +28,8 @@ from src.core.prompts import (prompts, output_formats, review_function, normaliz
                                 formatted_initial_analysis, try_convert_to_pydantic_format, return_parse_prompt)
 
 # Configuração do Logger
-# (Assume que LoggerSetup já foi inicializado em run.py)
-from src.logger.logger import LoggerSetup
-logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 MODEL_FOR_COUNT_TOKENS = "gpt-4o"
 

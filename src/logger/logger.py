@@ -2,7 +2,7 @@ from time import perf_counter
 start_time = perf_counter()
 print(f"{start_time:.4f}s - Iniciando logger.py")
 
-import os, shutil, logging, re
+import os, shutil, re
 from time import sleep
 
 from pathlib import Path
@@ -21,6 +21,9 @@ if TYPE_CHECKING:
     from .cloud_logger_handler import LogUploaderStrategy
 
 modules_to_log = []
+
+import logging
+logger = logging.getLogger(__name__)
 
 class ModuleFilter(logging.Filter):
     """Filtro para registrar logs apenas de módulos específicos."""

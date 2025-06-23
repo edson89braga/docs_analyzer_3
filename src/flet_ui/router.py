@@ -14,8 +14,8 @@ from src.settings import UPLOAD_TEMP_DIR
 from .theme import COLOR_WARNING, COLOR_ERROR, PADDING_L 
 from .layout import create_app_bar, _find_nav_index_for_route, icones_navegacao
 
-from src.logger.logger import LoggerSetup
-logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 #from .views.login_view import create_login_view
 #from .views.signup_view import create_signup_view 

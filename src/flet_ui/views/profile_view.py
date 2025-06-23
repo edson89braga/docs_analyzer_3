@@ -18,8 +18,8 @@ from src.flet_ui.components import (
 from src.flet_ui import theme
 from src.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
 
-from src.logger.logger import LoggerSetup
-_logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 # Validador de senha (reutilizado)
 def password_validator(password: str) -> Optional[str]:
@@ -36,7 +36,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
     """
     Cria e retorna a ft.View para a tela de perfil do usuário.
     """
-    _logger.info("Criando a view de Perfil.")
+    logger.info("Criando a view de Perfil.")
     auth_manager = FbManagerAuth()
 
     # Recupera informações do usuário da sessão
@@ -45,7 +45,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
     user_email = page.session.get("auth_user_email") or "N/A"
 
     if not user_id_token_initial :
-        _logger.error("Token de usuário não encontrado na sessão ao tentar criar view de perfil. Redirecionando para login.")
+        logger.error("Token de usuário não encontrado na sessão ao tentar criar view de perfil. Redirecionando para login.")
         # Idealmente, o router já deveria ter bloqueado isso.
         # Mas como uma salvaguarda, podemos forçar o redirecionamento.
         page.go("/login") 
@@ -56,7 +56,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
         )
 
     def handle_delete_account_click(e):
-        _logger.info("Botão 'Excluir Conta' clicado.")
+        logger.info("Botão 'Excluir Conta' clicado.")
 
         show_confirmation_dialog(
             page,
@@ -71,7 +71,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
 
     def handle_change_password(e):
         
-        _logger.info("Tentando alterar senha do perfil.")
+        logger.info("Tentando alterar senha do perfil.")
         if not new_password_field.validate(show_error=True) or \
            not confirm_new_password_field.validate(show_error=True):
             show_snackbar(page, "Por favor, corrija os erros no formulário de senha.", color=theme.COLOR_ERROR)
@@ -93,30 +93,30 @@ def create_profile_view(page: ft.Page) -> ft.View:
                 new_password_field.text_field.error_text = None 
                 confirm_new_password_field.text_field.error_text = None
                 page.update() 
-                _logger.info(f"Senha alterada para usuário {page.session.get('auth_user_id')}")
+                logger.info(f"Senha alterada para usuário {page.session.get('auth_user_id')}")
             elif isinstance(success_or_error_dict, dict) and success_or_error_dict.get("error"):
                 error_type = success_or_error_dict.get("error")
                 if error_type == "CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED":
                     # O método change_password já deve ter mostrado o snackbar e chamado handle_logout
-                    _logger.warning("Alteração de senha requer re-login (tratado por change_password).")
+                    logger.warning("Alteração de senha requer re-login (tratado por change_password).")
                 elif error_type == "REFRESH_FAILED_LOGOUT" or error_type == "NO_TOKEN_SESSION_LOGOUT":
                     # O logout já foi forçado
-                     _logger.warning("Alteração de senha falhou devido a problema de token/sessão (logout forçado).")
+                     logger.warning("Alteração de senha falhou devido a problema de token/sessão (logout forçado).")
                 else:
                     # Outros erros da API ou falhas
                     show_snackbar(page, f"Não foi possível alterar a senha: {success_or_error_dict.get('details', error_type)}", color=theme.COLOR_ERROR)
-                    _logger.warning(f"Falha ao alterar senha via API: {error_type}")
+                    logger.warning(f"Falha ao alterar senha via API: {error_type}")
             else: # Caso inesperado de retorno
                 show_snackbar(page, "Não foi possível alterar a senha. Resposta inesperada.", color=theme.COLOR_ERROR)
-                _logger.error(f"Retorno inesperado de auth_manager.change_password: {success_or_error_dict}")
+                logger.error(f"Retorno inesperado de auth_manager.change_password: {success_or_error_dict}")
 
         except Exception as ex: # Captura exceções não HTTPError levantadas por _execute_sensitive_action
             hide_loading_overlay(page)
-            _logger.error(f"Erro geral ao alterar senha: {ex}", exc_info=True)
+            logger.error(f"Erro geral ao alterar senha: {ex}", exc_info=True)
             show_snackbar(page, "Ocorreu um erro ao tentar alterar a senha.", color=theme.COLOR_ERROR)
 
     def handle_update_profile(e: ft.ControlEvent): # Reescrita integral
-        _logger.info("Botão 'Salvar Novo Nome' clicado.")
+        logger.info("Botão 'Salvar Novo Nome' clicado.")
         
         if not edit_display_name_field.validate(show_error=True):
             show_snackbar(page, "Por favor, corrija os erros no nome de exibição.", color=theme.COLOR_ERROR)
@@ -130,7 +130,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
             return
 
         show_loading_overlay(page, "Atualizando perfil...")
-        _logger.info(f"Tentando atualizar nome de exibição para '{new_name}'.")
+        logger.info(f"Tentando atualizar nome de exibição para '{new_name}'.")
         try:
             # auth_manager é instanciado no início de create_profile_view
             # Chamada ao método de FbManagerAuth que agora recebe 'page'
@@ -139,7 +139,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
 
             if success_or_error_dict is True:
                 show_snackbar(page, "Nome de exibição atualizado com sucesso!", color=theme.COLOR_SUCCESS)
-                _logger.info(f"Nome de exibição atualizado para '{new_name}' para usuário {page.session.get('auth_user_id')}")
+                logger.info(f"Nome de exibição atualizado para '{new_name}' para usuário {page.session.get('auth_user_id')}")
                 
                 # Atualizar na sessão e client_storage (se usado)
                 page.session.set("auth_display_name", new_name)
@@ -152,25 +152,25 @@ def create_profile_view(page: ft.Page) -> ft.View:
             elif isinstance(success_or_error_dict, dict) and success_or_error_dict.get("error"):
                 error_type = success_or_error_dict.get("error")
                 error_details = success_or_error_dict.get("details", error_type)
-                _logger.warning(f"Falha ao atualizar perfil (nome): {error_type} - {error_details}")
+                logger.warning(f"Falha ao atualizar perfil (nome): {error_type} - {error_details}")
 
                 if error_type in ["CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED", "REFRESH_FAILED_LOGOUT", "NO_TOKEN_SESSION_LOGOUT"]:
                     # O método em FbManagerAuth já deve ter lidado com o snackbar e o logout.
                     # Apenas logamos aqui.
-                    _logger.info(f"Atualização de perfil falhou devido a {error_type}, logout foi/deveria ter sido tratado.")
+                    logger.info(f"Atualização de perfil falhou devido a {error_type}, logout foi/deveria ter sido tratado.")
                 else: # Outros erros da API ou falhas genéricas
                     show_snackbar(page, f"Não foi possível atualizar o nome: {error_details}", color=theme.COLOR_ERROR)
             else: # Caso inesperado de retorno
                 show_snackbar(page, "Não foi possível atualizar o nome. Resposta inesperada.", color=theme.COLOR_ERROR)
-                _logger.error(f"Retorno inesperado de auth_manager.update_profile: {success_or_error_dict}")
+                logger.error(f"Retorno inesperado de auth_manager.update_profile: {success_or_error_dict}")
 
         except Exception as ex:
             hide_loading_overlay(page)
-            _logger.error(f"Erro geral ao atualizar perfil (nome): {ex}", exc_info=True)
+            logger.error(f"Erro geral ao atualizar perfil (nome): {ex}", exc_info=True)
             show_snackbar(page, "Ocorreu um erro ao tentar atualizar o perfil.", color=theme.COLOR_ERROR)
 
     def confirm_delete_account(): 
-        _logger.warning(f"Usuário {page.session.get('auth_user_id')} confirmou a exclusão da conta. Executando ação...")
+        logger.warning(f"Usuário {page.session.get('auth_user_id')} confirmou a exclusão da conta. Executando ação...")
         
         show_loading_overlay(page, "Excluindo conta...")
         try:
@@ -183,7 +183,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
                 # O método delete_user_account em FbManagerAuth não força mais o logout se _execute_sensitive_action
                 # for bem sucedido e retornar True. O logout agora é responsabilidade da UI após sucesso.
                 show_snackbar(page, "Conta excluída com sucesso. Você será desconectado.", color=theme.COLOR_SUCCESS, duration=5000)
-                _logger.info(f"Conta do usuário {page.session.get('auth_user_id')} marcada para exclusão pela API.")
+                logger.info(f"Conta do usuário {page.session.get('auth_user_id')} marcada para exclusão pela API.")
                 
                 # Forçar logout AGORA que a operação foi confirmada como sucesso pela API
                 from src.flet_ui.layout import handle_logout # Import tardio e local
@@ -192,20 +192,20 @@ def create_profile_view(page: ft.Page) -> ft.View:
             elif isinstance(success_or_error_dict, dict) and success_or_error_dict.get("error"):
                 error_type = success_or_error_dict.get("error")
                 error_details = success_or_error_dict.get("details", error_type)
-                _logger.error(f"Falha ao excluir conta: {error_type} - {error_details}")
+                logger.error(f"Falha ao excluir conta: {error_type} - {error_details}")
 
                 if error_type in ["CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED", "REFRESH_FAILED_LOGOUT", "NO_TOKEN_SESSION_LOGOUT"]:
                     # O método em FbManagerAuth já deve ter lidado com o snackbar e o logout.
-                    _logger.info(f"Exclusão de conta falhou devido a {error_type}, logout foi/deveria ter sido tratado.")
+                    logger.info(f"Exclusão de conta falhou devido a {error_type}, logout foi/deveria ter sido tratado.")
                 else: # Outros erros da API ou falhas genéricas
                     show_snackbar(page, f"Não foi possível excluir a conta: {error_details}", color=theme.COLOR_ERROR)
             else: # Caso inesperado de retorno
                 show_snackbar(page, "Não foi possível excluir a conta. Resposta inesperada.", color=theme.COLOR_ERROR)
-                _logger.error(f"Retorno inesperado de auth_manager.delete_user_account: {success_or_error_dict}")
+                logger.error(f"Retorno inesperado de auth_manager.delete_user_account: {success_or_error_dict}")
 
         except Exception as ex:
             hide_loading_overlay(page)
-            _logger.error(f"Erro geral ao excluir conta: {ex}", exc_info=True)
+            logger.error(f"Erro geral ao excluir conta: {ex}", exc_info=True)
             show_snackbar(page, "Ocorreu um erro ao tentar excluir a conta.", color=theme.COLOR_ERROR)
 
     # --- Elementos da UI ---

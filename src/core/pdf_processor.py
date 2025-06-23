@@ -386,8 +386,8 @@ from typing import Dict, Any
 # Supondo que as funções de src.utils existem
 from src.utils import timing_decorator, reduce_text_to_limit, get_string_intervalos
 # Supondo que src.logger.logger existe
-from src.logger.logger import LoggerSetup
-logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 # Importa o inicializador do NLTK para garantir que os dados sejam baixados
 # import src.core.nltk_initializer (se fosse arquivo separado)

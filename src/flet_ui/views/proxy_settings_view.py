@@ -17,8 +17,8 @@ from src.settings import (
     PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT
 )
 
-from src.logger.logger import LoggerSetup
-_logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 # --- Funções de Validação (podem ser movidas para um local comum se usadas em mais lugares) ---
 def host_validator(value: str) -> Optional[str]:
@@ -178,7 +178,7 @@ class ProxySettingsContent(ft.Column):
         self.update() # Atualiza toda a coluna (ProxySettingsContent)
 
     def _handle_save_settings(self, e: ft.ControlEvent):
-        _logger.info("Tentando salvar configurações de proxy.")
+        logger.info("Tentando salvar configurações de proxy.")
         is_enabled = self.proxy_enabled_switch.value
         host_valid = True
         port_valid = True
@@ -208,16 +208,16 @@ class ProxySettingsContent(ft.Column):
             new_settings[K_PROXY_PASSWORD] = self.proxy_password_field.value
         
         if save_proxy_settings(new_settings):
-            _logger.info("Configurações de proxy salvas com sucesso.")
+            logger.info("Configurações de proxy salvas com sucesso.")
             show_snackbar(self.page, "Configurações de proxy salvas com sucesso!", color=theme.COLOR_SUCCESS)
             self.proxy_password_field.value = "" # Limpa campo de senha após salvar
             self.proxy_password_field.update()
         else:
-            _logger.error("Falha ao salvar configurações de proxy.")
+            logger.error("Falha ao salvar configurações de proxy.")
             show_snackbar(self.page, "Erro ao salvar configurações de proxy.", color=theme.COLOR_ERROR)
 
     def _handle_delete_settings(self, e: ft.ControlEvent):
-        _logger.info("Tentando remover todas as configurações de proxy.")
+        logger.info("Tentando remover todas as configurações de proxy.")
         # Define configurações para desabilitar e limpar tudo
         settings_to_delete = {
             K_PROXY_ENABLED: False,
@@ -228,19 +228,19 @@ class ProxySettingsContent(ft.Column):
             K_PROXY_PASSWORD_SAVED: False
         }
         if save_proxy_settings(settings_to_delete): # save_proxy_settings lida com a deleção se username for vazio
-            _logger.info("Configurações de proxy removidas com sucesso.")
+            logger.info("Configurações de proxy removidas com sucesso.")
             show_snackbar(self.page, "Todas as configurações de proxy foram removidas.", color=theme.COLOR_INFO)
             # Recarrega os valores padrão na UI
             self._load_settings_to_ui()
         else:
-            _logger.error("Falha ao remover configurações de proxy.")
+            logger.error("Falha ao remover configurações de proxy.")
             show_snackbar(self.page, "Erro ao remover configurações de proxy.", color=theme.COLOR_ERROR)
 
 def create_proxy_settings_content(page: ft.Page) -> ft.Control:
     """
     Cria e retorna o conteúdo principal para a view de configurações de proxy.
     """
-    _logger.info("View Configurações de Proxy: Iniciando criação.")
+    logger.info("View Configurações de Proxy: Iniciando criação.")
     
     proxy_settings_form = ProxySettingsContent(page)
     

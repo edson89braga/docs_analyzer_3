@@ -5,12 +5,12 @@ from src.settings import PATH_IMAGE_LOGO_DEPARTAMENTO, APP_TITLE, APP_VERSION
 from src.flet_ui import theme 
 from typing import Optional
 
-from src.logger.logger import LoggerSetup
-_logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 
 def create_home_view(page: ft.Page) -> ft.Control:
-    _logger.info("Criando o conteúdo da view Home.")
+    logger.info("Criando o conteúdo da view Home.")
 
     try:
         department_logo = ft.Image(
@@ -21,7 +21,7 @@ def create_home_view(page: ft.Page) -> ft.Control:
             error_content=ft.Text("Erro ao carregar imagem do logo.", color=ft.colors.RED)
         )
     except Exception as e:
-        _logger.error(f"Erro ao tentar carregar a imagem do logo '{PATH_IMAGE_LOGO_DEPARTAMENTO}': {e}")
+        logger.error(f"Erro ao tentar carregar a imagem do logo '{PATH_IMAGE_LOGO_DEPARTAMENTO}': {e}")
         department_logo = ft.Container(
             content=ft.Text(f"Não foi possível carregar a imagem do logo.",
                             color=ft.colors.ORANGE_ACCENT_700, style=ft.TextThemeStyle.BODY_LARGE),
@@ -119,7 +119,7 @@ def create_feature_card(page: ft.Page, title: str, description: str, icon: str, 
 
 
 def create_home_view2(page: ft.Page) -> ft.Control:
-    _logger.info("Criando o conteúdo da view Home (com cards).")
+    logger.info("Criando o conteúdo da view Home (com cards).")
 
     try:
         department_logo = ft.Image(
@@ -130,7 +130,7 @@ def create_home_view2(page: ft.Page) -> ft.Control:
             error_content=ft.Text("Erro ao carregar imagem do logo.", color=ft.colors.RED)
         )
     except Exception as e:
-        _logger.error(f"Erro ao tentar carregar a imagem do logo '{PATH_IMAGE_LOGO_DEPARTAMENTO}': {e}")
+        logger.error(f"Erro ao tentar carregar a imagem do logo '{PATH_IMAGE_LOGO_DEPARTAMENTO}': {e}")
         department_logo = ft.Container(
             content=ft.Text(f"Não foi possível carregar o logo.",
                             color=ft.colors.ORANGE_ACCENT_700, style=ft.TextThemeStyle.BODY_LARGE),

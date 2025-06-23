@@ -13,8 +13,8 @@ import os, shutil, time, threading
 from src.flet_ui import theme
 from src.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
 
-from src.logger.logger import LoggerSetup
-logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 ### SnackBar global: ---------------------------------------------------------------------------------------
 

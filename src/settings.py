@@ -4,11 +4,11 @@ start_time = perf_counter()
 print(f"{start_time:.4f}s - Iniciando settings.py")
 
 import os
-import logging
 import sys
 from pathlib import Path
 
 # --- Configuração Básica ---
+import logging
 logger = logging.getLogger(__name__)
 
 # --- Variáveis de Teste/Exemplo (Remover em produção) ---

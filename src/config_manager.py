@@ -13,6 +13,14 @@ from src.settings import (APP_NAME, PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT, PROXY
 
 ''' Se essa backend migrar para nuvem, avaliar como funcionará a sistemática do Save_proxy_settings se necessário'''
 
+logger = None
+
+def init_logger():
+    global logger
+    if not logger:
+        from src.logger.logger import LoggerSetup
+        logger = LoggerSetup.get_logger(__name__)
+
 # --- Funções de Gerenciamento de Configuração ---
 
 def get_proxy_settings() -> Optional[Dict[str, Any]]:
@@ -23,8 +31,7 @@ def get_proxy_settings() -> Optional[Dict[str, Any]]:
         Optional[Dict[str, Any]]: Dicionário com 'enabled', 'ip', 'port', 'username',
                                   ou {'enabled': False} se não configurado/erro.
     """
-    from src.logger.logger import LoggerSetup
-    logger = LoggerSetup.get_logger(__name__)
+    init_logger()
 
     logger.debug(f"Buscando config proxy (sem senha) do Keyring (Service: {PROXY_KEYRING_SERVICE})")
     config_start = {K_PROXY_ENABLED: False, 
@@ -57,7 +64,8 @@ def get_proxy_settings() -> Optional[Dict[str, Any]]:
         # Retorna um estado seguro (desabilitado) em caso de erro na leitura
         return config_start
 
-def delete_proxy_settings(logger: logging.Logger) -> None:
+def delete_proxy_settings() -> None:
+    init_logger()
     try: 
         keyring.delete_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME)
         logger.info(f"Deletando configs proxy do Keyring (Service: {PROXY_KEYRING_SERVICE})")
@@ -76,8 +84,7 @@ def save_proxy_settings(config: Dict[str, Any]) -> bool:
     Returns:
         bool: True se sucesso, False caso contrário.
     """
-    from src.logger.logger import LoggerSetup
-    logger = LoggerSetup.get_logger(__name__)
+    init_logger()
 
     logger.info(f"Salvando config proxy no Keyring (Service: {PROXY_KEYRING_SERVICE})")
     try:
@@ -103,7 +110,7 @@ def save_proxy_settings(config: Dict[str, Any]) -> bool:
         else:
             # Se não há username, remove username e senha
             logger.info("Nenhum username fornecido. Removendo username e senha do Keyring (se existirem).")
-            delete_proxy_settings(logger)
+            delete_proxy_settings()
 
         logger.info("Configurações de proxy salvas com sucesso.")
         return True
@@ -112,12 +119,12 @@ def save_proxy_settings(config: Dict[str, Any]) -> bool:
         return False
 
 def set_final_keyring_proxy():
-    logger = logging.getLogger(__name__)
+    init_logger()
     config = get_proxy_settings()
     enabled_passwd_to_save = config.get(K_PROXY_PASSWORD_SAVED)
     if not enabled_passwd_to_save:
         logger.debug("Salvamento de senha desabilitado. Removendo dados existentes no Keyring (se houver)")
-        delete_proxy_settings(logger) 
+        delete_proxy_settings() 
 
 atexit.register(set_final_keyring_proxy)
 

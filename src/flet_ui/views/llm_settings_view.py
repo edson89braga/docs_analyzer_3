@@ -16,8 +16,8 @@ from src.flet_ui.components import (
 from src.flet_ui import theme
 from src.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
 
-from src.logger.logger import LoggerSetup
-_logger = LoggerSetup.get_logger(__name__)
+import logging
+logger = logging.getLogger(__name__)
 
 # --- Constantes para Firestore ---
 from src.settings import (USER_LLM_PREFERENCES_COLLECTION,
@@ -104,12 +104,12 @@ class LLMConfigCard(CardWithHeader):
         user_id = self.page.session.get("auth_user_id")
         if id_token and user_id:
             return id_token, user_id
-        _logger.error(f"Contexto do usuário (token/ID) não encontrado para {self.system_name}.")
+        logger.error(f"Contexto do usuário (token/ID) não encontrado para {self.system_name}.")
         # Não redireciona daqui, a view principal pode tratar
         return None
 
     def load_api_key_status(self):
-        _logger.info(f"Carregando status da chave API salva para {self.system_name}...")
+        logger.info(f"Carregando status da chave API salva para {self.system_name}...")
         self.update_card_content_status("Verificando...", theme.COLOR_INFO, ft.icons.HOURGLASS_EMPTY, theme.COLOR_INFO, "Verificando status...", "Aguarde...")
 
         context = self._get_current_user_context()
@@ -122,7 +122,7 @@ class LLMConfigCard(CardWithHeader):
         session_key_decrypted = self._get_session_key_for_decrypted_api_key()
 
         if self.page.session.contains_key(session_key_decrypted):
-            _logger.info(f"Chave API para {self.system_name} encontrada descriptografada na sessão (cache).")
+            logger.info(f"Chave API para {self.system_name} encontrada descriptografada na sessão (cache).")
             self.update_card_content_status(
                 "Chave API configurada e pronta (em cache).", theme.COLOR_SUCCESS,
                 ft.icons.CHECK_CIRCLE_OUTLINE, theme.COLOR_SUCCESS, "Chave API configurada",
@@ -136,11 +136,11 @@ class LLMConfigCard(CardWithHeader):
                 id_token, user_id, self.system_name
             )
             if encrypted_key_bytes:
-                _logger.info(f"Chave API criptografada encontrada para {self.system_name} no Firestore.")
+                logger.info(f"Chave API criptografada encontrada para {self.system_name} no Firestore.")
                 # TENTAR DESCRIPTOGRAFAR E SALVAR NA SESSÃO AQUI
                 decrypted_key = credentials_manager.decrypt(encrypted_key_bytes)
                 if decrypted_key:
-                    _logger.info(f"Chave API para {self.system_name} descriptografada com sucesso.")
+                    logger.info(f"Chave API para {self.system_name} descriptografada com sucesso.")
                     self.page.session.set(session_key_decrypted, decrypted_key)
                     self.update_card_content_status(
                         "Chave API configurada e pronta.", theme.COLOR_SUCCESS, # Mensagem mais direta
@@ -149,7 +149,7 @@ class LLMConfigCard(CardWithHeader):
                     )
                     if self.on_key_status_change: self.on_key_status_change(self.system_name, True)
                 else:
-                    _logger.error(f"Falha ao descriptografar chave API para {self.system_name} do Firestore.")
+                    logger.error(f"Falha ao descriptografar chave API para {self.system_name} do Firestore.")
                     self.update_card_content_status(
                         "Chave API salva, mas falha ao acessar.", theme.COLOR_ERROR, # Mensagem ajustada
                         ft.icons.LOCK_ALERT_OUTLINED, theme.COLOR_ERROR, "Chave API salva, mas erro ao descriptografar",
@@ -157,7 +157,7 @@ class LLMConfigCard(CardWithHeader):
                     )
                     if self.on_key_status_change: self.on_key_status_change(self.system_name, False)
             else:
-                _logger.info(f"Nenhuma chave API encontrada para {self.system_name} no Firestore.")
+                logger.info(f"Nenhuma chave API encontrada para {self.system_name} no Firestore.")
                 self.update_card_content_status(
                     "Nenhuma chave API configurada.", theme.COLOR_WARNING,
                     ft.icons.WARNING_AMBER_OUTLINED, theme.COLOR_WARNING, "Chave API não configurada",
@@ -165,7 +165,7 @@ class LLMConfigCard(CardWithHeader):
                 )
                 if self.on_key_status_change: self.on_key_status_change(self.system_name, False)
         except Exception as e:
-            _logger.error(f"Erro ao carregar/descriptografar chave API para {self.system_name}: {e}", exc_info=True)
+            logger.error(f"Erro ao carregar/descriptografar chave API para {self.system_name}: {e}", exc_info=True)
             self.update_card_content_status(
                 "Erro ao carregar configuração da chave.", theme.COLOR_ERROR,
                 ft.icons.ERROR_OUTLINE, theme.COLOR_ERROR, "Erro ao carregar",
@@ -179,7 +179,7 @@ class LLMConfigCard(CardWithHeader):
             show_snackbar(self.page, "O campo da Chave API está vazio.", color=theme.COLOR_WARNING)
             return
 
-        _logger.info(f"Tentando salvar chave API para {self.system_name}.")
+        logger.info(f"Tentando salvar chave API para {self.system_name}.")
         context = self._get_current_user_context()
         if not context: return
         id_token, user_id = context
@@ -187,13 +187,13 @@ class LLMConfigCard(CardWithHeader):
         encrypted_key_bytes: Optional[bytes] = None
         try:
             if not credentials_manager.get_encryption_key():
-                _logger.error("Chave de criptografia Fernet local não encontrada.")
+                logger.error("Chave de criptografia Fernet local não encontrada.")
                 show_snackbar(self.page, "Erro de configuração: Chave de criptografia principal ausente.", color=theme.COLOR_ERROR)
                 self.update_card_content_status("Erro: Chave de criptografia local ausente.", theme.COLOR_ERROR, ft.icons.ERROR, theme.COLOR_ERROR, "Erro", "Erro")
                 return
             encrypted_key_bytes = credentials_manager.encrypt(new_api_key_value)
         except Exception as enc_ex:
-            _logger.error(f"Falha ao criptografar chave API: {enc_ex}", exc_info=True)
+            logger.error(f"Falha ao criptografar chave API: {enc_ex}", exc_info=True)
             show_snackbar(self.page, "Erro ao proteger a chave API.", color=theme.COLOR_ERROR)
             return
 
@@ -210,7 +210,7 @@ class LLMConfigCard(CardWithHeader):
             
             session_key_decrypted = self._get_session_key_for_decrypted_api_key()
             if success:
-                _logger.info(f"Chave API para {self.system_name} salva com sucesso.")
+                logger.info(f"Chave API para {self.system_name} salva com sucesso.")
                 self.page.session.set(session_key_decrypted, new_api_key_value)
                 show_snackbar(self.page, "Chave API salva com sucesso!", color=theme.COLOR_SUCCESS)
                 self.load_api_key_status() # Recarrega o status para refletir a mudança
@@ -219,18 +219,18 @@ class LLMConfigCard(CardWithHeader):
                     show_snackbar(self.page, "Não foi possível salvar a chave API.", color=theme.COLOR_ERROR)
                 if self.page.session.contains_key(session_key_decrypted):
                     self.page.session.remove(session_key_decrypted)
-                _logger.error(f"Falha ao salvar chave API para {self.system_name} no Firestore.")
+                logger.error(f"Falha ao salvar chave API para {self.system_name} no Firestore.")
                 self.load_api_key_status() # Recarrega o status
         except Exception as ex:
             hide_loading_overlay(self.page)
-            _logger.error(f"Erro inesperado ao salvar chave API: {ex}", exc_info=True)
+            logger.error(f"Erro inesperado ao salvar chave API: {ex}", exc_info=True)
             if self.page.session.contains_key(self._get_session_key_for_decrypted_api_key()):
                 self.page.session.remove(self._get_session_key_for_decrypted_api_key())
             show_snackbar(self.page, "Ocorreu um erro inesperado ao salvar a chave.", color=theme.COLOR_ERROR)
             self.load_api_key_status()
 
     def _handle_clear_api_key(self, e):
-        _logger.info(f"Tentando limpar chave API para {self.system_name}.")
+        logger.info(f"Tentando limpar chave API para {self.system_name}.")
         context = self._get_current_user_context()
         if not context: return
         id_token, user_id = context
@@ -255,13 +255,13 @@ class LLMConfigCard(CardWithHeader):
             )
             hide_loading_overlay(self.page)
             if success:
-                _logger.info(f"Chave API para {self.system_name} limpa/removida.")
+                logger.info(f"Chave API para {self.system_name} limpa/removida.")
                 show_snackbar(self.page, "Chave API removida com sucesso!", color=theme.COLOR_SUCCESS)
             else:
-                _logger.error(f"Falha ao limpar chave API para {self.system_name} no Firestore (retorno False).")
+                logger.error(f"Falha ao limpar chave API para {self.system_name} no Firestore (retorno False).")
         except Exception as ex:
             hide_loading_overlay(self.page)
-            _logger.error(f"Erro inesperado ao limpar chave API: {ex}", exc_info=True)
+            logger.error(f"Erro inesperado ao limpar chave API: {ex}", exc_info=True)
             show_snackbar(self.page, "Ocorreu um erro inesperado ao limpar a chave.", color=theme.COLOR_ERROR)
         finally:
             self.load_api_key_status()
@@ -372,7 +372,7 @@ class LLMSettingsViewContent(ft.Column):
             self.status_preferences_text.update()
 
     def did_mount(self):
-        _logger.info("LLMSettingsViewContent did_mount. Carregando dados dos provedores e preferências da sessão.")
+        logger.info("LLMSettingsViewContent did_mount. Carregando dados dos provedores e preferências da sessão.")
         # Os dados já devem ter sido carregados para a sessão por app.py
         self._update_provider_cards_from_session()
         self._update_preference_dropdowns_from_session()
@@ -493,7 +493,7 @@ class LLMSettingsViewContent(ft.Column):
         return str(key_value) # Retorna a chave se o texto não for encontrado (fallback)
     
     def _handle_save_preferences(self, e: ft.ControlEvent):
-        _logger.info("Salvando preferências de LLM do usuário...")
+        logger.info("Salvando preferências de LLM do usuário...")
         self._last_pref_error_message = ""
         from src.flet_ui.app import check_and_refresh_token_if_needed
 
@@ -514,7 +514,7 @@ class LLMSettingsViewContent(ft.Column):
 
         if not self.page.session.get("is_admin"):
             show_snackbar(self.page, "Apenas administradores podem alterar as preferências padrão de LLM.", color=theme.COLOR_WARNING, duration=5000)
-            _logger.warning(f"Usuário não-admin (ID: {self.page.session.get('auth_user_id')}) tentou salvar preferências de LLM.")
+            logger.warning(f"Usuário não-admin (ID: {self.page.session.get('auth_user_id')}) tentou salvar preferências de LLM.")
             # Opcional: Reverter a seleção na UI para refletir as preferências salvas
             self._update_preference_dropdowns_from_session()
             return
@@ -572,7 +572,7 @@ class LLMSettingsViewContent(ft.Column):
             current_analysis_settings["llm_provider"] = selected_provider
             current_analysis_settings["llm_model"] = selected_model
             self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, current_analysis_settings)
-            _logger.info(f"Preferências de LLM salvas e aplicadas à sessão atual para usuário {user_id}: {new_preferences}")
+            logger.info(f"Preferências de LLM salvas e aplicadas à sessão atual para usuário {user_id}: {new_preferences}")
 
             self.save_preferences_button.disabled = True
             if self.page and self.save_preferences_button.uid: self.save_preferences_button.update()
@@ -581,17 +581,17 @@ class LLMSettingsViewContent(ft.Column):
 
         except Exception as e:
             hide_loading_overlay(self.page)
-            _logger.error(f"Erro ao salvar preferências LLM do usuário {user_id}: {e}", exc_info=True)
+            logger.error(f"Erro ao salvar preferências LLM do usuário {user_id}: {e}", exc_info=True)
             self._last_pref_error_message = "Erro ao salvar preferências."
             self._update_status_preferences_display()
             show_snackbar(self.page, "Não foi possível salvar suas preferências de LLM.", theme.COLOR_ERROR)
 
 
 def create_llm_settings_view(page: ft.Page) -> ft.Control: # Mudou de ft.View para ft.Control
-    _logger.info("Criando o conteúdo da view de Configurações LLM.")
+    logger.info("Criando o conteúdo da view de Configurações LLM.")
 
     if not page.session.get("auth_id_token"):
-        _logger.warning("Usuário não autenticado tentou acessar Configurações LLM.")
+        logger.warning("Usuário não autenticado tentou acessar Configurações LLM.")
         # O router deve ter redirecionado. Se chegar aqui, é um fallback.
         return ft.Text("Erro: Autenticação necessária. Você será redirecionado.", color=theme.COLOR_ERROR)
 
