@@ -414,37 +414,5 @@ def review_function(resposta_formatada: formatted_initial_analysis) -> formatted
             
     return resposta_formatada
 
-'''
-Grupos de prompt:
-
-# quanto à origem:
-2. TIPO DE DOCUMENTO DE ORIGEM
-3. ÓRGÃO DE ORIGEM
-4.1 UF DE ORIGEM
-4.2 MUNICÍPIO DE ORIGEM
-
-# quanto ao(s) fato(s) documentado(s):
-1. DESCRIÇÃO GERAL
-5. RESUMO DO FATO
-6.1 UF DO FATO
-6.2 MUNICÍPIO DO FATO
-7. TIPO DE LOCAL
-8. VALOR DE APURAÇÃO
-14. PESSOAS ENVOLVIDAS
-15. LINHA DO TEMPO
-16. OBSERVAÇÕES
-
-# quanto à área temática e destinação: 
-9. TIPIFICAÇÃO PENAL
-10. ÁREA DE ATRIBUIÇÃO
-13. DESTINAÇÃO
-13. MATÉRIA DE TRATAMENTO ESPECIAL
-
-# quanto ao tipo de procedimento a gerar:
-11. TIPO A AUTUAR
-12. ASSUNTO DO RE
-
-'''
-
 execution_time = perf_counter() - start_time
 logger.debug(f"Carregado PROMPTS em {execution_time:.4f}s")

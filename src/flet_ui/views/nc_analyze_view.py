@@ -30,6 +30,11 @@ from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBD
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST,
                           PROMPTS_COLLECTION, PROMPTS_DOCUMENT_ID)
 
+from src.settings import (KEY_SESSION_CURRENT_BATCH_NAME, KEY_SESSION_PDF_FILES_ORDERED, KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA, 
+                          KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, KEY_SESSION_LLM_REANALYSIS, KEY_SESSION_PDF_AGGREGATED_TEXT_INFO,
+                          KEY_SESSION_PDF_LLM_RESPONSE, KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL, KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK,
+                          KEY_SESSION_PROMPTS_FINAL, KEY_SESSION_PROMPTS_DICT, KEY_SESSION_LIST_TO_PROMPTS)
+
 from src.services.firebase_client import FirebaseClientFirestore, _from_firestore_value
 
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
@@ -56,40 +61,10 @@ municipios_list = get_municipios_por_uf_cached()
 
 firestore_client = FirebaseClientFirestore()
 
-# Dicionário para servir como cache no lado do servidor para dados pesados da sessão.
-# A chave será o ID da sessão do Flet (page.session_id).
-# O valor será outro dicionário contendo os dados pesados.
-_SERVER_SIDE_CACHE = {}
+parcial_time = perf_counter() - start_time
+logger.info(f"[DEBUG] Carregamento pesado dentro de NC_ANALYZE_VIEW em {parcial_time:.4f}s")
 
-def get_user_cache(page: ft.Page) -> dict:
-    """Retorna o cache específico para a sessão do usuário atual, criando-o se não existir."""
-    session_id = page.session_id
-    if session_id not in _SERVER_SIDE_CACHE:
-        _SERVER_SIDE_CACHE[session_id] = {}
-    return _SERVER_SIDE_CACHE[session_id]
-
-def clear_user_cache(page: ft.Page):
-    """Limpa o cache do lado do servidor para a sessão do usuário atual."""
-    session_id = page.session_id
-    if session_id in _SERVER_SIDE_CACHE:
-        del _SERVER_SIDE_CACHE[session_id]
-        logger.debug(f"Cache do lado do servidor limpo para a sessão {session_id}.")
-    else:
-        logger.debug(f"Nenhum cache do lado do servidor encontrado para a sessão {session_id} para limpar.")
-        
-# Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
-KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
-KEY_SESSION_PDF_FILES_ORDERED = "apv_pdf_files_ordered"
-KEY_SESSION_PROCESSING_METADATA = "apv_processing_metadata"
-KEY_SESSION_LLM_METADATA = "apv_llm_metadata"
-KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS = "apv_feedback_collected"
-KEY_SESSION_LLM_REANALYSIS = "apv_llm_reanalysis_flag"
-
-# Dados a ficar em _SERVER_SIDE_CACHE:
-KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "apv_pdf_aggregated_text_info" # (str_pages, aggregated_text, tokens_antes, tokens_depois)
-KEY_SESSION_PDF_LLM_RESPONSE = "apv_pdf_llm_response"
-KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL = "apv_pdf_llm_response_actual"
-KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK = "apv_llm_response_snapshot_for_feedback"
+from src.utils import _SERVER_SIDE_CACHE, get_user_cache, clear_user_cache
 
 # Constantes para nomes de controles (facilita acesso) CTL = Control
 CTL_UPLOAD_BTN = "upload_button"
@@ -126,10 +101,6 @@ class FeedbackDialogAction(Enum):
     RETURN_TO_EDIT = "return_to_edit"
     SKIP_AND_CONTINUE = "skip_and_continue"
     CANCELLED_OR_ERROR = "cancelled_or_error" 
-
-KEY_SESSION_PROMPTS1 = "app_prompts_from_firestore_1"
-KEY_SESSION_PROMPTS2 = "app_prompts_from_firestore_2"
-KEY_SESSION_LIST_TO_PROMPTS = "app_list_to_prompts_from_firestore"
 
 def load_prompts_from_firestore(page: ft.Page):
     """
@@ -185,15 +156,15 @@ def load_prompts_from_firestore(page: ft.Page):
             loaded_components["ALL_prompts"]
         )
         # Armazena o resultado final no cache do servidor
-        user_cache[KEY_SESSION_PROMPTS1] = final_prompts
-        user_cache[KEY_SESSION_PROMPTS2] = prompts_dict
+        user_cache[KEY_SESSION_PROMPTS_FINAL] = final_prompts
+        user_cache[KEY_SESSION_PROMPTS_DICT] = prompts_dict
         user_cache[KEY_SESSION_LIST_TO_PROMPTS] = loaded_components["ALL_lists"]
         logger.info("Pipelines de prompts finais construídos e armazenados no cache do servidor.")
     except Exception as e:
         logger.error(f"Falha ao construir pipelines de prompts finais: {e}", exc_info=True)
         # Em caso de erro, armazena um dicionário vazio para evitar falhas posteriores
-        user_cache[KEY_SESSION_PROMPTS1] = {}
-        user_cache[KEY_SESSION_PROMPTS2] = {}
+        user_cache[KEY_SESSION_PROMPTS_FINAL] = {}
+        user_cache[KEY_SESSION_PROMPTS_DICT] = {}
         user_cache[KEY_SESSION_LIST_TO_PROMPTS] = {}
      
 class AnalyzePDFViewContent(ft.Column):
@@ -240,11 +211,6 @@ class AnalyzePDFViewContent(ft.Column):
         self.feedback_workflow_manager: Optional[FeedbackWorkflowManager] = None
         
         self.user_cache = get_user_cache(self.page)
-
-        start_time_p = perf_counter()
-        load_prompts_from_firestore(self.page)
-        execution_time_p = perf_counter() - start_time_p
-        logger.debug(f"Carregado Prompts_from_firestore em {execution_time_p:.4f}s")
 
         self._build_gui_structure()
         self.feedback_workflow_manager = FeedbackWorkflowManager(self.page, self)
@@ -495,7 +461,7 @@ class AnalyzePDFViewContent(ft.Column):
             ft.Container: Um container Flet contendo os TextFields com os prompts.
         """
         self.user_cache = get_user_cache(self.page)
-        prompts = self.user_cache.get(KEY_SESSION_PROMPTS2)
+        prompts = self.user_cache.get(KEY_SESSION_PROMPTS_DICT)
 
         logger.debug("Criando layout de visualização do prompt.")
 
@@ -1386,7 +1352,12 @@ class AnalyzePDFViewContent(ft.Column):
         logger.info("Limpando todos os dados e resetando UI da Análise PDF.")
         
         # Limpa o cache do servidor para este usuário
-        clear_user_cache(self.page)
+        keys_to_preserve = [
+            KEY_SESSION_PROMPTS_FINAL,
+            KEY_SESSION_PROMPTS_DICT,
+            KEY_SESSION_LIST_TO_PROMPTS
+        ]
+        clear_user_cache(self.page, preserve_keys=keys_to_preserve)
 
         # Limpa sessão relacionada a esta view
         keys_to_clear_from_session = [
@@ -1798,6 +1769,30 @@ class InternalAnalysisController:
             if not analyze_llm_after:
                 self.page.run_thread(self.parent_view._update_button_states)
 
+    def _get_valid_user_context(self) -> Optional[Tuple[str, str]]:
+        """
+        Verifica e renova o token se necessário, retornando um contexto de usuário válido.
+        Centraliza a lógica de verificação de token para a view.
+
+        Returns:
+            Optional[Tuple[str, str]]: Uma tupla (user_token, user_id) se a sessão for válida,
+                                       ou None se a sessão for inválida (e o logout for acionado).
+        """
+        from src.flet_ui.app import check_and_refresh_token_if_needed
+        
+        if not check_and_refresh_token_if_needed(self.page):
+            logger.error("Contexto do usuário inválido ou sessão expirada. Ação abortada.")
+            return None
+        
+        user_token = self.page.session.get("auth_id_token")
+        user_id = self.page.session.get("auth_user_id")
+
+        if not user_token or not user_id:
+            logger.error("Token ou ID do usuário ausente da sessão mesmo após verificação. Ação abortada.")
+            return None
+            
+        return user_token, user_id
+    
     def _get_data_to_log(self):
         """
         Coleta e retorna os dados relevantes da sessão e do cache para fins de logging e métricas.
@@ -1815,8 +1810,13 @@ class InternalAnalysisController:
                 - llm_response_obj (formatted_initial_analysis): Objeto de resposta estruturada da LLM.
                 - fields_to_log (List[str]): Lista de campos da resposta LLM a serem logados.
         """
-        user_id = self.page.session.get("auth_user_id")
-        user_token = self.page.session.get("auth_id_token")
+        context = self._get_valid_user_context()
+        if not context:
+            logger.error("Não foi possível obter contexto de usuário válido para coletar dados de log.")
+            # Retorna uma tupla com Nones para evitar que o chamador quebre
+            return (None, None, [], {}, None, {}, {}, {}, None, [])
+            
+        user_token, user_id = context
     
         llm_meta_session = self.page.session.get(KEY_SESSION_LLM_METADATA) or {}
 
@@ -1876,7 +1876,13 @@ class InternalAnalysisController:
             key_prompt_group = "PROMPT_UNICO_for_INITIAL_ANALYSIS"
 
         self.user_cache = get_user_cache(self.page)
-        loaded_prompts = self.user_cache.get(KEY_SESSION_PROMPTS1)
+        loaded_prompts = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL)
+        if not loaded_prompts:
+            logger.error("Prompts ausentes para a thread de análise!")
+            self.page.run_thread(self.parent_view._update_gui_from_state)
+            self.page.run_thread(self._update_status_callback, f"Erro crítico: Não foi possível carregar os prompts de análise.", True, True)
+            hide_loading_overlay(self.page)
+            return # Aborta a execução da thread
 
         try:
             logger.debug(f"Thread: Iniciando análise LLM para '{batch_name}'...")
@@ -2236,7 +2242,7 @@ class InternalExportManager:
                 except OSError as er:
                     logger.warning(f"Não remover temp template '{source_path}': {er}")
  
-    def _trigger_feedback_and_export(self, export_operation: ExportOperation, data_to_export: formatted_initial_analysis, template_path: Optional[str]):
+    def _trigger_feedback_and_export(self, export_operation: ExportOperation, template_path: Optional[str]):
         """
         Dispara o fluxo de feedback do usuário antes de iniciar a exportação.
 
@@ -2245,7 +2251,6 @@ class InternalExportManager:
 
         Args:
             export_operation (ExportOperation): O tipo de exportação a ser realizada.
-            data_to_export (formatted_initial_analysis): Os dados estruturados da análise a serem exportados.
             template_path (Optional[str]): O caminho para o arquivo de template DOCX (se aplicável).
         """
         logger.debug(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
@@ -2909,7 +2914,6 @@ class LLMStructuredResultDisplay(ft.Column):
             logger.warning("LLMStructuredResultDisplay.update_data: data_to_display_in_gui é None. Limpando display e snapshots.")
             self.original_llm_data_snapshot = None
             self.data = None
-            
             self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = None
             self.controls.clear()
             self.gui_fields.clear()
@@ -3092,7 +3096,7 @@ class LLMStructuredResultDisplay(ft.Column):
             - None: Se self.data base não estiver definido.
         """
         if not self.data: # Se não há dados base (ex: LLM não retornou nada)
-            logger.warning("get_current_form_data: self.data não está definido. Não é possível coletar dados da UI.")
+            logger.warning("get_current_form_data: self.data não está definido. Não é possível coletar dados da GUI.")
             return None
  
         # Passo 1: Coletar valores dos campos da UI (self.ui_fields)
@@ -3460,6 +3464,19 @@ class FeedbackWorkflowManager:
         Verifica se o feedback deve ser solicitado. Se sim, mostra o diálogo.
         Executa a `primary_action_callable` com base na resposta do diálogo.
         """ 
+        # 0. CONDIÇÃO: Só prosseguir com o fluxo de feedback se houver uma resposta da LLM para avaliar.
+        self.user_cache = get_user_cache(self.page)
+        llm_response = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL) or self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
+        if not llm_response:
+            logger.debug(f"FeedbackWorkflowManager: Nenhuma análise LLM anterior encontrada para '{action_context_name}'. Prosseguindo sem solicitar feedback.")
+            primary_action_callable()
+            return
+
+        if self.page.session.get(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS):
+            logger.debug(f"FeedbackWorkflowManager: Feedback já coletado para '{action_context_name}'. Prosseguindo com ação primária.")
+            primary_action_callable()
+            return
+        
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
         if not isinstance(llm_display_component, LLMStructuredResultDisplay):
             logger.error(f"FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado para '{action_context_name}'. Prosseguindo sem feedback.")
@@ -3474,26 +3491,16 @@ class FeedbackWorkflowManager:
             return
 
         # 2. Prepara os dados para o diálogo de feedback
-        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
-        if not isinstance(llm_display_component, LLMStructuredResultDisplay):
-            logger.error("FeedbackWorkflowManager: LLMStructuredResultDisplay não encontrado.")
-            feedback_fields_data = None
-        else:
-            # Acessa o snapshot original e os dados atuais da UI através do llm_display_component
-            original_snapshot = llm_display_component.original_llm_data_snapshot
-            # self.data em llm_display_component já reflete a UI após get_current_form_data()
-            # que deve ter sido chamado antes de _get_prepared_feedback_data ser invocado.
-            current_data_ui = llm_display_component.data 
+        # Acessa o snapshot original e os dados atuais da UI através do llm_display_component
+        original_snapshot = llm_display_component.original_llm_data_snapshot
+        # self.data em llm_display_component já reflete a UI após get_current_form_data()
+        # que deve ter sido chamado antes de _get_prepared_feedback_data ser invocado.
+        current_data_ui = llm_display_component.data 
 
-            feedback_fields_data = get_prepared_feedback_data(original_snapshot, current_data_ui, llm_display_component.gui_fields)
+        feedback_fields_data = get_prepared_feedback_data(original_snapshot, current_data_ui, llm_display_component.gui_fields)
 
         if not feedback_fields_data:
             logger.warning(f"FeedbackWorkflowManager: Não foi possível preparar dados para feedback para '{action_context_name}'. Prosseguindo sem feedback.")
-            primary_action_callable()
-            return
-
-        if self.page.session.get(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS):
-            logger.debug(f"FeedbackWorkflowManager: Feedback já coletado para '{action_context_name}'. Prosseguindo com ação primária.")
             primary_action_callable()
             return
 
@@ -3554,7 +3561,42 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
         ft.Control: Uma instância de AnalyzePDFViewContent.
     """
     logger.info("View Análise de PDF: Iniciando criação (nova estrutura).")
-    return AnalyzePDFViewContent(page)
+
+    # 1. Ponto de verificação e carregamento dos prompts
+    user_cache = get_user_cache(page)
+    if not user_cache.get(KEY_SESSION_PROMPTS_FINAL):
+        try:
+            # A função `load_prompts_from_firestore` já salva no cache
+            start_time_p = perf_counter()
+            load_prompts_from_firestore(page)
+            execution_time_p = perf_counter() - start_time_p
+            logger.info(f"[DEBUG] Carregado Prompts_from_firestore em {execution_time_p:.4f}s")
+            # Verificação pós-carregamento para garantir que tudo correu bem:
+            if not user_cache.get(KEY_SESSION_PROMPTS_FINAL):
+                raise RuntimeError("load_prompts_from_firestore foi chamada mas não populou o cache.")
+        except Exception as e:
+            logger.critical(f"Falha crítica ao carregar prompts para a view de análise: {e}", exc_info=True)
+            # Retorna uma view de erro se os prompts são essenciais e falharam ao carregar
+            return ft.Column([
+                ft.Icon(ft.icons.ERROR, color=theme.COLOR_ERROR, size=50),
+                ft.Text("Erro Crítico", style=ft.TextThemeStyle.HEADLINE_SMALL),
+                ft.Text("Não foi possível carregar as configurações de análise necessárias. "
+                        "Tente recarregar a página ou contate o suporte.",
+                        text_align=ft.TextAlign.CENTER)
+            ],
+            expand=True,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            alignment=ft.MainAxisAlignment.CENTER,
+            spacing=15)
+    else:
+        logger.debug("Prompts já estavam carregados no cache da sessão. Pulando recarregamento.")
+
+    start_time_p = perf_counter()
+    retorno = AnalyzePDFViewContent(page)
+    execution_time_p = perf_counter() - start_time_p
+    logger.info(f"[DEBUG] Create_analyze_pdf_content em {execution_time_p:.4f}s")
+    
+    return retorno
 
 # Funções acessórias:
 

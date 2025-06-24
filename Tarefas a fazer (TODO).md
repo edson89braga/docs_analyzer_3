@@ -11,6 +11,8 @@
 > Tests pdf_processor.py, ai_orchestrator.py, doc_generator.py
 > Test  View: analyze_pdf1
 
+> Por que há problemas de renderização quando o app é instanciado em mais de uma aba?
+
 # TODO: Posteriormente: 
 > Exibir prompt_estruturado editável;
 > Melhorias na apresentação dos metadados: coluna em vez de lista única?

@@ -96,7 +96,6 @@ KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS = "app_cloud_analysis_defaults" # Padrões c
 KEY_SESSION_TOKENS_EMBEDDINGS = "app_tokens_embeddings"
 KEY_SESSION_MODEL_EMBEDDINGS_LIST = "app_model_embeddings_list"
 
-
 # --- Configurações de LLM ---
 DEFAULT_LLM_SERVICE = "openai" # Exemplo
 DEFAULT_LLM_PROVIDER = "openai"
@@ -152,6 +151,25 @@ CLOUD_LOGGER_MAX_BUFFER_SIZE = 1000  # Tamanho máximo do buffer (número de lin
 CLOUD_LOGGER_MAX_RETRIES = 3         # Número máximo de tentativas de upload
 CLOUD_LOGGER_RETRY_DELAY = 12        # Tempo de espera entre as tentativas (segundos)
 
+
+# --- Configurações de NC_ANALYZE_VIEW ---
+# Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
+KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
+KEY_SESSION_PDF_FILES_ORDERED = "apv_pdf_files_ordered"
+KEY_SESSION_PROCESSING_METADATA = "apv_processing_metadata"
+KEY_SESSION_LLM_METADATA = "apv_llm_metadata"
+KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS = "apv_feedback_collected"  # Flag para indicar se o feedback já foi coletado.
+KEY_SESSION_LLM_REANALYSIS = "apv_llm_reanalysis_flag"
+
+# Dados a ficar em _SERVER_SIDE_CACHE:
+KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "apv_pdf_aggregated_text_info" # (str_pages, aggregated_text, tokens_antes, tokens_depois)
+KEY_SESSION_PDF_LLM_RESPONSE = "apv_pdf_llm_response"                                           # Resposta original da IA
+KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL = "apv_pdf_llm_response_actual"                             # Resposta na GUI (que pode ter sido editada pelo usuário) # LLMStructuredResultDisplay.get_current_form_data()
+KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK = "apv_llm_response_snapshot_for_feedback"   # Cópia da resposta original p/ fins de comparação com a respota editada pelo usuário.
+
+KEY_SESSION_PROMPTS_FINAL = "app_prompts_from_firestore_1"
+KEY_SESSION_PROMPTS_DICT = "app_prompts_from_firestore_2"
+KEY_SESSION_LIST_TO_PROMPTS = "app_list_to_prompts_from_firestore"
 
 execution_time = perf_counter() - start_time
 logger.debug(f"Carregado em {execution_time:.4f}s")

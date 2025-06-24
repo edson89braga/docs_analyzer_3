@@ -7,10 +7,50 @@ logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando utils.py")
 
 import os, keyring, re
 from rich import print
-from typing import Union, Optional, Any
+from typing import Union, Optional, Any, List
 
 from src.settings import (K_PROXY_ENABLED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, 
                             K_PROXY_PASSWORD_SAVED, ASSETS_DIR_ABS)
+
+# Dicionário para servir como cache no lado do servidor para dados pesados da sessão.
+# A chave será o ID da sessão do Flet (page.session_id).
+# O valor será outro dicionário contendo os dados pesados.
+_SERVER_SIDE_CACHE = {}
+
+def get_user_cache(page) -> dict:
+    """Retorna o cache específico para a sessão do usuário atual, criando-o se não existir."""
+    session_id = page.session_id
+    if session_id not in _SERVER_SIDE_CACHE:
+        _SERVER_SIDE_CACHE[session_id] = {}
+    return _SERVER_SIDE_CACHE[session_id]
+
+def clear_user_cache(page, preserve_keys: Optional[List[str]] = None):
+    """
+    Limpa o cache do lado do servidor para a sessão do usuário atual.
+
+    Permite preservar chaves específicas, como as de prompts, para evitar
+    recarregamentos desnecessários.
+
+    Args:
+        page: A instância da página Flet.
+        preserve_keys (Optional[List[str]]): Uma lista de chaves a serem mantidas no cache.
+                                             Se None, o cache inteiro do usuário é removido.
+    """
+    session_id = page.session_id
+    if session_id not in _SERVER_SIDE_CACHE:
+        logger.debug(f"Nenhum cache do lado do servidor encontrado para a sessão {session_id} para limpar.")
+        return
+
+    if preserve_keys:
+        user_cache = _SERVER_SIDE_CACHE.get(session_id, {})
+        preserved_data = {key: user_cache[key] for key in preserve_keys if key in user_cache}
+        _SERVER_SIDE_CACHE[session_id] = preserved_data
+        logger.debug(f"Cache do lado do servidor limpo para a sessão {session_id}, preservando as chaves: {preserve_keys}")
+    else:
+        # Comportamento original: remove todo o cache do usuário
+        del _SERVER_SIDE_CACHE[session_id]
+        logger.debug(f"Cache completo do lado do servidor limpo para a sessão {session_id}.")
+
 
 import functools, urllib, ssl
 def with_proxy(skip_ssl_verify: bool = True):

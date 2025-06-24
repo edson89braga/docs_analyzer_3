@@ -3,7 +3,7 @@ logger = logging.getLogger(__name__)
 
 from time import perf_counter
 start_time = perf_counter()
-logger.info(f"{start_time:.4f}s - Iniciando logger.py")
+logger.debug(f"{start_time:.4f}s - Iniciando logger.py")
 
 import os, shutil, re
 from time import sleep
@@ -56,8 +56,8 @@ class LoggerSetup:
     )
     
     # Formato resumido para a saída padrão, sem data e hora
-    formatter_resumed = logging.Formatter( # Retirado %(asctime)s pois já vem embutido no RichHandler
-        fmt='%(levelname)-8s | %(message)s', 
+    formatter_resumed = logging.Formatter( # Retirado %(asctime)s e levelname pois já vem embutido no RichHandler
+        fmt='%(message)s', 
         datefmt='%H:%M:%S'
     )
     
@@ -182,119 +182,6 @@ class LoggerSetup:
             logger.debug(f"Erro ao rotacionar arquivo de log: \n{e}")
 
     @classmethod
-    def OLD_initialize(cls,
-                   routine_name: str,
-                   #firebase_client_storage: Optional['FirebaseClientStorage'] = None,
-                   #fb_manager_storage_admin: Optional['FbManagerStorage'] = None,
-                   modules_to_log: Optional[List[str]] = None,
-                   custom_handler: Optional[logging.Handler] = None,
-                   dev_mode: bool = False) -> None:
-        """
-        Inicializa o logger global. Deve ser chamado uma vez no início do programa.
-        
-        Args:
-            routine_name: Nome da rotina para o arquivo de log.
-            modules_to_log: Lista de módulos para filtrar os logs.
-            custom_handler: Handler personalizado para ser adicionado ao logger.
-        """   
-        if cls._initialized and not dev_mode: 
-            return
-        
-        if cls._initialized and dev_mode and cls._instance and cls._instance.name == "dev_minimal_logger":
-            return
-        
-        if dev_mode:
-            # Configuração mínima para dev_mode
-            logger = logging.getLogger('dev_minimal_logger') # Usa um nome diferente para evitar conflitos
-            logger.handlers.clear() # Limpa handlers anteriores se houver
-            console_handler = cls._create_console_handler(cls.formatter_resumed, logging.DEBUG) # DEBUG para dev
-            logger.addHandler(console_handler)
-            logger.setLevel(logging.DEBUG)
-            logger.propagate = False # Não propaga para o logger root padrão, pois este é o nosso "root" em dev_mode
-            cls._instance = logger
-            cls._initialized = True
-            # current_internal_logger.info("LoggerSetup inicializado em MODO DE DESENVOLVIMENTO (mínimo).")
-            # cls._update_existing_loggers() # Garante que loggers filhos usem este
-            return
-        
-        global PATH_LOGS
-        
-        # A responsabilidade de criar e adicionar o CloudLogHandler ficará totalmente com add_cloud_logging
-        #if firebase_client_storage:
-        #    cls._client_uploader_instance = ClientLogUploader(firebase_client_storage)
-        #    logger.debug("LoggerSetup: Instância de ClientLogUploader criada.")
-        #if fb_manager_storage_admin:
-        #    cls._admin_uploader_instance = AdminLogUploader(fb_manager_storage_admin)
-        #    logger.debug("LoggerSetup: Instância de AdminLogUploader criada.")
-
-        ### file_handler:
-        # Cria o nome do arquivo de log com base no nome da rotina
-        safe_routine_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in routine_name)
-        
-        # Cria o nome do arquivo de log com a data atual
-        current_date = datetime.now().strftime('%Y-%m-%d')
-        base_log_file = PATH_LOGS / f"{safe_routine_name}.log"
-        dated_log_file = PATH_LOGS / f"{safe_routine_name}_{current_date}.log"
-
-        try:
-            # Se o arquivo de log existir, renomeia-o para o nome com data
-            if base_log_file.exists():
-                if not dated_log_file.exists():
-                    try:
-                        shutil.copy2(base_log_file, dated_log_file)
-                        base_log_file.unlink()
-                    except (OSError, IOError):
-                        pass
-        except Exception as e:
-            logger.debug(f"Erro ao rotacionar arquivo de log: \n{e}")
-
-        # --- Limit the number of dated log files ---
-        cls._cleanup_old_log_files(PATH_LOGS, days_to_keep=7)  # Keep only 7 days of logs
-
-        # Cria o file_handler com o nome do arquivo de log
-        file_handler = cls._create_file_handler(
-                base_log_file,
-                cls.formatter_detailed, 
-                logging.DEBUG
-            )
-
-        ### console_handler: 
-        # Cria o console_handler com o formato resumido
-        console_handler = cls._create_console_handler(cls.formatter_resumed, logging.INFO)
-
-        ### Logger Root:
-        # Cria o logger root
-        logger = logging.getLogger()
-        logger.setLevel(logging.DEBUG)
-        logger.handlers.clear()
-
-        ### Add handlers:
-        # Adiciona os handlers ao logger root
-        logger.addHandler(file_handler)
-        logger.addHandler(console_handler)
-
-        #if firebase_client_storage or fb_manager_storage_admin:
-        #    # Adiciona o handler para CloudStorage
-        #    cloud_log_handler = cls._create_cloud_logger_handler(cls.formatter_detailed, level=logging.INFO)
-        #    if cloud_log_handler:
-        #        cls._apply_module_filter(cloud_log_handler, modules_to_log)
-        #        logger.addHandler(cloud_log_handler)
-        #else:
-        #    logger.debug("LoggerSetup: Nenhum Firebase storage manager fornecido para o logger da nuvem. Cloud logging desabilitado.")
-
-        # Adiciona o handler personalizado, se fornecido: Usado para handler que imprime no componente do Flet
-        if custom_handler:
-            logger.addHandler(custom_handler)
-
-        #logger.propagate = True
-        # Armazena o logger root como instância da classe
-        cls._instance = logger
-        cls._initialized = True
-        
-        # Atualiza todos os loggers já criados
-        cls._update_existing_loggers()
-
-    @classmethod
     def initialize(cls,
                    routine_name: str,
                    modules_to_log: Optional[List[str]] = None, # Mantido, mas a nova lógica usa o prefixo 'src'
@@ -314,7 +201,7 @@ class LoggerSetup:
             if cls._instance:
                 cls._instance.debug("LoggerSetup.initialize chamado novamente, mas já inicializado. Ignorando.")
             return
-
+        
         # Define o nível do console com base no modo de desenvolvimento
         console_level = logging.DEBUG if dev_mode else logging.INFO
 
@@ -383,7 +270,7 @@ class LoggerSetup:
 
         # Loga a mensagem de inicialização
         init_mode = "MODO DE DESENVOLVIMENTO (DEBUG no console)" if dev_mode else "MODO DE PRODUÇÃO (INFO no console)"
-        logger.info(f"LoggerSetup inicializado com sucesso em {init_mode}.")
+        logger.debug(f"LoggerSetup inicializado com sucesso em {init_mode}.")
 
     @classmethod
     def add_cloud_logging(
@@ -455,12 +342,15 @@ class LoggerSetup:
     @classmethod
     def _update_existing_loggers(cls):
         """Atualiza todos os loggers já criados com a nova configuração."""
-        for name, logger in cls._loggers.items():
-            # Remove handlers antigos
-            logger.handlers.clear()
-            # Configura o novo logger com base no root logger
-            if name is not None:
-                logger.parent = cls._instance
+        for name, logger_instance in cls._loggers.items():
+            # Remove handlers antigos:
+            logger_instance.handlers.clear()
+            # Garante que o nível não restrinja mais do que o pai:
+            logger_instance.setLevel(logging.DEBUG)
+            # Desativa a propagação se você quisesse handlers únicos por logger, mas queremos que eles propaguem para o raiz:
+            logger_instance.propagate = True 
+        
+        logger.info(f"[DEBUG] Reconfigurados {len(cls._loggers)} loggers existentes para usar a nova configuração raiz.")
     
     @classmethod
     def get_logger(cls, name: str = None) -> logging.Logger:
@@ -475,10 +365,9 @@ class LoggerSetup:
         """
         logger_name = name 
         
-        if logger_name in cls._loggers:
-            return cls._loggers[logger_name]
-            
         logger = logging.getLogger(logger_name)
+        if logger_name not in cls._loggers:
+            cls._loggers[logger_name] = logger
         
         # Sets Logs específicos:
         logging.getLogger("pdfminer").setLevel(logging.ERROR)
@@ -488,7 +377,6 @@ class LoggerSetup:
         else:
             cls._setup_temporary_logger(logger_name)
                     
-        cls._loggers[logger_name] = logger
         return logger
     
     @classmethod
@@ -506,7 +394,7 @@ class LoggerSetup:
         #logger = cls.get_logger(__name__) # Usa o próprio logger para registrar a ação
         cleanup_logger = logging.getLogger(__name__)
         
-        cleanup_logger.info(f"Iniciando limpeza de logs antigos (mais de {days_to_keep} dias) em '{log_dir}'...")
+        cleanup_logger.debug(f"Iniciando limpeza de logs antigos (mais de {days_to_keep} dias) em '{log_dir}'...")
 
         # Usa rglob para encontrar arquivos em subdiretórios também
         for file_path in log_dir.rglob('*'):
@@ -539,7 +427,7 @@ class LoggerSetup:
         else:
             cloud_log_prefix = CLOUD_LOGGER_FOLDER
 
-        logger.info(f"Iniciando verificação de logs antigos na nuvem (prefixo: '{cloud_log_prefix}', retenção: {days_to_keep} dias)...")
+        logger.debug(f"Iniciando verificação de logs antigos na nuvem (prefixo: '{cloud_log_prefix}', retenção: {days_to_keep} dias)...")
         
         try:
             # list_blobs com um prefixo já itera por todos os objetos que começam com esse prefixo,
@@ -561,7 +449,7 @@ class LoggerSetup:
                     files_to_remove.append(blob)
             
             if not files_to_remove:
-                logger.info("Nenhum log antigo encontrado para remover na nuvem.")
+                logger.debug("Nenhum log antigo encontrado para remover na nuvem.")
                 return
 
             logger.warning(f"Encontrados {len(files_to_remove)} logs antigos para remover:")
@@ -574,7 +462,7 @@ class LoggerSetup:
                 logger.info("DRY RUN concluído. Nenhuma ação de deleção foi executada.")
                 return
 
-            logger.info("Prosseguindo com a deleção real dos arquivos na nuvem...")
+            logger.debug("Prosseguindo com a deleção real dos arquivos na nuvem...")
             files_removed_count = 0
             for blob in files_to_remove:
                 try:
@@ -744,4 +632,4 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
 
 
 execution_time = perf_counter() - start_time
-logger.info(f"Carregado LOGGER em {execution_time:.4f}s")
+logger.info(f"[DEBUG] Carregado LOGGER em {execution_time:.4f}s")

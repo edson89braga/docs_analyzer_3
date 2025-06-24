@@ -23,7 +23,7 @@ try:
     logger.info("Logger inicializado a partir de run.py.")
 
 except Exception as e:
-    logger.critical(f"Falha CRÍTICA ao inicializar o logger em run.py: {e}")
+    logger.critical(f"Falha CRÍTICA ao inicializar o logger em run.py: {e}", exc_info=True)
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logging.error("Logger principal falhou ao inicializar. Usando fallback básico.")
     # Não levantar exceção aqui para permitir que a app Flet tente iniciar mesmo assim.

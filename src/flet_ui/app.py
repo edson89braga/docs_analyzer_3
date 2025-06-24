@@ -10,7 +10,7 @@ start_time = perf_counter()
 logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando app.py")
 
 import flet as ft
-import time, os, threading
+import time, os, threading, jwt
 from typing import Optional
 
 from ..settings import (APP_TITLE, APP_VERSION, FLET_SECRET_KEY,
@@ -31,6 +31,8 @@ error_color = theme.COLOR_ERROR if hasattr(theme, 'COLOR_ERROR') else ft.colors.
 
 from src.services.firebase_client import FbManagerAuth, FirebaseClientFirestore, _from_firestore_value
 from src.logger.logger import LoggerSetup
+
+auth_manager = FbManagerAuth()
 
 def load_default_analysis_settings(page: ft.Page):
     """
@@ -197,80 +199,100 @@ def load_default_analysis_settings(page: ft.Page):
 
     page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, final_analysis_settings)
     logger.debug(f"Configurações finais de análise (KEY_SESSION_ANALYSIS_SETTINGS) definidas na sessão: {final_analysis_settings}")
-   
+
 def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False) -> bool:
     """
-    Verifica se o ID token precisa ser atualizado e tenta atualizá-lo.
-    Retorna True se o token estiver válido (ou foi atualizado), False caso contrário (ex: refresh falhou).
+    Verifica a validade e o tempo de vida de um ID token da sessão.
+
+    Esta função é o ponto central para garantir uma sessão de usuário válida.
+    1. Verifica criptograficamente o token atual (assinatura, emissor, audiência).
+    2. Se o token for inválido por razões de segurança, encerra a sessão.
+    3. Se o token for válido mas estiver prestes a expirar (ou `force_refresh` for True), tenta renová-lo.
+    4. Se o token estiver apenas expirado, também tenta renová-lo.
 
     Args:
         page: A instância da página Flet.
-        force_refresh: Se True, força a tentativa de refresh mesmo que o token não pareça expirado.
+        force_refresh: Se True, força a tentativa de renovação mesmo que o token pareça válido.
 
     Returns:
-        True se o token estiver válido (ou foi atualizado), False caso contrário.
+        True se, ao final do processo, a sessão contém um token válido.
+        False se a validação falhar ou a renovação não for possível.
     """
-    # _logger_app.debug("Verificando necessidade de refresh do token.") # Use o logger apropriado
+    logger.debug("Verificando validade e necessidade de refresh do token.")
     id_token = page.session.get("auth_id_token")
     refresh_token_str = page.session.get("auth_refresh_token")
-    expires_at = page.session.get("auth_id_token_expires_at")
 
     if not id_token or not refresh_token_str:
-        logger.debug("Não há token ou refresh token na sessão para verificar.")
-        return False # Não há token para validar/refrescar
-
-    # Verifica se o token expirou ou está prestes a expirar (ex: nos próximos 5 minutos)
-    # O expires_at já tem um buffer de 60s. Podemos usar um buffer menor aqui para a verificação.
-    needs_refresh = force_refresh
-    if expires_at:
-        if time.time() >= float(expires_at) - (5 * 60): # 5 minutos de buffer adicional
-            needs_refresh = True
-            logger.debug(f"ID Token próximo da expiração (ou expirado: {time.time()} >= {float(expires_at) - (5*60)}). Tentando refresh.")
-    else: # Se não há timestamp de expiração, considera que precisa de refresh por segurança
-        needs_refresh = True
-        logger.warning("Timestamp de expiração do ID Token não encontrado. Tentando refresh por precaução.")
-
-    if not needs_refresh:
-        logger.debug("ID Token ainda é considerado válido. Nenhum refresh necessário no momento.")
-        return True
+        logger.debug("Não há token ou refresh token na sessão para validar/renovar.")
+        return False
 
     auth_manager = FbManagerAuth()
-    logger.debug(f"Solicitando refresh do ID Token para user {page.session.get('auth_user_id')}.")
-    
+    needs_refresh = force_refresh
+    is_expired = False
+
+    # Etapa 1: Verificação Criptográfica de Segurança
+    try:
+        auth_manager.verify_id_token(id_token)
+        logger.debug("Token de ID verificado com sucesso (assinatura e claims válidos).")
+    except jwt.ExpiredSignatureError:
+        logger.warning("Token de ID está expirado. A renovação será necessária.")
+        is_expired = True
+        needs_refresh = True
+    except (jwt.InvalidTokenError, Exception) as e:
+        logger.error(f"Token de ID inválido por razões de segurança: {e}. Deslogando usuário.")
+        show_snackbar(page, "Sessão inválida. Por favor, faça login novamente.", color=theme.COLOR_ERROR)
+        handle_logout(page) # Função de logout que limpa tudo
+        return False
+
+    # Etapa 2: Verificação de Tempo de Vida (para refresh proativo)
+    if not needs_refresh: # Só faz essa checagem se o token não estiver já marcado para refresh
+        expires_at = page.session.get("auth_id_token_expires_at")
+        if expires_at and time.time() >= float(expires_at) - (5 * 60): # 5 min de buffer
+            logger.info("Token de ID próximo da expiração. Tentando refresh proativo.")
+            needs_refresh = True
+        elif not expires_at:
+             logger.warning("Timestamp de expiração do token não encontrado. Tentando refresh por precaução.")
+             needs_refresh = True
+
+    if not needs_refresh:
+        logger.debug("Token de ID ainda é válido e não precisa de refresh.")
+        return True
+
+    # Etapa 3: Execução da Renovação
+    logger.info(f"Solicitando renovação do ID Token (Motivo: Expirado={is_expired}, Forçado={force_refresh}).")
     new_token_data = auth_manager.refresh_id_token(refresh_token_str)
 
     if new_token_data and new_token_data.get("id_token"):
         new_id_token = new_token_data["id_token"]
-        new_refresh_token = new_token_data["refresh_token"] # API sempre retorna um, pode ser o mesmo ou novo
+        new_refresh_token = new_token_data["refresh_token"]
         new_expires_in = int(new_token_data.get("expires_in", 3600))
-        new_expires_at = time.time() + new_expires_in - 60 # -60s de buffer
+        new_expires_at = time.time() + new_expires_in - 60
 
-        logger.info("ID Token atualizado com sucesso via refresh token.")
+        logger.info("ID Token renovado com sucesso.")
         page.session.set("auth_id_token", new_id_token)
         page.session.set("auth_refresh_token", new_refresh_token)
         page.session.set("auth_id_token_expires_at", new_expires_at)
         
-        # Atualiza também no client_storage se estava lá originalmente
         if page.client_storage and page.client_storage.contains_key("auth_refresh_token"):
             page.client_storage.set("auth_id_token", new_id_token)
             page.client_storage.set("auth_refresh_token", new_refresh_token)
             page.client_storage.set("auth_id_token_expires_at", new_expires_at)
             logger.debug("Tokens atualizados também no client_storage.")
         
-        # Atualiza contexto do logger de nuvem com o novo token
         LoggerSetup.set_cloud_user_context(new_id_token, page.session.get("auth_user_id"))
         return True
     else:
-        logger.error("Falha ao atualizar ID Token.")
+        logger.error("Falha ao renovar o ID Token. Deslogando usuário.")
+        # Lógica de snackbar e logout (como na versão anterior)
         if isinstance(new_token_data, dict) and new_token_data.get("error_type") == "CONNECTION_ERROR":
-            show_snackbar(page, "Erro de conexão ao tentar renovar sessão. Verifique sua internet/proxy.", color=theme.COLOR_ERROR, duration=7000)
-        elif isinstance(new_token_data, dict) and new_token_data.get("error_type") == "HTTP_ERROR" and new_token_data.get("status_code") == 400: # Exemplo de erro específico
+            show_snackbar(page, "Erro de conexão ao tentar renovar sessão.", color=theme.COLOR_ERROR, duration=7000)
+        elif isinstance(new_token_data, dict) and new_token_data.get("error_type") == "HTTP_ERROR" and new_token_data.get("status_code") == 400:
             show_snackbar(page, "Sua sessão expirou ou é inválida. Por favor, faça login novamente.", color=theme.COLOR_ERROR, duration=7000)
         else:
             show_snackbar(page, "Não foi possível renovar sua sessão. Você será desconectado.", color=theme.COLOR_ERROR, duration=7000)
         handle_logout(page)
         return False
-
+    
 # --- Nova Thread para Renovação Automática de Token ---
 _token_refresh_thread_stop_event: Optional[threading.Event] = None
 _token_refresh_thread_instance: Optional[threading.Thread] = None
@@ -308,58 +330,51 @@ def _proactive_token_refresh_loop(page_ref: ft.Page, stop_event: threading.Event
 
 def load_auth_state_from_storage(page: ft.Page):
     """
-    Carrega o estado de autenticação do client_storage (se "Lembrar de mim" foi usado)
-    para a sessão Flet da página atual.
-
-    Args:
-        page: A instância da página Flet.
+    Carrega o estado de autenticação do client_storage, valida a sessão e,
+    se necessário, tenta renová-la.
     """
-    if page.client_storage and page.client_storage.contains_key("auth_id_token"):
-        logger.debug("Restaurando estado de autenticação do client_storage para a sessão Flet.")
-        # Pega todos os valores do client_storage e define na sessão
-        id_token = page.client_storage.get("auth_id_token")
-        user_id = page.client_storage.get("auth_user_id")
-        refresh_token = page.client_storage.get("auth_refresh_token") 
-        id_token_expires_at = page.client_storage.get("auth_id_token_expires_at")
-        user_email = page.client_storage.get("auth_user_email")
-        display_name = page.client_storage.get("auth_display_name")
+    # Apenas verifica a presença do refresh_token como indicador de uma sessão salva
+    if not (page.client_storage and page.client_storage.contains_key("auth_refresh_token")):
+        logger.debug("Nenhum estado de autenticação persistente (refresh token) encontrado.")
+        return
 
-        if id_token and user_id: # Garante que os dados essenciais existem
-            page.session.set("auth_id_token", id_token)
-            page.session.set("auth_user_id", user_id)
-            if refresh_token: 
-                page.session.set("auth_refresh_token", refresh_token)
-            if id_token_expires_at: 
-                page.session.set("auth_id_token_expires_at", id_token_expires_at)
-            if user_email: # Email e display name são opcionais no client_storage
-                 page.session.set("auth_user_email", user_email)
-            if display_name:
-                 page.session.set("auth_display_name", display_name)
-            
-            LoggerSetup.set_cloud_user_context(id_token, user_id)
+    logger.debug("Estado de autenticação encontrado. Tentando restaurar e validar sessão...")
 
-            # TENTA ADICIONAR CLOUD LOGGING AQUI
-            try:
-                if not LoggerSetup._active_cloud_handler_instance:
-                    LoggerSetup.add_cloud_logging(
-                        user_token_for_client=id_token,
-                        user_id_for_client=user_id
-                    )
-                    logger.debug("Cloud logging (cliente) configurado após restaurar sessão.")
-            except Exception as e_rcl:
-                logger.error(f"Falha ao configurar cloud logging (cliente) após restaurar sessão: {e_rcl}")
+    # Passo 1: Carrega todos os dados do storage para a sessão.
+    # A função check_and_refresh_token_if_needed irá operar sobre estes dados.
+    page.session.set("auth_id_token", page.client_storage.get("auth_id_token"))
+    page.session.set("auth_user_id", page.client_storage.get("auth_user_id"))
+    page.session.set("is_admin", page.client_storage.get("is_admin"))
+    page.session.set("auth_refresh_token", page.client_storage.get("auth_refresh_token"))
+    page.session.set("auth_id_token_expires_at", page.client_storage.get("auth_id_token_expires_at"))
+    page.session.set("auth_user_email", page.client_storage.get("auth_user_email"))
+    page.session.set("auth_display_name", page.client_storage.get("auth_display_name"))
 
-            logger.debug(f"Contexto do logger de nuvem restaurado para usuário {user_id} do client_storage.")
-            # Verificar e tentar refresh se o token estiver perto de expirar ao carregar
-            check_and_refresh_token_if_needed(page) # Chamada para nova função (ver abaixo)
-        else:
-            logger.warning("Dados de autenticação no client_storage estavam incompletos. Não restaurados para a sessão.")
-            # Opcional: Limpar chaves incompletas do client_storage aqui
-            page.client_storage.remove("auth_id_token") # etc.
+    # Passo 2: Chama o orquestrador de validação e renovação.
+    if check_and_refresh_token_if_needed(page):
+        # Se retornou True, a sessão é válida (seja a original ou a renovada).
+        final_id_token = page.session.get("auth_id_token")
+        final_user_id = page.session.get("auth_user_id")
+        
+        logger.info(f"Sessão restaurada e validada com sucesso para o usuário {final_user_id}.")
+
+        # Passo 3: Configurações pós-restauração
+        LoggerSetup.set_cloud_user_context(final_id_token, final_user_id)
+        logger.debug(f"Contexto do logger de nuvem restaurado para usuário {final_user_id}.")
+
+        try:
+            if not LoggerSetup._active_cloud_handler_instance:
+                LoggerSetup.add_cloud_logging(
+                    user_token_for_client=final_id_token,
+                    user_id_for_client=final_user_id
+                )
+                logger.debug("Cloud logging (cliente) configurado após restaurar sessão.")
+        except Exception as e_rcl:
+            logger.error(f"Falha ao configurar cloud logging (cliente) após restaurar sessão: {e_rcl}")
     else:
-        logger.debug("Nenhum estado de autenticação persistente encontrado no client_storage.")
-
-
+        # Se retornou False, a sessão era inválida e a função já cuidou de deslogar o usuário.
+        logger.warning("Falha ao restaurar a sessão a partir do client_storage. O usuário foi deslogado.")
+        
 def main(page: ft.Page, dev_mode: bool = DEV_MODE):
     """
     Função principal que configura e inicia a aplicação Flet.
@@ -489,7 +504,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             if _token_refresh_thread_instance.is_alive():
                 logger.warning("Thread de renovação de token não finalizou a tempo.")
         
-        from src.flet_ui.views.nc_analyze_view import clear_user_cache
+        from src.utils import clear_user_cache
         clear_user_cache(page)
 
     page.on_disconnect = on_disconnect

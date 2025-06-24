@@ -1,6 +1,9 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando cloud_logger_handler.py")
+logger.debug(f"{start_time:.4f}s - Iniciando cloud_logger_handler.py")
 
 import atexit, os, re
 from threading import Thread, Lock, Event
@@ -15,9 +18,6 @@ CLOUD_LOGGER_MAX_RETRIES, CLOUD_LOGGER_RETRY_DELAY, APP_VERSION)
 from src.services.firebase_client import FirebaseClientStorage
 from src.services.firebase_manager import FbManagerStorage
 from abc import ABC, abstractmethod
-
-import logging
-logger = logging.getLogger(__name__)
 
 class LogUploaderStrategy(ABC):
     @abstractmethod
@@ -45,7 +45,7 @@ class ClientLogUploader(LogUploaderStrategy):
     def set_user_context(self, token: Optional[str], user_id: Optional[str]):
         self._current_user_token = token
         self._current_user_id = user_id
-        logger.info(f"ClientLogUploader: Contexto do usuário atualizado - ID: {'presente' if user_id else 'ausente'}")
+        logger.debug(f"ClientLogUploader: Contexto do usuário atualizado - ID: {'presente' if user_id else 'ausente'}")
 
     def get_existing_logs(self, base_log_folder: Path, log_filename: str) -> str:
         if not self.client_storage or not self._current_user_token or not self._current_user_id:
@@ -141,7 +141,7 @@ class CloudLogHandler(logging.Handler):
             if not CloudLogHandler._atexit_registered:
                 atexit.register(CloudLogHandler._force_upload_on_exit_static, self) # Passa a instância
                 CloudLogHandler._atexit_registered = True
-                logger.info("CloudLogHandler: Método de cleanup global registrado no atexit.")
+                logger.debug("CloudLogHandler: Método de cleanup global registrado no atexit.")
              
     def emit(self, record: logging.LogRecord):
         """Adiciona um registro formatado ao buffer e sinaliza para upload se cheio."""
@@ -175,7 +175,7 @@ class CloudLogHandler(logging.Handler):
         while not CloudLogHandler.stop_thread_flag:
             signaled = CloudLogHandler.upload_event.wait(CLOUD_LOGGER_UPLOAD_INTERVAL)
             if CloudLogHandler.stop_thread_flag:
-                logger.info("CloudLogHandler: Sinal de parada recebido na thread (estática).")
+                logger.debug("CloudLogHandler: Sinal de parada recebido na thread (estática).")
                 break
 
             current_logs_batch = []
@@ -239,13 +239,23 @@ class CloudLogHandler(logging.Handler):
         success = False
         initial_upload_attempt_failed_gracefully = False
 
-        # Verifica se o uploader é o ClientLogUploader e se ele tem contexto
-        can_attempt_client_upload = isinstance(self.uploader, ClientLogUploader) and \
-                                    self.uploader._current_user_token and \
-                                    self.uploader._current_user_id
+        # Verifica se podemos tentar o upload, especialmente para o ClientUploader
+        can_attempt_upload = False
+        if isinstance(self.uploader, ClientLogUploader):
+            if self.uploader._current_user_token and self.uploader._current_user_id:
+                can_attempt_upload = True
+            else:
+                logger.debug("CloudLogHandler: Upload via cliente adiado, aguardando contexto do usuário.")
+        elif isinstance(self.uploader, AdminLogUploader):
+            can_attempt_upload = True # Admin sempre pode tentar
 
-        if isinstance(self.uploader, ClientLogUploader) and not can_attempt_client_upload:
-            logger.info(f"CloudLogHandler: ClientUploader selecionado, mas sem contexto de usuário. Upload adiado.")
+        if not can_attempt_upload:
+            # Se não podemos tentar, os logs ficam no buffer para a próxima vez.
+            # Retornamos False para que o buffer não seja limpo, mas não fazemos backup.
+            return False 
+    
+        if isinstance(self.uploader, ClientLogUploader) and not can_attempt_upload:
+            logger.debug(f"CloudLogHandler: ClientUploader selecionado, mas sem contexto de usuário. Upload adiado.")
             initial_upload_attempt_failed_gracefully = True # Indica que não devemos fazer retries ou backup agressivo
             # Não retorna True aqui, pois pode haver um fallback para AdminUploader
             # Se não houver fallback, os logs ficarão no buffer.
@@ -255,7 +265,7 @@ class CloudLogHandler(logging.Handler):
                 try:
                     upload_successful_this_attempt = False
                     if isinstance(self.uploader, ClientLogUploader):
-                        if can_attempt_client_upload:
+                        if can_attempt_upload:
                             upload_successful_this_attempt = self.uploader.upload_logs(logs_batch, full_cloud_path)
                         # else: não tenta, já tratado por initial_upload_attempt_failed_gracefully
                     elif isinstance(self.uploader, AdminLogUploader): # Se for AdminUploader, sempre tenta
@@ -281,7 +291,7 @@ class CloudLogHandler(logging.Handler):
             logger.error(f"CloudLogHandler: Falha final no upload para CloudStorage via {self.uploader.__class__.__name__}.")
             self._backup_logs_local(logs_batch, full_cloud_path)
         elif initial_upload_attempt_failed_gracefully and not success:
-            logger.info("CloudLogHandler: Upload via cliente adiado, logs permanecem no buffer.")
+            logger.debug("CloudLogHandler: Upload via cliente adiado, logs permanecem no buffer.")
             pass
         return success  
 
@@ -295,14 +305,14 @@ class CloudLogHandler(logging.Handler):
                 f.write(f"# Path/Info no Cloud: {cloud_path_info}\n")
                 f.write(f"# Data/Hora da falha: {datetime.now()}\n\n")
                 f.write("\n".join(logs_batch) + "\n")
-            logger.info(f"Logs não enviados salvos localmente em: {backup_file}")
+            logger.debug(f"Logs não enviados salvos localmente em: {backup_file}")
         except Exception as be:
             logger.error(f"Erro crítico ao salvar backup local de logs da nuvem: {be}", exc_info=True)
 
     @staticmethod
     def _force_upload_on_exit_static(handler_instance: 'CloudLogHandler'):
         """Método de instância chamado por atexit para upload final e cleanup."""
-        logger.info("CloudLogHandler: Executando upload final (estático, com instância) antes de encerrar...")
+        logger.debug("CloudLogHandler: Executando upload final (estático, com instância) antes de encerrar...")
         CloudLogHandler.stop_thread_flag = True
         CloudLogHandler.upload_event.set()
 
@@ -311,7 +321,7 @@ class CloudLogHandler(logging.Handler):
             if CloudLogHandler.log_buffer:
                 final_logs = CloudLogHandler.log_buffer[:]
                 CloudLogHandler.log_buffer.clear()
-                logger.info(f"CloudLogHandler: {len(final_logs)} logs do buffer para upload final.")
+                logger.debug(f"CloudLogHandler: {len(final_logs)} logs do buffer para upload final.")
         
         if final_logs:
             try:
@@ -328,7 +338,7 @@ class CloudLogHandler(logging.Handler):
                 logger.warning("CloudLogHandler: WARNING - Timeout ao aguardar thread (estática).")
             else:
                 logger.debug("CloudLogHandler: Thread de upload (estática) encerrada.")
-        logger.info("CloudLogHandler: Processo de encerramento do logger da nuvem (estático) concluído.")
+        logger.debug("CloudLogHandler: Processo de encerramento do logger da nuvem (estático) concluído.")
 
     def flush(self):
         """Força o envio imediato do buffer de logs atual."""
@@ -343,4 +353,4 @@ class CloudLogHandler(logging.Handler):
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado CLOUD_LOGGER em {execution_time:.4f}s")
+logger.debug(f"Carregado CLOUD_LOGGER em {execution_time:.4f}s")

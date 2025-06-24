@@ -5,7 +5,7 @@ from src.flet_ui import theme # Para COLOR_WARNING
 
 from src.flet_ui.theme import COLOR_WARNING
 
-from src.flet_ui.views.nc_analyze_view import KEY_SESSION_CURRENT_BATCH_NAME
+from src.settings import KEY_SESSION_CURRENT_BATCH_NAME
 
 import logging
 logger = logging.getLogger(__name__)

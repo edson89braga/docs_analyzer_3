@@ -2001,7 +2001,7 @@ def wrapper_panel_1(int_content):
     """
     if not isinstance(int_content, ft.ExpansionPanel):
         # Opcional: logar um aviso ou erro se o conteúdo não for o esperado
-        _logger.warning("wrapper_panel_1 recebeu um conteúdo que não é ft.ExpansionPanel.")
+        logger.warning("wrapper_panel_1 recebeu um conteúdo que não é ft.ExpansionPanel.")
 
     return ft.ExpansionPanelList(
         controls=[int_content],
@@ -2015,7 +2015,6 @@ def wrapper_panel_1(int_content):
 KEY_SESSION_PDF_ANALYZER_DATA, KEY_SESSION_PDF_CLASSIFIED_INDICES = [None] * 2
 KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, KEY_SESSION_PDF_LAST_LLM_RESPONSE= [None] * 2
 KEY_SESSION_CURRENT_PDF_FILES_ORDERED, KEY_SESSION_CURRENT_PDF_NAME = [None] * 2
-_logger = None
 
 class FileListManager:
     """Encapsula a lógica de exibição e manipulação da lista de arquivos."""
@@ -2046,7 +2045,7 @@ class FileListManager:
         for k in keys_to_clear:
             if self.page.session.contains_key(k):
                 self.page.session.remove(k)
-        _logger.debug("Caches de resultados de análise (combinada) limpos.")
+        logger.debug("Caches de resultados de análise (combinada) limpos.")
         
         
         self.status_text_analysis.value = ""
@@ -2135,7 +2134,7 @@ class FileListManager:
                     # on_move=None, # Removido ou pode ser usado para outros feedbacks visuais durante o arraste sobre o alvo
                 )
                  
-                _logger.debug(f"Criado file_name_text com value: '{file_name_text.value}' para idx {idx}")
+                logger.debug(f"Criado file_name_text com value: '{file_name_text.value}' para idx {idx}")
                 self.selected_files_list_view.controls.append(drop_target_item)
 
             if len(_files) == 1: 
@@ -2178,9 +2177,9 @@ class FileListManager:
                 try: 
                     src_idx = int(dragged_ctrl.data)
                 except ValueError: 
-                    _logger.error(f"ON_ACCEPT: Erro ao converter src_idx '{dragged_ctrl.data}'")
+                    logger.error(f"ON_ACCEPT: Erro ao converter src_idx '{dragged_ctrl.data}'")
             else: 
-                _logger.error(f"ON_ACCEPT: Dados do Draggable não encontrados (src_id: {e.src_id}).")
+                logger.error(f"ON_ACCEPT: Dados do Draggable não encontrados (src_id: {e.src_id}).")
 
             if src_idx is None: 
                 return # Simplesmente retorna se não puder processar
@@ -2195,10 +2194,10 @@ class FileListManager:
                 self.update_selected_files_display(current_files) # Re-renderiza com a nova ordem
                 self.clear_cached_analysis_results()
             elif src_idx == dest_idx:
-                _logger.debug("Item solto sobre si mesmo.")
+                logger.debug("Item solto sobre si mesmo.")
                 self.update_selected_files_display(current_files)
             else:
-                _logger.warning(f"Índices inválidos on_accept: src={src_idx}, dest={dest_idx}, len={len(current_files)}")
+                logger.warning(f"Índices inválidos on_accept: src={src_idx}, dest={dest_idx}, len={len(current_files)}")
                 self.update_selected_files_display(current_files)
 
             # A atualização da UI mais ampla (page.update) deveria ser feita fora deste handler específico

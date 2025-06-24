@@ -663,7 +663,7 @@ def analyze_text_with_llm(
         logger.error(f"Erro da API {provider}: {api_err}. Pode ser um problema temporário ou de input.", exc_info=True)
         # Pode ser útil retornar a mensagem de erro para a UI.
     except Exception as e:
-        logger.error(f"Erro inesperado durante a execução da cadeia LangChain ({provider}): {e}", exc_info=True)
+        logger.error(f"Erro inesperado durante a execução de Analyze_text_with_LLM ({provider}): {e}", exc_info=True)
     
     finally:
         os.environ["OPENAI_API_KEY"] = ""

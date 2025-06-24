@@ -105,19 +105,6 @@ class FirebaseClientStorage:
         self.auth_manager = FbManagerAuth()
         # Nenhuma inicialização complexa necessária aqui, pois usaremos requests.
         logger.info(f"FirebaseClientStorage inicializado. Target Bucket: {FB_STORAGE_BUCKET}")
-
-    def _verify_and_get_uid(self, user_token: str) -> Optional[str]:
-        """Verifica o token e retorna o UID se válido."""
-        if not user_token:
-            logger.error("Token de usuário não fornecido para verificação.")
-            return None
-        
-        verified_token_payload = self.auth_manager.verify_id_token(user_token)
-        if not verified_token_payload:
-            logger.error("A verificação do token falhou. Ação não autorizada.")
-            return None
-        
-        return verified_token_payload.get("user_id")
     
     @with_proxy() # Aplica proxy e tratamento SSL se configurado
     def _make_storage_request(
@@ -199,12 +186,7 @@ class FirebaseClientStorage:
 
         Returns:
             bool: True se o upload for bem-sucedido, False caso contrário.
-        """
-        verified_uid = self._verify_and_get_uid(user_token)
-        if not verified_uid or verified_uid != user_id:
-            logger.error(f"Não autorizado: O token verificado (UID: {verified_uid}) não corresponde ao UID da solicitação ({user_id}).")
-            return False
-        
+        """        
         if not all([user_token, user_id, full_storage_path]):
             logger.error("upload_text_user: Argumentos inválidos (token, user_id ou full_storage_path faltando).")
             return False
@@ -238,18 +220,13 @@ class FirebaseClientStorage:
 
         Returns:
             Optional[str]: Conteúdo do arquivo ou None se não existir ou erro.
-        """
-        verified_uid = self._verify_and_get_uid(user_token)
-        if not verified_uid or verified_uid != user_id:
-            logger.error(f"Não autorizado: O token verificado (UID: {verified_uid}) não corresponde ao UID da solicitação ({user_id}).")
-            return False
-        
+        """        
         if not all([user_token, user_id, storage_path_suffix]):
             logger.error("get_text_user: Argumentos inválidos.")
             return None
 
         full_storage_path = f"users/{user_id}/{storage_path_suffix.lstrip('/')}"
-        logger.info(f"Tentando obter texto do Storage: {full_storage_path}")
+        logger.debug(f"Tentando obter texto do Storage: {full_storage_path}")
 
         try:
             response = self._make_storage_request(
@@ -284,19 +261,6 @@ class FirebaseClientFirestore:
         """
         self.auth_manager = FbManagerAuth()
         logger.info(f"FirebaseClientFirestore inicializado. Target Project: {PROJECT_ID}")
-
-    def _verify_and_get_uid(self, user_token: str) -> Optional[str]:
-        """Verifica o token e retorna o UID se válido."""
-        if not user_token:
-            logger.error("Token de usuário não fornecido para verificação.")
-            return None
-        
-        verified_token_payload = self.auth_manager.verify_id_token(user_token)
-        if not verified_token_payload:
-            logger.error("A verificação do token falhou. Ação não autorizada.")
-            return None
-        
-        return verified_token_payload.get("user_id")
 
     @with_proxy()
     def _make_firestore_request(
@@ -370,12 +334,7 @@ class FirebaseClientFirestore:
 
         Returns:
             bool: True se sucesso, False caso contrário.
-        """
-        verified_uid = self._verify_and_get_uid(user_token)
-        if not verified_uid or verified_uid != user_id:
-            logger.error(f"Não autorizado: O token verificado (UID: {verified_uid}) não corresponde ao UID da solicitação ({user_id}).")
-            return False
-        
+        """       
         if not all([user_token, user_id, service_name, encrypted_api_key_bytes]):
             logger.error("save_user_api_key_client: Argumentos inválidos.")
             return False
@@ -399,7 +358,7 @@ class FirebaseClientFirestore:
         # O updateMask garante que apenas este campo seja atualizado (merge)
         query_params = {"updateMask.fieldPaths": [service_name]}
 
-        logger.info(f"Tentando salvar chave API (cliente) para Firestore: {document_path}/{service_name}")
+        logger.debug(f"Tentando salvar chave API (cliente) para Firestore: {document_path}/{service_name}")
         try:
             # Usamos PATCH para criar/atualizar de forma idempotente com merge.
             # Se o documento não existir, o PATCH pode criá-lo dependendo das regras
@@ -425,13 +384,13 @@ class FirebaseClientFirestore:
                 json_data=firestore_payload,
                 params=query_params
             )
-            logger.info(f"Chave API (cliente) salva com sucesso para Firestore: {document_path}/{service_name}")
+            logger.debug(f"Chave API (cliente) salva com sucesso para Firestore: {document_path}/{service_name}")
             return True
         except requests.exceptions.HTTPError as http_err:
             # Se o documento não existe (404) e tentamos PATCH, pode falhar.
             # Precisamos criar o documento primeiro se for o caso.
             if http_err.response.status_code == 404:
-                logger.info(f"Documento {document_path} não encontrado, tentando criar com a chave...")
+                logger.debug(f"Documento {document_path} não encontrado, tentando criar com a chave...")
                 try:
                     # Cria o documento com o campo inicial
                     self._make_firestore_request(
@@ -460,7 +419,7 @@ class FirebaseClientFirestore:
                         # -> Vamos usar PATCH em `user_api_keys/{user_id}` e incluir o `service_name` no `updateMask`.
                         # Isso DEVE funcionar para criar ou atualizar, contanto que as permissões estejam corretas.
                     )
-                    logger.info(f"Documento {document_path} criado com a chave API (cliente).")
+                    logger.debug(f"Documento {document_path} criado com a chave API (cliente).")
                     return True
                 except Exception as create_err:
                     logger.error(f"Falha ao criar documento {document_path} com chave API (cliente): {create_err}")
@@ -482,18 +441,13 @@ class FirebaseClientFirestore:
         Returns:
             Optional[bytes]: A chave API criptografada como bytes, ou None se não encontrada/erro.
                              A descriptografia é responsabilidade do chamador.
-        """
-        verified_uid = self._verify_and_get_uid(user_token)
-        if not verified_uid or verified_uid != user_id:
-            logger.error(f"Não autorizado: O token verificado (UID: {verified_uid}) não corresponde ao UID da solicitação ({user_id}).")
-            return None
-        
+        """        
         if not all([user_token, user_id, service_name]):
             logger.error("get_user_api_key_client: Argumentos inválidos.")
             return None
 
         document_path = f"user_api_keys/{user_id}"
-        logger.info(f"Tentando obter chave API (cliente) do Firestore: {document_path}/{service_name}")
+        logger.debug(f"Tentando obter chave API (cliente) do Firestore: {document_path}/{service_name}")
 
         try:
             response = self._make_firestore_request(
@@ -508,7 +462,7 @@ class FirebaseClientFirestore:
                 encrypted_key_fs_value = fields[service_name]
                 encrypted_key_bytes = _from_firestore_value(encrypted_key_fs_value) # Deve ser bytes
                 if isinstance(encrypted_key_bytes, bytes):
-                    logger.info(f"Chave API (cliente, criptografada) obtida do Firestore para {service_name}.")
+                    logger.debug(f"Chave API (cliente, criptografada) obtida do Firestore para {service_name}.")
                     return encrypted_key_bytes
                 else:
                     logger.error(f"Valor recuperado para {service_name} não é bytes após conversão.")
@@ -564,7 +518,7 @@ class FirebaseClientFirestore:
 
         firestore_payload = {"fields": {k: _to_firestore_value(v) for k, v in metric_data.items()}}
 
-        logger.info(f"Tentando salvar métrica (cliente) para Firestore em: {full_document_path}")
+        logger.debug(f"Tentando salvar métrica (cliente) para Firestore em: {full_document_path}")
         try:
             # Usamos PATCH no caminho completo do documento para criá-lo com o ID especificado.
             # Se o documento já existir (improvável com este ID), ele seria sobrescrito.
@@ -576,7 +530,7 @@ class FirebaseClientFirestore:
                 json_data=firestore_payload
                 # Não é necessário documentId no query params quando o ID está no path para PATCH/PUT
             )
-            logger.info(f"Métrica (cliente) salva com sucesso para Firestore: {full_document_path}")
+            logger.debug(f"Métrica (cliente) salva com sucesso para Firestore: {full_document_path}")
             return True
         except Exception as e:
             logger.error(f"Falha ao salvar métrica (cliente) para Firestore ({full_document_path}): {e}")
@@ -587,7 +541,7 @@ class FirebaseClientFirestore:
         """
         Coleta os metadados da análise e os envia para registro no Firestore.
         """
-        logger.info("Coletando e enviando métricas da análise.")
+        logger.debug("Coletando e enviando métricas da análise.")
         try:
             if not user_id or not user_token:
                 logger.error("Não foi possível registrar métricas: usuário não autenticado na sessão.")
@@ -676,7 +630,7 @@ class FirebaseClientFirestore:
         Salva os dados detalhados de feedback do usuário no Firestore como um documento separado,
         referenciando a análise LLM principal através de um timestamp.
         """
-        logger.info("Salvando dados de feedback detalhado do usuário...")
+        logger.debug("Salvando dados de feedback detalhado do usuário...")
         try:
             if not user_id or not user_token:
                 logger.error("Não foi possível salvar feedback: usuário não autenticado.")
@@ -788,7 +742,7 @@ class FbManagerAuth:
             # 2. Obter as chaves públicas do Google
             with self._public_keys_lock:
                 if not self._public_keys_cache or (self._public_keys_expiry and time.time() > self._public_keys_expiry):
-                    logger.info("Cache de chaves públicas do Firebase expirado ou vazio. Buscando novas chaves.")
+                    logger.debug("Cache de chaves públicas do Firebase expirado ou vazio. Buscando novas chaves.")
                     keys_url = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
                     response = requests.get(keys_url, timeout=10)
                     response.raise_for_status()
@@ -860,7 +814,7 @@ class FbManagerAuth:
             if auth_time and current_time - auth_time > 86400:  # 24 horas
                 logger.warning(f"Autenticação muito antiga: {current_time - auth_time} segundos")
             
-            logger.info(f"Token JWT verificado com sucesso para usuário: {decoded_token.get('user_id')}")
+            logger.debug(f"Token JWT verificado com sucesso para usuário: {decoded_token.get('user_id')}")
             return decoded_token
 
         except jwt.ExpiredSignatureError:
@@ -891,7 +845,7 @@ class FbManagerAuth:
             Optional[str]: O Firebase User ID (localId) se a autenticação for bem-sucedida,
                            None em caso de falha.
         """
-        logger.info(f"Tentando autenticar usuário: {email}")
+        logger.debug(f"Tentando autenticar usuário: {email}")
 
         if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
             logger.error("Autenticação falhou: Firebase Web API Key não configurada.")
@@ -956,7 +910,7 @@ class FbManagerAuth:
                                       (incluindo 'idToken', 'localId', 'email', 'expiresIn', etc.)
                                       ou None em caso de falha.
         """
-        logger.info(f"Tentando autenticar usuário (dados completos): {email}")
+        logger.debug(f"Tentando autenticar usuário (dados completos): {email}")
 
         if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
             logger.error("Autenticação (dados completos) falhou: Firebase Web API Key não configurada.")
@@ -1010,7 +964,7 @@ class FbManagerAuth:
             - Em falha: Dict[str, str] com 'error' e 'details'.
             - Em falha crítica de conexão/request: Dict[str, str] com 'error_type' e 'message'.
         """
-        logger.info(f"Tentando criar novo usuário: {email}")
+        logger.debug(f"Tentando criar novo usuário: {email}")
         if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
             return {"error": "CONFIG_ERROR", "details": "Firebase Web API Key não configurada."}
 
@@ -1066,7 +1020,7 @@ class FbManagerAuth:
         Returns:
             bool: True se a solicitação foi enviada com sucesso, False caso contrário.
         """
-        logger.info(f"Solicitando envio de email de verificação.")
+        logger.debug(f"Solicitando envio de email de verificação.")
         if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
             return False
 
@@ -1087,7 +1041,7 @@ class FbManagerAuth:
         try:
             response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
             response.raise_for_status()
-            logger.info(f"Solicitação de email de verificação enviada com sucesso para o usuário.")
+            logger.debug(f"Solicitação de email de verificação enviada com sucesso para o usuário.")
             return True
         except requests.exceptions.HTTPError as http_err:
             logger.error(f"Erro HTTP ao enviar email de verificação: {http_err.response.status_code} - {http_err.response.text}")
@@ -1101,7 +1055,7 @@ class FbManagerAuth:
         """
         Envia um email de redefinição de senha para o usuário.
         """
-        logger.info(f"Solicitando redefinição de senha para: {email}")
+        logger.debug(f"Solicitando redefinição de senha para: {email}")
         if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI": return False
 
         rest_api_url = f"{self.identity_toolkit_base_url}:sendOobCode?key={self.firebase_web_api_key}"
@@ -1111,7 +1065,7 @@ class FbManagerAuth:
         try:
             response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
             response.raise_for_status()
-            logger.info(f"Email de redefinição de senha enviado para {email}.")
+            logger.debug(f"Email de redefinição de senha enviado para {email}.")
             return True
         except requests.exceptions.HTTPError as http_err:
             logger.error(f"Erro HTTP ao enviar email de redefinição para {email}: {http_err.response.status_code} - {http_err.response.text}")
@@ -1136,7 +1090,7 @@ class FbManagerAuth:
                                       'expires_in' (nova duração em segundos),
                                       'user_id' (o localId do usuário).
         """
-        logger.info("Tentando atualizar ID Token usando Refresh Token.")
+        logger.debug("Tentando atualizar ID Token usando Refresh Token.")
         if not self.firebase_web_api_key or self.firebase_web_api_key == "SUA_FIREBASE_WEB_API_KEY_AQUI":
             logger.error("Refresh de token falhou: Firebase Web API Key não configurada.")
             return None
@@ -1160,7 +1114,7 @@ class FbManagerAuth:
             # Firebase pode retornar 'id_token' ou 'access_token'. O SDK geralmente usa 'id_token'.
             # A API de refresh token retorna 'id_token' para o novo ID token e 'user_id' para localId.
             if response_data.get("id_token") and response_data.get("user_id"):
-                logger.info(f"ID Token atualizado com sucesso para user ID: {response_data.get('user_id')}")
+                logger.debug(f"ID Token atualizado com sucesso para user ID: {response_data.get('user_id')}")
                 # Adicionar o timestamp de expiração calculado
                 expires_in_seconds = int(response_data.get("expires_in", 3600)) # Default 1 hora
                 response_data["id_token_expires_at"] = time.time() + expires_in_seconds - 60 # -60s de buffer
@@ -1225,7 +1179,7 @@ class FbManagerAuth:
                         if api_error_message == "CREDENTIAL_TOO_OLD_LOGIN_AGAIN":
                             logger.warning(f"Ação sensível falhou com CREDENTIAL_TOO_OLD (tentativa {attempt + 1}).")
                             if attempt < max_attempts - 1: # Se ainda há tentativas (só tentamos refresh uma vez)
-                                logger.info("Tentando refresh forçado do token...")
+                                logger.debug("Tentando refresh forçado do token...")
                                 # Presume que check_and_refresh_token_if_needed está acessível
                                 # Idealmente, passá-lo ou tê-lo em um local comum.
                                 
@@ -1236,7 +1190,7 @@ class FbManagerAuth:
                                     if not current_id_token: # Se refresh falhou e deslogou
                                         logger.error("Refresh do token falhou e usuário foi deslogado.")
                                         return {"error": "REFRESH_FAILED_LOGOUT"}
-                                    logger.info("Token atualizado. Repetindo ação sensível.")
+                                    logger.debug("Token atualizado. Repetindo ação sensível.")
                                     continue # Próxima iteração do loop para tentar novamente
                                 else: # check_and_refresh_token_if_needed retornou False (provavelmente deslogou)
                                     logger.error("Refresh do token falhou (check_and_refresh_token_if_needed retornou False).")
@@ -1279,14 +1233,14 @@ class FbManagerAuth:
         headers = {"Content-Type": "application/json"}
         response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
         response.raise_for_status() # Deixa _execute_sensitive_action tratar HTTPError
-        logger.info("API Call: Senha alterada com sucesso (raw).")
+        logger.debug("API Call: Senha alterada com sucesso (raw).")
         return response.json() # Retorna o JSON da resposta (geralmente dados do usuário atualizados ou vazio)
 
     def change_password(self, page: ft_Page, new_password: str) -> bool: # Agora recebe 'page'
         """
         Altera a senha do usuário autenticado, com tratamento de token antigo.
         """
-        logger.info("Interface: Solicitado alteração de senha.")
+        logger.debug("Interface: Solicitado alteração de senha.")
         # _execute_sensitive_action espera que a action_callable receba id_token como primeiro arg
         # e os demais args depois. _raw_change_password já está assim.
         result = self._execute_sensitive_action(page, self._raw_change_password, new_password)
@@ -1322,21 +1276,21 @@ class FbManagerAuth:
         if delete_attributes: payload_dict["deleteAttribute"] = delete_attributes
 
         if len(payload_dict) <= 2 and not delete_attributes: # Só idToken e returnSecureToken
-             logger.info("API Call: Nenhuma alteração de perfil para enviar (raw).")
-             return {"message": "No profile changes to apply."} # Simula uma resposta de sucesso vazia
+            logger.debug("API Call: Nenhuma alteração de perfil para enviar (raw).")
+            return {"message": "No profile changes to apply."} # Simula uma resposta de sucesso vazia
 
         payload = json.dumps(payload_dict)
         headers = {"Content-Type": "application/json"}
         response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
         response.raise_for_status()
-        logger.info("API Call: Perfil atualizado com sucesso (raw).")
+        logger.debug("API Call: Perfil atualizado com sucesso (raw).")
         return response.json()
 
     def update_profile(self, page: ft_Page, display_name: Optional[str] = None,
                        photo_url: Optional[str] = None, delete_attributes: Optional[List[str]] = None) -> bool:
-        logger.info("Interface: Solicitado atualização de perfil.")
+        logger.debug("Interface: Solicitado atualização de perfil.")
         if display_name is None and photo_url is None and not delete_attributes:
-            logger.info("Nenhuma alteração de perfil solicitada na interface.")
+            logger.debug("Nenhuma alteração de perfil solicitada na interface.")
             return True # Considera sucesso
 
         result = self._execute_sensitive_action(page, self._raw_update_profile, display_name, photo_url, delete_attributes)
@@ -1367,7 +1321,7 @@ class FbManagerAuth:
         headers = {"Content-Type": "application/json"}
         response = requests.post(rest_api_url, headers=headers, data=payload, timeout=15)
         response.raise_for_status()
-        logger.info("API Call: Conta do usuário excluída com sucesso (raw).")
+        logger.debug("API Call: Conta do usuário excluída com sucesso (raw).")
         return response.json() # Geralmente um JSON vazio {}
 
     def delete_user_account(self, page: ft_Page) -> bool: # Agora recebe 'page'

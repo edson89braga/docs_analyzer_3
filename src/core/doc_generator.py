@@ -64,7 +64,7 @@ class DocxExporter:
         Returns:
             bool: True se a exportação for bem-sucedida, False caso contrário.
         """
-        logger.info(f"Iniciando exportação simples para DOCX em: {output_path}")
+        logger.debug(f"Iniciando exportação simples para DOCX em: {output_path}")
         try:
             document = Document()
             document.add_heading('Relatório de Análise do Documento', level=1)
@@ -150,7 +150,7 @@ class DocxExporter:
                 friendly_name = filename[:-len(".docx")].replace("_", " ").title()
                 templates.append((friendly_name, full_path))
         
-        logger.info(f"Encontrados {len(templates)} templates em '{self.templates_dir}'.")
+        logger.debug(f"Encontrados {len(templates)} templates em '{self.templates_dir}'.")
         return templates
 
     def export_from_template_docx(self, data: formatted_initial_analysis, template_path: str, output_path: str) -> Tuple[bool, List[str]]:
@@ -165,7 +165,7 @@ class DocxExporter:
         Returns:
             Tuple[bool, List[str]]: (True se sucesso False caso contrário, Lista de chaves não encontradas no template mas com valor nos dados)
         """
-        logger.info(f"Iniciando exportação baseada no template '{template_path}' para '{output_path}'")
+        logger.debug(f"Iniciando exportação baseada no template '{template_path}' para '{output_path}'")
         missing_keys_with_values: List[str] = []
         try:
             if not os.path.exists(template_path):
