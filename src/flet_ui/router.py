@@ -84,9 +84,11 @@ def is_user_authenticated(page: ft.Page) -> bool:
         bool: True se o usuário estiver autenticado, False caso contrário.
     """
     token = page.session.get("auth_id_token") or (page.client_storage.get("auth_id_token") if page.client_storage else None)
+    logger.debug(f"is_user_authenticated: {bool(token)}")
     return bool(token)
 
 def app_router(page: ft.Page, route: str):
+    # Função NÃO utilizada nesta aplicação.
     """
     Gerencia a navegação e a exibição das views corretas no aplicativo Flet.
 
@@ -369,9 +371,10 @@ def route_change_content_only(
                 page.update()
         else:
             # Fallback se o lock não for encontrado (menos seguro, mas evita deadlock)
-            logger.warning("Lock de atualização da UI não encontrado. Atualizando UI sem proteção de lock.")
+            logger.warning("Lock de atualização da GUI não encontrado. Atualizando GUI sem proteção de lock.")
             update_callable()
             page.update()
+        logger.debug("Procedido: _execute_ui_update")
 
     # --- 2. Atualização Imediata da Estrutura da UI ---
     def _setup_layout_and_placeholder():
@@ -403,6 +406,7 @@ def route_change_content_only(
                     expand=True
                 )
             )
+        logger.debug("Procedido: _setup_layout_and_placeholder")
 
     _execute_ui_update(_setup_layout_and_placeholder)
 
@@ -436,6 +440,7 @@ def route_change_content_only(
             else:
                 raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
             
+            logger.debug("Procedido: _load_and_set_view")
             #creator_func = _content_creators.get(target_route)
             #if creator_func:
             #    final_content = creator_func(page_ref)
@@ -461,16 +466,17 @@ def route_change_content_only(
 
         def _update_ui_with_new_content():
             """
-            Função que será executada na thread da UI para substituir o placeholder.
+            Função que será executada na thread da GUI para substituir o placeholder.
             Esta função é agora protegida pelo lock em _execute_ui_update.
             """
-            logger.debug(f"Thread: Conteúdo para '{target_route}' carregado. Atualizando UI.")
+            logger.debug(f"Thread: Conteúdo para '{target_route}' carregado. Atualizando GUI.")
             if target_route in ROUTES_WITHOUT_NAV_RAIL:
                 page_ref.controls.clear()
                 page_ref.add(final_content)
             else:
                 content_container_for_main_layout.content = final_content
                 content_container_for_main_layout.padding = PADDING_L
+            logger.debug("Procedido: _update_ui_with_new_content")
         
         # Agenda a atualização da UI na thread principal
         page_ref.run_thread(lambda: _execute_ui_update(_update_ui_with_new_content))

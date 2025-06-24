@@ -52,11 +52,11 @@ def calc_costs_embedding_process(tokens_count, embedding_model_id, loaded_embedd
     #model_embeddings_list_session = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
     
     if not tokens_count or not embedding_model_id:
-        logger.info("Dados de tokens e/ou ID do modelo não fornecidos para cálculo de custo de embedding.")
+        logger.debug("Dados de tokens e/ou ID do modelo não fornecidos para cálculo de custo de embedding.")
         return None
     
     if not loaded_embeddings_providers:
-        logger.info("Custos de modelos de embedding não fornecidos.")
+        logger.debug("Custos de modelos de embedding não fornecidos.")
         return None
 
     if not isinstance(tokens_count, int) or tokens_count < 0:
@@ -155,7 +155,7 @@ def calc_costs_llm_analysis(input_tokens, cached_tokens, output_tokens, provider
                 cost_cache = (cached_tokens / 1_000_000) * model_config.get("cache_coust_million", 0.0)
                 cost_output = (output_tokens / 1_000_000) * model_config.get("output_coust_million", 0.0)
                 calculated_cost_usd = cost_input + cost_cache + cost_output
-                logger.debug(f"Custo calculado: Input=${cost_input:.6f}, Cache=${cost_cache:.6f}, Output=${cost_output:.6f} -> Total=${calculated_cost_usd:.6f}")
+                logger.info(f"Custo calculado: Input=${cost_input:.6f}, Cache=${cost_cache:.6f}, Output=${cost_output:.6f} -> Total=${calculated_cost_usd:.6f}")
             else:
                 logger.warning(f"Configuração do modelo '{model_used_raw}' não encontrada para o provedor '{provider_used_raw}' para cálculo de custo.")
         else:
@@ -237,6 +237,7 @@ def criar_batches(
     if batch_atual_textos:
         batches_com_info_original.append((batch_atual_textos, batch_atual_indices_originais))
 
+    logger.debug("Procedido: criar_batches")
     return batches_com_info_original
 
 client_openai = None
@@ -268,7 +269,7 @@ def get_embeddings_from_api(
     global client_openai
 
     if not pages_texts:
-        logger.info("get_embeddings_from_api: Recebeu uma lista de textos vazia. Retornando resultados vazios.")
+        logger.debug("get_embeddings_from_api: Recebeu uma lista de textos vazia. Retornando resultados vazios.")
         return [], 0, 0
 
     if not isinstance(pages_texts, list) or not isinstance(pages_texts[0], str):
@@ -325,7 +326,7 @@ def get_embeddings_from_api(
 
         # Reinstanciar o cliente se a chave mudou ou se não existe
         if client_openai is None or (api_key and client_openai.api_key != api_key) :
-             logger.info("Instanciando ou reinstanciando o cliente OpenAI com a chave fornecida/ambiente.")
+             logger.debug("Instanciando ou reinstanciando o cliente OpenAI com a chave fornecida/ambiente.")
              client_openai = OpenAI(api_key=key_to_use) # Usa a chave efetiva
         
         for batch_de_textos, batch_de_indices_originais in batches_para_api:
@@ -407,7 +408,7 @@ def _get_prompt_to_cache(prompts, key_prompt: str, placeholder_str: str, input_p
     prompt_inicial_para_cache = [{key: value.replace(placeholder_str, input_processed_text) for key, value in msg_dict.items()} for msg_dict in prompt_inicial_para_cache]
     main_tokens_count = contar_tokens(prompt_inicial_para_cache, MODEL_FOR_COUNT_TOKENS)
     if main_tokens_count:
-        logger.debug(f"Total_tokens contabilizado na parte principal: {main_tokens_count}")
+        logger.info(f"Total_tokens contabilizado na parte principal: {main_tokens_count}")
     else:
         logger.warning("Placeholder [input_text] não encontrado ou não contabilizado na apuração do cache mínimo previsto!")
     return prompt_inicial_para_cache, main_tokens_count
@@ -427,6 +428,7 @@ def _get_final_response(dados_segmentados: List[Any], output_format: Any) -> Any
     final_response = dados_segmentados[-1].output_text
     if not isinstance(final_response, output_format):
         final_response = try_convert_to_pydantic_format(final_response, output_format)
+    logger.debug("Procedido: _get_final_response -> try_convert_to_pydantic_format")
     return final_response
                 
 def _get_token_usage_info(dados_segmentados: List[Any], waited_cached_tokens: int = 0) -> Dict[str, Any]:
@@ -475,7 +477,8 @@ def _get_token_usage_info(dados_segmentados: List[Any], waited_cached_tokens: in
         else:
             aproveitamento = round(token_usage_info["cached_tokens"]/token_usage_info["input_tokens"] , 2)
             logger.info(f"Proporção de aproveitamento de cache: {aproveitamento}")
-
+    
+    logger.debug("Procedido: _get_token_usage_info")
     return token_usage_info
 
 # --- Função Principal de Análise ---
@@ -526,7 +529,6 @@ def analyze_text_with_llm(
             if not client_openai:
                 client_openai = OpenAI()
             if prompt_name == "PROMPT_UNICO_for_INITIAL_ANALYSIS":
-                logger.info(f"Prompt_name recebido: {prompt_name}")
                 prompt_list_dicts = prompts[prompt_name]
                 modified_prompt_list = []
                 for msg_dict in prompt_list_dicts:
@@ -553,8 +555,6 @@ def analyze_text_with_llm(
                 token_usage_info["total_cost_usd"] = calc_costs_llm_analysis(token_usage_info["input_tokens"], token_usage_info["cached_tokens"], token_usage_info["output_tokens"], 
                                                                              provider, model_name, loaded_llm_providers)
             elif prompt_name == "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS":
-                logger.info(f"Prompt_name recebido: {prompt_name}")
-
                 prompt_inicial_para_cache, main_tokens_count = _get_prompt_to_cache(prompts, "prompt_inicial_para_cache", "{input_text}", processed_text)
 
                 dados_segmentados = []
@@ -581,7 +581,7 @@ def analyze_text_with_llm(
                 dados_segmentados.append(response)
                 
                 #logger.debug(f"Final response for segment: {response.output_text}")
-                logger.debug(f"Token usage info for segment: {response.usage}\n\n")
+                logger.debug(f"Token usage info for Last segment: {response.usage}\n\n")
                 
                 final_response = _get_final_response(dados_segmentados, formatted_initial_analysis)
                 
@@ -603,7 +603,7 @@ def analyze_text_with_llm(
                 logger.error(f"Erro ao criar ChatPromptTemplate a partir das mensagens do prompt '{prompt_name}': {e}", exc_info=True)
                 return None, None
 
-            logger.info(f"Configurando LangChain com OpenAI. Modelo: {model_name}, Temp: {temperature}")
+            logger.debug(f"Configurando LangChain com OpenAI. Modelo: {model_name}, Temp: {temperature}")
 
             llm = ChatOpenAI(
                 model_name=model_name,
@@ -629,7 +629,7 @@ def analyze_text_with_llm(
                     "successful_requests": cb.successful_requests,
                     "total_cost_usd": cb.total_cost
                 }
-                logger.info(f"Uso de tokens (OpenAI): {token_usage_info}")
+                #logger.info(f"Uso de tokens (OpenAI): {token_usage_info}")
             
             # Processar o resultado da cadeia
             if final_response is not None:
@@ -668,7 +668,7 @@ def analyze_text_with_llm(
     finally:
         os.environ["OPENAI_API_KEY"] = ""
 
-    #print('\n\n', f'final_response: {type(final_response)}\n', final_response, '\n\n')
+    #pr-int('\n\n', f'final_response: {type(final_response)}\n', final_response, '\n\n')
 
     # Normalizações e revisões devem ser feitas aqui
     final_response = normalizing_function(final_response)
@@ -682,4 +682,4 @@ def analyze_text_with_llm(
 
 
 execution_time = perf_counter() - start_time
-logger.debug(f"Carregado AI_ORCHESTRATOR em {execution_time:.4f}s")
+logger.info(f"[DEBUG] Carregado AI_ORCHESTRATOR em {execution_time:.4f}s")

@@ -3,9 +3,11 @@
 import logging
 logger = logging.getLogger(__name__)
 
+DEV_MODE = False
+
 from time import perf_counter
 start_time = perf_counter()
-logger.debug(f"{start_time:.4f}s - Iniciando app.py")
+logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando app.py")
 
 import flet as ft
 import time, os, threading
@@ -28,7 +30,6 @@ from . import theme
 error_color = theme.COLOR_ERROR if hasattr(theme, 'COLOR_ERROR') else ft.colors.RED
 
 from src.services.firebase_client import FbManagerAuth, FirebaseClientFirestore, _from_firestore_value
-
 from src.logger.logger import LoggerSetup
 
 def load_default_analysis_settings(page: ft.Page):
@@ -147,7 +148,7 @@ def load_default_analysis_settings(page: ft.Page):
                             elif isinstance(fallback_value, float): analysis_defaults[key] = float(cloud_value)
                             else: analysis_defaults[key] = cloud_value # Assume string ou bool
                         except (ValueError, TypeError):
-                            logger.warning(f"Valor inválido para '{key}' em defaults da nuvem, usando fallback local.")
+                            logger.warning(f"Valor inválido para '{key}' em defaults_settings da nuvem, usando fallback local.")
                             analysis_defaults[key] = fallback_value # Mantém o do fallback local
                     # Se cloud_value for None, o valor do FALLBACK_ANALYSIS_SETTINGS já está em analysis_defaults
                 logger.info("Configurações padrão de análise (defaults) carregadas do Firestore.")
@@ -195,7 +196,7 @@ def load_default_analysis_settings(page: ft.Page):
     # else: Se não há pref_provider, mantém as configurações de llm_provider e llm_model dos defaults globais.
 
     page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, final_analysis_settings)
-    logger.info(f"Configurações finais de análise (KEY_SESSION_ANALYSIS_SETTINGS) definidas na sessão: {final_analysis_settings}")
+    logger.debug(f"Configurações finais de análise (KEY_SESSION_ANALYSIS_SETTINGS) definidas na sessão: {final_analysis_settings}")
    
 def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False) -> bool:
     """
@@ -224,7 +225,7 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
     if expires_at:
         if time.time() >= float(expires_at) - (5 * 60): # 5 minutos de buffer adicional
             needs_refresh = True
-            logger.info(f"ID Token próximo da expiração (ou expirado: {time.time()} >= {float(expires_at) - (5*60)}). Tentando refresh.")
+            logger.debug(f"ID Token próximo da expiração (ou expirado: {time.time()} >= {float(expires_at) - (5*60)}). Tentando refresh.")
     else: # Se não há timestamp de expiração, considera que precisa de refresh por segurança
         needs_refresh = True
         logger.warning("Timestamp de expiração do ID Token não encontrado. Tentando refresh por precaução.")
@@ -234,7 +235,7 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
         return True
 
     auth_manager = FbManagerAuth()
-    logger.info(f"Solicitando refresh do ID Token para user {page.session.get('auth_user_id')}.")
+    logger.debug(f"Solicitando refresh do ID Token para user {page.session.get('auth_user_id')}.")
     
     new_token_data = auth_manager.refresh_id_token(refresh_token_str)
 
@@ -284,7 +285,7 @@ def _proactive_token_refresh_loop(page_ref: ft.Page, stop_event: threading.Event
         stop_event: Evento de threading para sinalizar a parada do loop.
         interval_seconds: Intervalo em segundos entre as verificações de refresh.
     """
-    logger.info("Thread de renovação proativa de token iniciada.")
+    logger.debug("Thread de renovação proativa de token iniciada.")
     
     while not stop_event.is_set():
         try:
@@ -293,7 +294,7 @@ def _proactive_token_refresh_loop(page_ref: ft.Page, stop_event: threading.Event
                 logger.debug(f"Verificação proativa do token (intervalo: {interval_seconds}s).")
 
                 if not check_and_refresh_token_if_needed(page_ref): # Passa a referência da página
-                    logger.warning("Renovação proativa falhou ou usuário foi deslogado.")
+                    logger.warning("Renovação proativa de token falhou ou usuário foi deslogado.")
             else:
                 logger.debug("Usuário não autenticado na sessão. Pausando renovação proativa.")
         except Exception as e:
@@ -303,7 +304,7 @@ def _proactive_token_refresh_loop(page_ref: ft.Page, stop_event: threading.Event
         # Espera pelo intervalo ou até o evento de parada ser sinalizado
         stop_event.wait(interval_seconds) 
 
-    logger.info("Thread de renovação proativa de token terminando.")
+    logger.debug("Thread de renovação proativa de token terminando.")
 
 def load_auth_state_from_storage(page: ft.Page):
     """
@@ -314,7 +315,7 @@ def load_auth_state_from_storage(page: ft.Page):
         page: A instância da página Flet.
     """
     if page.client_storage and page.client_storage.contains_key("auth_id_token"):
-        logger.info("Restaurando estado de autenticação do client_storage para a sessão Flet.")
+        logger.debug("Restaurando estado de autenticação do client_storage para a sessão Flet.")
         # Pega todos os valores do client_storage e define na sessão
         id_token = page.client_storage.get("auth_id_token")
         user_id = page.client_storage.get("auth_user_id")
@@ -344,11 +345,11 @@ def load_auth_state_from_storage(page: ft.Page):
                         user_token_for_client=id_token,
                         user_id_for_client=user_id
                     )
-                    logger.info("Cloud logging (cliente) configurado após restaurar sessão.")
+                    logger.debug("Cloud logging (cliente) configurado após restaurar sessão.")
             except Exception as e_rcl:
                 logger.error(f"Falha ao configurar cloud logging (cliente) após restaurar sessão: {e_rcl}")
 
-            logger.info(f"Contexto do logger de nuvem restaurado para usuário {user_id} do client_storage.")
+            logger.debug(f"Contexto do logger de nuvem restaurado para usuário {user_id} do client_storage.")
             # Verificar e tentar refresh se o token estiver perto de expirar ao carregar
             check_and_refresh_token_if_needed(page) # Chamada para nova função (ver abaixo)
         else:
@@ -356,10 +357,10 @@ def load_auth_state_from_storage(page: ft.Page):
             # Opcional: Limpar chaves incompletas do client_storage aqui
             page.client_storage.remove("auth_id_token") # etc.
     else:
-        logger.info("Nenhum estado de autenticação persistente encontrado no client_storage.")
+        logger.debug("Nenhum estado de autenticação persistente encontrado no client_storage.")
 
 
-def main(page: ft.Page, dev_mode: bool = False):
+def main(page: ft.Page, dev_mode: bool = DEV_MODE):
     """
     Função principal que configura e inicia a aplicação Flet.
 
@@ -368,7 +369,7 @@ def main(page: ft.Page, dev_mode: bool = False):
         dev_mode: Se True, inicia a aplicação em modo de desenvolvimento com dados mockados.
     """
     app_start_time = perf_counter()
-    logger.info(f"{app_start_time:.4f}s - Função main() iniciada.")
+    logger.info(f"[DEBUG] {app_start_time:.4f}s - Função main() iniciada.")
 
     global _token_refresh_thread_stop_event, _token_refresh_thread_instance
 
@@ -379,7 +380,7 @@ def main(page: ft.Page, dev_mode: bool = False):
     if dev_mode:
         logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando em MODO DE DESENVOLVIMENTO (UI Test).")
     else:
-        logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando com layout persistente...")
+        logger.debug(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando com layout persistente...")
 
     page.title = APP_TITLE
     page.vertical_alignment = ft.MainAxisAlignment.START
@@ -476,11 +477,11 @@ def main(page: ft.Page, dev_mode: bool = False):
         """
         logger.info("Cliente desconectado ou aplicação Flet fechando...")
         LoggerSetup.set_cloud_user_context(None, None)
-        logger.info("Contexto do logger de nuvem limpo ao desconectar.")
+        logger.debug("Contexto do logger de nuvem limpo ao desconectar.")
 
         # Para a thread de renovação de token
         if _token_refresh_thread_stop_event:
-            logger.info("Sinalizando parada para a thread de renovação proativa de token...")
+            logger.debug("Sinalizando parada para a thread de renovação proativa de token...")
             _token_refresh_thread_stop_event.set()
         if _token_refresh_thread_instance and _token_refresh_thread_instance.is_alive():
             logger.debug("Aguardando thread de renovação de token finalizar...")
@@ -502,10 +503,10 @@ def main(page: ft.Page, dev_mode: bool = False):
             target_page: A instância da página Flet para a qual as configurações serão carregadas.
         """
         local_start_time = perf_counter()
-        logger.info(f"{local_start_time:.4f}s - Função threaded_load_settings iniciada.")
+        logger.debug(f"{local_start_time:.4f}s - Função threaded_load_settings iniciada.")
         load_default_analysis_settings(target_page)
-        logger.info("Thread de settings concluída. Dados carregados na sessão.")
-        logger.info(f"{perf_counter() - local_start_time:.4f}s - Analysis settings carregado.")
+        logger.debug("Thread de settings concluída. Dados carregados na sessão.")
+        logger.info(f"[DEBUG] {perf_counter() - local_start_time:.4f}s - Analysis settings carregado.")
         # Opcional: notificar a UI principal que os dados estão prontos, se necessário.
         # Ex: page.pubsub.send_all("settings_loaded")
     
@@ -521,11 +522,11 @@ def main(page: ft.Page, dev_mode: bool = False):
         Também inicia a thread de renovação proativa de token se o usuário estiver autenticado.
         """
         load_auth_state_from_storage(page)
-        logger.info(f"{perf_counter() - app_start_time:.4f}s - Auth state carregado.")
+        logger.info(f"[DEBUG] {perf_counter() - app_start_time:.4f}s - Auth state carregado em main.")
         
         # Se autenticado, carrega as configurações em uma thread
         if page.session.contains_key("auth_id_token"):
-            logger.info("Usuário autenticado. Disparando carregamento de settings em background.")
+            logger.debug("Usuário autenticado. Disparando carregamento de settings em background.")
             threading.Thread(target=threaded_load_settings, args=(page,), daemon=True).start()
             
             # Inicia thread de renovação de token (isso já é non-blocking)
@@ -542,7 +543,7 @@ def main(page: ft.Page, dev_mode: bool = False):
             # Navega para a home imediatamente após verificar a autenticação
             final_route = "/home"
         else:
-            logger.info("Usuário não autenticado na inicialização, thread de renovação proativa não iniciada.")
+            logger.debug("Usuário não autenticado na inicialização, thread de renovação proativa não iniciada.")
             # Garante que as chaves de settings estejam com fallback
             if not page.session.contains_key(KEY_SESSION_ANALYSIS_SETTINGS):
                 page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS.copy())
@@ -550,8 +551,8 @@ def main(page: ft.Page, dev_mode: bool = False):
             final_route = "/login"
 
         # Dispara a navegação inicial
-        logger.info(f"Disparando navegação inicial para: {final_route}")
-        logger.info(f"{perf_counter() - app_start_time:.4f}s - Navegação inicial page.go() será chamada.")
+        logger.debug(f"Disparando navegação inicial para: {final_route}")
+        logger.info(f"[DEBUG] {perf_counter() - app_start_time:.4f}s - Navegação inicial page.go() em main a ser chamada.")
         page.go(final_route)
 
     if dev_mode:
@@ -588,4 +589,4 @@ def main(page: ft.Page, dev_mode: bool = False):
 
 
 execution_time = perf_counter() - start_time
-logger.debug(f"Carregado APP.py em {execution_time:.4f}s")
+logger.info(f"[DEBUG] Carregado APP.py em {execution_time:.4f}s")

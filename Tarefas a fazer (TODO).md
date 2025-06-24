@@ -1,14 +1,13 @@
 ======================================================================================
 # TODO: Próximas Tarefas:
-
 > pyinstaller e testes na rede;
-
--------------------
-
+------------------
+> Set App-Admin
 > Testes de Score sobre multiplas formas de prompt: modelos, prompts, temperaturas.
+> Doc README + Fluxogramas
+> Vídeo-apresentação
 
-======================================================================================
-
+# PyTestes:
 > Tests pdf_processor.py, ai_orchestrator.py, doc_generator.py
 > Test  View: analyze_pdf1
 

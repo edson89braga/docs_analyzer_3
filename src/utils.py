@@ -3,7 +3,7 @@ logger = logging.getLogger(__name__)
 
 from time import perf_counter
 start_time = perf_counter()
-logger.debug(f"{start_time:.4f}s - Iniciando utils.py")
+logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando utils.py")
 
 import os, keyring, re
 from rich import print
@@ -712,7 +712,7 @@ def register_temp_files_cleanup(temp_dir_to_clean: str):
         logger.error("Caminho do diretório temporário não fornecido para registro da limpeza. A limpeza no atexit não será registrada.")
         return
         
-    logger.info(f"Registrando a função de limpeza de arquivos temporários para o diretório '{temp_dir_to_clean}' no atexit.")
+    logger.debug(f"Registrando a função de limpeza de arquivos temporários para o diretório '{temp_dir_to_clean}' no atexit.")
     # Usa functools.partial para passar argumentos para a função registrada com atexit
     # Ou uma lambda, mas partial é geralmente mais limpo para isso.
     from functools import partial
@@ -823,14 +823,7 @@ def check_app_version() -> None:
     from src.settings import APP_VERSION, PROJECT_ID, FIREBASE_WEB_API_KEY
     import requests
 
-    logger.info(f"Verificando versão da aplicação. Versão local: {APP_VERSION}")
-
-    # A verificação de versão não deve usar proxy, pois é um pré-requisito da aplicação.
-    # Desabilitar temporariamente as variáveis de ambiente de proxy para esta chamada.
-    http_proxy_bkp = os.environ.pop('HTTP_PROXY', None)
-    https_proxy_bkp = os.environ.pop('HTTPS_PROXY', None)
-    
-    logger.debug("Proxy temporariamente desabilitado para verificação de versão.")
+    logger.debug(f"Verificando versão da aplicação. Versão local: {APP_VERSION}")
 
     # URL base do documento no Firestore
     firestore_url_base = (
@@ -852,7 +845,7 @@ def check_app_version() -> None:
             logger.warning("Não foi possível encontrar o campo 'latest_version' no Firestore. Permitindo execução.")
             return
 
-        logger.info(f"Versão mais recente na nuvem: {latest_version}")
+        logger.debug(f"Versão mais recente na nuvem: {latest_version}")
 
         if latest_version != APP_VERSION:
             logger.critical(f"VERSÃO DESATUALIZADA! Local: {APP_VERSION}, Nuvem: {latest_version}. Encerrando aplicação.")
@@ -870,20 +863,13 @@ def check_app_version() -> None:
             )
             sys.exit(1)
 
-        logger.info("Versão da aplicação compatível.")
+        logger.debug("Versão da aplicação compatível.")
 
     except requests.exceptions.RequestException as e:
         logger.warning(f"Não foi possível verificar a versão do aplicativo online: {e}. Permitindo a execução para modo offline.")
     except Exception as e:
         logger.error(f"Erro inesperado ao verificar a versão do aplicativo: {e}. Permitindo a execução por segurança.")
-    
-    finally:
-        # Restaura as configurações de proxy originais, se existiam
-        if http_proxy_bkp:
-            os.environ['HTTP_PROXY'] = http_proxy_bkp
-        if https_proxy_bkp:
-            os.environ['HTTPS_PROXY'] = https_proxy_bkp
-        logger.debug("Configurações de proxy restauradas após verificação de versão.")
         
+
 execution_time = perf_counter() - start_time
-logger.debug(f"Carregado UTILS em {execution_time:.4f}s")
+logger.info(f"[DEBUG] Carregado UTILS em {execution_time:.4f}s")

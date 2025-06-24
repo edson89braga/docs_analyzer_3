@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 
 from time import perf_counter
 start_time = perf_counter()
-logger.debug(f"{start_time:.4f}s - Iniciando nc_analyze_view.py")
+logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando nc_analyze_view.py")
 
 import flet as ft
 import threading, os, shutil, json
@@ -54,6 +54,8 @@ from sentence_transformers import SentenceTransformer
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
 municipios_list = get_municipios_por_uf_cached()
 
+firestore_client = FirebaseClientFirestore()
+
 # Dicionário para servir como cache no lado do servidor para dados pesados da sessão.
 # A chave será o ID da sessão do Flet (page.session_id).
 # O valor será outro dicionário contendo os dados pesados.
@@ -71,7 +73,7 @@ def clear_user_cache(page: ft.Page):
     session_id = page.session_id
     if session_id in _SERVER_SIDE_CACHE:
         del _SERVER_SIDE_CACHE[session_id]
-        logger.info(f"Cache do lado do servidor limpo para a sessão {session_id}.")
+        logger.debug(f"Cache do lado do servidor limpo para a sessão {session_id}.")
     else:
         logger.debug(f"Nenhum cache do lado do servidor encontrado para a sessão {session_id} para limpar.")
         
@@ -134,8 +136,7 @@ def load_prompts_from_firestore(page: ft.Page):
     Carrega os componentes base de prompts (ALL_lists, ALL_prompts) do Firestore,
     constrói os pipelines de prompts finais e os armazena no cache do servidor.
     """
-    logger.info("Carregando componentes base de prompt...")
-    firestore_client = FirebaseClientFirestore()
+    logger.debug("Carregando componentes base de prompt...")
     user_token = page.session.get("auth_id_token")
     user_id = page.session.get("auth_user_id")
     user_cache = get_user_cache(page)
@@ -154,11 +155,11 @@ def load_prompts_from_firestore(page: ft.Page):
                 fields = prompts_data.get("fields", {})
                 if fields:
                     loaded_components = {k: _from_firestore_value(v) for k, v in fields.items()}
-                    logger.info("Componentes base de prompt carregados com sucesso do Firestore.")
+                    logger.debug("Componentes base de prompt carregados com sucesso do Firestore.")
                     # Salva uma cópia local ao baixar com sucesso
                     with open(prompts_path, 'w', encoding='utf-8') as f:
                         json.dump(loaded_components, f, ensure_ascii=False, indent=4)
-                        logger.info(f"Cópia local dos prompts salva em: {prompts_path}")
+                        logger.debug(f"Cópia local dos prompts salva em: {prompts_path}")
         except Exception as e:
             logger.error(f"Exceção ao carregar componentes de prompts do Firestore: {e}", exc_info=True)
 
@@ -168,7 +169,7 @@ def load_prompts_from_firestore(page: ft.Page):
         if os.path.exists(prompts_path):
             with open(prompts_path, 'r', encoding='utf-8') as f:
                 loaded_components = json.load(f)
-                logger.info("Fallback: Componentes de prompts carregados localmente.")
+                logger.debug("Fallback: Componentes de prompts carregados localmente.")
     
     if not loaded_components:
         msg_erro = "Nenhum componente de prompt carregado localmente."
@@ -267,7 +268,7 @@ class AnalyzePDFViewContent(ft.Column):
         painéis expansíveis para arquivos, metadados de processamento e resultados LLM,
         e o drawer de configurações.
         """
-        logger.debug("Construindo estrutura da UI para Análise de PDF.")
+        logger.debug("Construindo estrutura da GUI para Análise de PDF.")
         
         default_icon_size_bar = 25
         width_btn_bar = 180
@@ -551,7 +552,7 @@ class AnalyzePDFViewContent(ft.Column):
             show_snackbar(self.page, "Erro crítico: FilePicker não inicializado.", theme.COLOR_ERROR)
             return
         else:
-             logger.info("Referência ao FilePicker GLOBAL para exportação e upload armazenada.")
+             logger.debug("Referência ao FilePicker GLOBAL para exportação e upload armazenada.")
 
         # Configura o ManagedFilePicker para UPLOADS, passando a instância global
         if self.global_file_picker_instance: # Só instancia se o picker global existir
@@ -566,7 +567,7 @@ class AnalyzePDFViewContent(ft.Column):
                     file_name (Optional[str]): O nome original do arquivo.
                 """
                 if success and file_name and path_or_msg:
-                    logger.info(f"Upload individual de '{file_name}' OK. Path: {path_or_msg}")
+                    logger.debug(f"Upload individual de '{file_name}' OK. Path: {path_or_msg}")
                     current_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
                     if not isinstance(current_files, list):
                         current_files = []
@@ -607,7 +608,7 @@ class AnalyzePDFViewContent(ft.Column):
                     final_message = f"Todos os {failed_count} uploads falharam."
                     final_color = theme.COLOR_ERROR
                 elif not batch_results:
-                    logger.info("Nenhum arquivo selecionado.")
+                    logger.debug("Nenhum arquivo selecionado.")
                     final_message = "Nenhum arquivo selecionado."
                     final_color = theme.COLOR_WARNING
                 
@@ -633,7 +634,7 @@ class AnalyzePDFViewContent(ft.Column):
                 on_batch_complete=batch_upload_complete_cb,
                 allowed_extensions=["pdf"]
             )
-            logger.info("ManagedFilePicker para UPLOAD instanciado usando o picker global.")
+            logger.debug("ManagedFilePicker para UPLOAD instanciado usando o picker global.")
         else:
             logger.warning("ManagedFilePicker para UPLOAD não pôde ser instanciado pois o picker global não foi encontrado.")
         
@@ -645,7 +646,7 @@ class AnalyzePDFViewContent(ft.Column):
         Configura os handlers de eventos para os controles da UI.
         Associa as funções de tratamento de eventos aos respectivos botões e elementos interativos.
         """
-        logger.info("Configurando handlers de eventos da UI.")
+        logger.debug("Configurando handlers de eventos da UI.")
         self.gui_controls[CTL_UPLOAD_BTN].on_click = self._handle_upload_click
         self.gui_controls[CTL_PROCESS_BTN].on_click = self._handle_process_content_click
         self.gui_controls[CTL_ANALYZE_BTN].on_click = self._handle_analyze_click
@@ -713,7 +714,7 @@ class AnalyzePDFViewContent(ft.Column):
             # É uma reanálise se já existe uma resposta LLM no cache
             if self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE):
                 is_reanalysis = True
-                logger.info("Detectada uma solicitação de REANÁLISE LLM.")
+                logger.info("Detectada solicitação de REANÁLISE LLM.")
 
         # 2. Definir a ação primária específica para a etapa
         primary_action_callable: Optional[Callable[[], None]] = None
@@ -803,7 +804,7 @@ class AnalyzePDFViewContent(ft.Column):
         """
         logger.info("Botão 'Solicitar Análise' clicado.")
         if not self._files_processed:
-            logger.info("'Solicitar Análise' clicado, mas arquivos não processados. Redirecionando para 'process_and_analyze'.")
+            logger.debug("'Solicitar Análise' clicado, mas arquivos não processados. Redirecionando para 'process_and_analyze'.")
             # Se os arquivos não foram processados, o clique em "Analisar" deve, na verdade,
             # executar o pipeline completo.
             self._initiate_analysis_step(step_type="process_and_analyze", event=e)
@@ -914,7 +915,7 @@ class AnalyzePDFViewContent(ft.Column):
 
         self.settings_drawer_container.update()
         self.gui_controls[CTL_SETTINGS_BTN].update()
-        logger.info(f"Drawer de configurações {'aberto' if self._is_drawer_open else 'fechado'}.")
+        logger.debug(f"Drawer de configurações {'aberto' if self._is_drawer_open else 'fechado'}.")
 
     def _toggle_prompt_view(self, e: ft.ControlEvent):
         """
@@ -957,7 +958,7 @@ class AnalyzePDFViewContent(ft.Column):
                 prompt_button.bgcolor = ft.Colors.with_opacity(0.25, theme.COLOR_INFO)
         
         else: # Voltando para a visualização normal
-            logger.info("Desativando visualização do prompt, voltando para análise.")
+            logger.debug("Desativando visualização do prompt, voltando para análise.")
             # Restaura layout original
             if self._original_main_layout_container and self._prompt_display_layout:
                 if self.controls and self.controls[3] == self._prompt_display_layout:
@@ -998,7 +999,7 @@ class AnalyzePDFViewContent(ft.Column):
                 if self.gui_controls[key].page and self.gui_controls[key].uid:
                     self.gui_controls[key].update()
             
-            logger.info("Estados dos botões atualizados (Prompt View Ativa).")
+            logger.debug("Estados dos botões atualizados (Prompt View Ativa).")
             return # Termina aqui se a visualização do prompt estiver ativa
 
         files_exist = bool(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED))
@@ -1038,7 +1039,7 @@ class AnalyzePDFViewContent(ft.Column):
         if self.llm_result_title.page and self.llm_result_title.uid:
             self.llm_result_title.update()
 
-        logger.info("Estados dos botões atualizados.")
+        logger.debug("Estados dos botões atualizados.")
 
     def _update_processing_metadata_display(self, proc_meta: Optional[Dict[str, Any]] = None):
         """
@@ -1091,7 +1092,7 @@ class AnalyzePDFViewContent(ft.Column):
                         continue # Quando não houver supressão de páginas por limites de token
                     
                     if key == "calculated_embedding_cost_usd" and not calculated_embedding_cost_usd:
-                        continue
+                        calculated_embedding_cost_usd = 0
  
                     display_value = str(value if value is not None else "N/A")
  
@@ -1142,6 +1143,7 @@ class AnalyzePDFViewContent(ft.Column):
         
         if content_area.page and content_area.uid:
             content_area.update()
+        logger.debug("Procedido: _update_processing_metadata_display")
 
     def _update_llm_metadata_display(self, llm_meta: Optional[Dict[str, Any]] = None):
         """
@@ -1212,6 +1214,7 @@ class AnalyzePDFViewContent(ft.Column):
  
         if content_area.page and content_area.uid:
             content_area.update()
+        logger.debug("Procedido: _update_llm_metadata_display")
 
     def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, formatted_initial_analysis]] = None,
                                      is_initial_llm_response: bool = False):
@@ -1259,6 +1262,7 @@ class AnalyzePDFViewContent(ft.Column):
         for ctl in [self.llm_result_container, warning_balloon]:
             if ctl.page and ctl.uid:
                 ctl.update()
+        logger.debug("Procedido: _show_info_balloon_or_result")
 
     def _reset_processing_and_llm_results(self):
         """
@@ -1313,7 +1317,7 @@ class AnalyzePDFViewContent(ft.Column):
         Este método centraliza todas as chamadas de atualização da GUI, garantindo
         que a interface reflita o estado mais recente dos dados e configurações.
         """
-        logger.info("Atualizando GUI a partir do estado da sessão...")
+        logger.debug("Atualizando GUI a partir do estado da sessão...")
         hide_loading_overlay(self.page)
         
         # Atualiza flags internas com base na sessão Flet
@@ -1576,7 +1580,7 @@ class InternalAnalysisController:
         self.gui_controls = gui_controls
         self.parent_view = parent_view
         self.pdf_analyzer = parent_view.pdf_analyzer
-        self.firestore_client = FirebaseClientFirestore()
+        self.firestore_client = firestore_client
         self.user_cache = get_user_cache(self.page)
 
     def _get_current_analysis_settings(self) -> Dict[str, Any]:
@@ -1668,16 +1672,16 @@ class InternalAnalysisController:
         
         if pdf_extractor == 'PdfPlumber':
             self.pdf_analyzer.extractor = PdfPlumberExtractor()
-            logger.info("Alterando pdf_extractor para PdfPlumber!")
+            logger.debug("Alterando pdf_extractor para PdfPlumber!")
  
         decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
         if decrypted_api_key:
-            logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+            logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
  
         try:
             start_time = perf_counter()
  
-            logger.info(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
+            logger.debug(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
             self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
  
             processed_files_metadata, all_indices, all_texts_to_storage, all_texts_to_loop = \
@@ -1707,16 +1711,16 @@ class InternalAnalysisController:
  
             if tokens_embeddings:
                 self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
-                logger.info(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
+                logger.debug(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
             else:
                 if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
                     self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
-                    logger.info("Tokens de embedding removidos da sessão (não retornados pela análise).")
+                    logger.debug("Tokens de embedding removidos da sessão (não retornados pela análise).")
                 
             if not processed_page_data_combined:
                 raise ValueError("Nenhum dado processável encontrado nos PDFs.")
             
-            #print('\n[DEBUG]:\n', processed_page_data_combined, '\n\n')
+            #pr-int('\n[DEBUG]:\n', processed_page_data_combined, '\n\n')
             classified_data = self.pdf_analyzer.filter_and_classify_pages(processed_page_data_combined, all_global_page_keys_ordered,
                                                                           embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined,
                                                                           mode_main_filter, mode_filter_similar, similarity_threshold)
@@ -1740,7 +1744,7 @@ class InternalAnalysisController:
             
             pages_agg_indices, _, tokens_antes_agg, tokens_final_agg = aggregated_info
             count_sel_final = len(pages_agg_indices)
-            #print('\n[DEBUG]:\n', pages_agg_indices, '\n\n')
+            #pr-int('\n[DEBUG]:\n', pages_agg_indices, '\n\n')
  
             supressed_tokens = tokens_antes_agg - tokens_final_agg
             perc_supressed = (supressed_tokens / tokens_antes_agg * 100) if tokens_antes_agg > 0 else 0
@@ -1860,14 +1864,12 @@ class InternalAnalysisController:
         import src.core.ai_orchestrator as ai_orchestrator
  
         current_analysis_settings = self._get_current_analysis_settings()
-        logger.info(f"Usando configurações de análise para LLM: {current_analysis_settings}")
+        logger.debug(f"Usando configurações de análise para LLM: {current_analysis_settings}")
         provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
         model_name = current_analysis_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
         temperature = current_analysis_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
         mode_prompt = current_analysis_settings.get("prompt_structure", FALLBACK_ANALYSIS_SETTINGS["prompt_structure"])
- 
-        logger.debug(f"mode_prompt: {mode_prompt}")  ,
- 
+  
         if mode_prompt == "sequential_prompts":
             key_prompt_group = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
         else: # if mode_prompt == "prompt_unico":
@@ -1877,12 +1879,12 @@ class InternalAnalysisController:
         loaded_prompts = self.user_cache.get(KEY_SESSION_PROMPTS1)
 
         try:
-            logger.info(f"Thread: Iniciando análise LLM para '{batch_name}'...")
+            logger.debug(f"Thread: Iniciando análise LLM para '{batch_name}'...")
             self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
  
             decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
             if decrypted_api_key:
-                logger.info(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+                logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
             else:
                 decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
                 assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
@@ -2031,7 +2033,7 @@ class InternalExportManager:
             data_to_export (formatted_initial_analysis): Os dados estruturados da análise a serem exportados.
             template_path (Optional[str]): O caminho para o arquivo de template DOCX (obrigatório para exportação com template).
         """
-        logger.info(f"ExportManager: start_export. Op: {operation_type}, Web: {self.page.web}")
+        logger.debug(f"ExportManager: start_export. Op: {operation_type}, Web: {self.page.web}")
 
         if not data_to_export: # Verificação de segurança
             logger.error("ExportManager (start_export): Dados para exportação ausentes ou inválidos.")
@@ -2246,7 +2248,7 @@ class InternalExportManager:
             data_to_export (formatted_initial_analysis): Os dados estruturados da análise a serem exportados.
             template_path (Optional[str]): O caminho para o arquivo de template DOCX (se aplicável).
         """
-        logger.info(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
+        logger.debug(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
  
         llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
         if not isinstance(llm_display_component, LLMStructuredResultDisplay):
@@ -2310,7 +2312,7 @@ class InternalExportManager:
         Args:
             e (ft.ControlEvent): O evento do controle.
         """
-        logger.info(f"ExportManager: Item de exportação selecionado - Data: {e.control.data}")
+        logger.debug(f"ExportManager: Item de exportação selecionado - Data: {e.control.data}")
         selected_action_data = e.control.data
                    
         operation: Optional[ExportOperation] = None
@@ -2365,7 +2367,7 @@ class SettingsDrawerManager:
         Returns:
             ft.Column: Um ft.Column contendo todos os controles de configuração.
         """
-        logger.info("SettingsDrawerManager: Construindo conteúdo do drawer.")
+        logger.debug("SettingsDrawerManager: Construindo conteúdo do drawer.")
         default_width = 260
         current_analysis_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
         loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
@@ -2501,7 +2503,7 @@ class SettingsDrawerManager:
         Associa as funções de tratamento de eventos aos controles de configuração
         para que as alterações do usuário sejam capturadas e as configurações sejam atualizadas.
         """
-        logger.info("SettingsDrawerManager: Configurando handlers de eventos.")
+        logger.debug("SettingsDrawerManager: Configurando handlers de eventos.")
         controls_to_watch = [
             "proc_vectorization_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider",
             "prompt_structure_rg", "similarity_threshold_slider"
@@ -2553,7 +2555,7 @@ class SettingsDrawerManager:
  
         new_settings = self._get_settings_from_drawer_controls()
         self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, new_settings)
-        logger.info(f"SettingsDrawerManager: Configurações da sessão atualizadas: {new_settings}")
+        logger.debug(f"SettingsDrawerManager: Configurações da sessão atualizadas: {new_settings}")
         self._update_reset_button_visibility()
  
     def _handle_provider_change_drawer(self, e: ft.ControlEvent):
@@ -2665,7 +2667,7 @@ class SettingsDrawerManager:
         Args:
             settings_to_load (Dict[str, Any]): O dicionário de configurações a ser carregado.
         """
-        logger.info("SettingsDrawerManager: Carregando configurações para o drawer.")
+        logger.debug("SettingsDrawerManager: Carregando configurações para o drawer.")
         loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
         provider_options_drawer = [
             ft.dropdown.Option(key=p['system_name'], text=p.get('name_display', p['system_name']))
@@ -2879,7 +2881,7 @@ class LLMStructuredResultDisplay(ft.Column):
         "sm": 12 (Small): Em telas pequenas (como um celular), a coluna ocupará todas as 12 partes, efetivamente empilhando os itens verticalmente.
         """
         # data aqui é o objeto FormatAnaliseInicial como recebido (após parsing inicial da resposta da LLM)
-        logger.info(f"LLMStructuredResultDisplay.update_data chamado. is_new_llm_response={is_new_llm_response}, data_is_none={data_to_display_in_gui is None}")
+        logger.debug(f"LLMStructuredResultDisplay.update_data chamado. is_new_llm_response={is_new_llm_response}, data_is_none={data_to_display_in_gui is None}")
         
         self.user_cache = get_user_cache(self.page)
         lists_to_prompts = self.user_cache.get(KEY_SESSION_LIST_TO_PROMPTS)
@@ -2924,14 +2926,14 @@ class LLMStructuredResultDisplay(ft.Column):
             # É uma resposta fresca da LLM, este é o nosso "original" definitivo.
             self.original_llm_data_snapshot = data_to_display_in_gui.model_copy(deep=True)
             self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = self.original_llm_data_snapshot
-            logger.info("Snapshot dos dados ORIGINAIS da LLM capturado e salvo na sessão (is_new_llm_response=True).")
+            logger.debug("Snapshot dos dados ORIGINAIS da LLM capturado e salvo na sessão (is_new_llm_response=True).")
         else:
             # Não é uma nova resposta LLM (ex: restauração de sessão, ou após edição do usuário).
             # Tentamos carregar o snapshot da sessão dedicada.
             snapshot_from_session = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK)
             if snapshot_from_session and isinstance(snapshot_from_session, formatted_initial_analysis):
                 self.original_llm_data_snapshot = snapshot_from_session
-                logger.info("Snapshot original da LLM restaurado da sessão dedicada.")
+                logger.debug("Snapshot original da LLM restaurado da sessão dedicada.")
             else:
                 # Se não há snapshot na sessão dedicada, e não é uma nova resposta LLM,
                 # este é o caso "tardio". Usamos os dados atuais (data_to_display_in_gui) como base, com warning.
@@ -3179,12 +3181,12 @@ class LLMStructuredResultDisplay(ft.Column):
             logger.debug(f"Dados para instanciar FormatAnaliseInicial: {final_data_for_pydantic}")
  
             self.data = formatted_initial_analysis(**final_data_for_pydantic)  # Atualiza o self.data da instância com os dados atuais da UI, já validados por Pydantic
-            logger.info("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
+            logger.debug("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")
  
             # Atualiza também a sessão com a representação mais recente (objeto Pydantic)
             self.user_cache = get_user_cache(self.page)
             self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL] = self.data
-            logger.info("KEY_SESSION_PDF_LLM_RESPONSE atualizado na sessão com os dados da UI.")
+            logger.debug("KEY_SESSION_PDF_LLM_RESPONSE atualizado na sessão com os dados da GUI.")
             return self.data
         except Exception as pydantic_error: # Use ValidationError de Pydantic se importado
             logger.error(f"Erro de validação Pydantic FINAL ao criar FormatAnaliseInicial: {pydantic_error}", exc_info=False)
@@ -3374,7 +3376,7 @@ class FeedbackDialog(ft.AlertDialog):
         Args:
             action (FeedbackDialogAction): A ação selecionada pelo usuário.
         """
-        logger.info(f"FeedbackDialog: Ação '{action.value}' selecionada.")
+        logger.debug(f"FeedbackDialog: Ação '{action.value}' selecionada.")
         self.open = False
         if self.page_ref and self.uid: # Garante que está na árvore da UI para atualizar
             self.page_ref.update(self) # Atualiza para fechar visualmente
@@ -3399,7 +3401,7 @@ class FeedbackDialog(ft.AlertDialog):
         """
         Exibe o diálogo de feedback na página.
         """
-        logger.info("FeedbackDialog: Solicitado para mostrar.")
+        logger.debug("FeedbackDialog: Solicitado para mostrar.")
         if self not in self.page_ref.overlay:
             self.page_ref.overlay.append(self)
         self.open = True
@@ -3414,7 +3416,7 @@ class FeedbackWorkflowManager:
     def __init__(self, page: ft.Page, parent_view: 'AnalyzePDFViewContent'):
         self.page = page
         self.parent_view = parent_view # Referência à AnalyzePDFViewContent
-        self.firestore_client = FirebaseClientFirestore()
+        self.firestore_client = firestore_client
 
     def _prepare_and_show_feedback_dialog(
         self,
@@ -3491,20 +3493,20 @@ class FeedbackWorkflowManager:
             return
 
         if self.page.session.get(KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS):
-            logger.info(f"FeedbackWorkflowManager: Feedback já coletado para '{action_context_name}'. Prosseguindo com ação primária.")
+            logger.debug(f"FeedbackWorkflowManager: Feedback já coletado para '{action_context_name}'. Prosseguindo com ação primária.")
             primary_action_callable()
             return
 
         # Só pede feedback se houver uma análise LLM anterior
         user_cache = get_user_cache(self.page)
         if not user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE):
-            logger.info(f"FeedbackWorkflowManager: Nenhuma análise LLM anterior para '{action_context_name}'. Prosseguindo com ação primária.")
+            logger.debug(f"FeedbackWorkflowManager: Nenhuma análise LLM anterior para '{action_context_name}'. Prosseguindo com ação primária.")
             primary_action_callable()
             return
 
         # 3. Chama o diálogo de feedback
         def on_feedback_dialog_closed_final_logic(action_taken: FeedbackDialogAction, collected_feedback_data: Optional[List[Dict[str, Any]]]):
-            logger.info(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado com ação: {action_taken.value}")
+            logger.debug(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado com ação: {action_taken.value}")
             
             if action_taken == FeedbackDialogAction.CONFIRM_AND_CONTINUE:
                 if collected_feedback_data:
@@ -3529,7 +3531,7 @@ class FeedbackWorkflowManager:
                 primary_action_callable()
             
             elif action_taken == FeedbackDialogAction.RETURN_TO_EDIT:
-                logger.info(f"FeedbackWorkflowManager (final_logic): Usuário escolheu retornar para edição para '{action_context_name}'. Ação primária cancelada.")
+                logger.debug(f"FeedbackWorkflowManager (final_logic): Usuário escolheu retornar para edição para '{action_context_name}'. Ação primária cancelada.")
             
             elif action_taken == FeedbackDialogAction.CANCELLED_OR_ERROR:
                 logger.warning(f"FeedbackWorkflowManager (final_logic): Diálogo para '{action_context_name}' fechado inesperadamente. Ação primária não será executada.")
@@ -3594,7 +3596,7 @@ def get_api_key_in_firestore(page: ft.Page, provider: str, firestore_client: Fir
         # Pode indicar chave de criptografia local ausente ou corrompida.
         return None
 
-    logger.info(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
+    logger.debug(f"Chave API para o provedor '{provider}' obtida e descriptografada com sucesso.")
     
     page.session.set(f"decrypted_api_key_{provider}", decrypted_api_key)
     return decrypted_api_key
@@ -3705,4 +3707,4 @@ def get_field_type_for_feedback(field_name: str, gui_fields: Dict[str, ft.Contro
 
 
 execution_time = perf_counter() - start_time
-logger.debug(f"Carregado NC_ANALYZE_VIEW em {execution_time:.4f}s")
+logger.info(f"[DEBUG] Carregado NC_ANALYZE_VIEW em {execution_time:.4f}s")

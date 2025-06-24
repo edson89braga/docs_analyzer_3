@@ -82,7 +82,7 @@ class PdfPlumberExtractor(PDFTextExtractorStrategy):
         with pdfplumber.open(pdf_path) as pdf:
             return len(pdf.pages)
 
-    @timing_decorator()
+    #@timing_decorator()
     def extract_texts_from_pages(self, pdf_path: str, page_indices: Optional[List[int]] = None, check_inteligible: bool = False) -> List[Tuple[int, str]]:
         """
         Extrai textos de páginas específicas de um PDF usando pdfplumber.
@@ -175,6 +175,7 @@ class PyPdfExtractor(PDFTextExtractorStrategy):
                 
             return content_by_page
         except Exception as e:
+            logger.error(f"Erro ao extrair textos do PDF {os.path.basename(pdf_path)} com PyPDF: {str(e)}", exc_info=True)
             raise RuntimeError(f"PyPdf extraction error for {pdf_path}: {e}")
 
 class FitzExtractor(PDFTextExtractorStrategy):
@@ -229,6 +230,7 @@ class FitzExtractor(PDFTextExtractorStrategy):
  
             return content_by_page
         except Exception as e:
+            logger.error(f"Erro ao extrair textos do PDF {os.path.basename(pdf_path)} com Fitz: {str(e)}", exc_info=True)
             raise RuntimeError(f"PyMuPDF extraction error for {pdf_path}: {e}")
         
 ### text_processing_utils: #########################################################################################
@@ -349,7 +351,7 @@ def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
         _sentence_model = SentenceTransformer(model_name)
     return _sentence_model
 
-@timing_decorator()
+#@timing_decorator()
 def get_vectors(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2') -> np_ndarray:
     """
     Gera vetores de embedding para uma lista de textos usando um modelo SentenceTransformer.
@@ -361,7 +363,7 @@ def get_vectors(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2
     Returns:
         np_ndarray: Um array NumPy contendo os vetores de embedding.
     """
-    logger.info(f'Modelo embeddings: {model_embedding}')
+    logger.debug(f'Modelo embeddings in get_vectors: {model_embedding}')
     model = get_sentence_transformer_model(model_embedding)
     vectors_combined = model.encode(pages_texts)
 
@@ -373,7 +375,8 @@ def get_vectors(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2
         logger.warning(f"Array 'ready_embeddings' fornecido está vazio para o modelo '{model_embedding}'. Retornando matriz de similaridade vazia.")
         return np_array([])
 
-    assert len(vectors_combined) == len(pages_texts), f"Quantidade de vetores ({len(vectors_combined)}) difere da quantidade de textos ({len(pages_texts)})."
+    if len(vectors_combined) != len(pages_texts):
+        logger.warning(f"Quantidade de vetores ({len(vectors_combined)}) difere da quantidade de textos ({len(pages_texts)}).")
     return vectors_combined
 
 def get_similarity_matrix(vectors_combined: np_ndarray, normalizer: bool = True) -> np_ndarray:
@@ -390,9 +393,10 @@ def get_similarity_matrix(vectors_combined: np_ndarray, normalizer: bool = True)
     if normalizer: # vetores provenientes do tfidf são arrays de 1D e não podem ser normalizados
         vectors_combined = sk_normalize(vectors_combined)
     similarity_matrix = cosine_similarity(vectors_combined)
+    logger.debug("Procedido: get_similarity_matrix")
     return similarity_matrix
 
-@timing_decorator()
+#@timing_decorator()
 def get_tfidf_scores(pages_texts: List[str], language: str = 'portuguese') -> np_array:
     """
     Calcula a relevância de cada texto (página) usando TF-IDF.
@@ -414,7 +418,7 @@ def get_tfidf_scores(pages_texts: List[str], language: str = 'portuguese') -> np
     tf_idf_matrix = vectorizer.fit_transform(pages_texts)
     
     tf_idf_scores = np_array(tf_idf_matrix.sum(axis=1)).flatten()  # converte para array 1D
-    
+    logger.debug("Procedido: get_tfidf_scores")
     return tf_idf_scores, tf_idf_matrix
 
 def get_similar_items_indices(item_index: int, similarity_matrix: np_array, similarity_threshold: float = 0.87, exclude_idx=[]) -> List[int]:
@@ -430,6 +434,8 @@ def get_similar_items_indices(item_index: int, similarity_matrix: np_array, simi
             continue
         if similarity_matrix[item_index, j] > similarity_threshold:
             similar_indices.append(j)
+
+    logger.debug("Procedido: get_similar_items_indices")
     return similar_indices
 
 from scipy.sparse import vstack
@@ -451,14 +457,18 @@ def check_if_has_similar_items(
         # No seu fluxo atual, isso é coberto por `if not relevant_indices_candidates:`,
         # então selected_matrix nunca deveria estar vazia quando esta função é chamada.
         return False
+    
+    retorno=False
     if current_page_vector.ndim == 1: # Garante que o vetor atual seja 2D
         current_page_vector = current_page_vector.reshape(1, -1)
 
 
     similarities = cosine_similarity(current_page_vector, selected_matrix)
     if np_any(similarities >= similarity_threshold):
-        return True
-    return False
+        retorno = True
+    
+    logger.debug("Procedido: check_if_has_similar_items")
+    return retorno
 
 ### pdf_document_analyzer: #########################################################################################
 import os
@@ -488,9 +498,9 @@ def print_text_intelligibility(texts_normalized: list[tuple[int, str]]):
         if not is_intelligible:
             try:
                 lang = detect(text)
-                logger.warning(f'Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
+                logger.debug(f'Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
             except LangDetectException:
-                logger.warning(f'Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
+                logger.debug(f'Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
 
 import networkx as nx
 
@@ -581,10 +591,11 @@ class PDFDocumentAnalyzer:
                 output_parts = [part.replace('Arq1 ', '') for part in output_parts]
 
         #assert len(output_parts) == len(global_keys), f"Quantidade de partes formatadas diferente da quantidade de global_keys: \n\n{output_parts}\n\n{global_keys}\n)"
+        logger.debug("Procedido: format_global_keys_for_display")
         return ", ".join(output_parts) if output_parts else "Nenhuma"
 
     ### ======================================================================================
-    @timing_decorator()
+    #@timing_decorator()
     def extract_texts_and_preprocess_files(self, pdf_paths_ordered: List[str], clean_spaces: bool = True, lowercase: bool = False
                                            ) -> Tuple[List[Tuple[int, str]], List[List[int]], List[Dict[int, str]], List[str]]:
         """
@@ -608,7 +619,7 @@ class PDFDocumentAnalyzer:
                 logger.error(f"PDF não encontrado no lote: {pdf_path} (Índice {file_idx}). Pulando.")
                 continue
             
-            logger.info(f"Processando arquivo {file_idx + 1}/{len(pdf_paths_ordered)}: {os.path.basename(pdf_path)}")
+            logger.debug(f"Processando arquivo {file_idx + 1}/{len(pdf_paths_ordered)}: {os.path.basename(pdf_path)}")
 
             try:
                 extracted_pages_content_single_file = self.extractor.extract_texts_from_pages(pdf_path, None)
@@ -668,10 +679,10 @@ class PDFDocumentAnalyzer:
                     'page_index_in_file': page_idx_in_file,
                     'original_pdf_path': pdf_path
                 }
-
+        logger.debug("Procedido: build_combined_page_data")
         return combined_processed_page_data, all_global_page_keys_ordered
 
-    @timing_decorator()
+    #@timing_decorator()
     def get_similarity_and_tfidf_score_docs(self, all_texts_for_analysis_list: List[str], 
                                             model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: np_array = None, preprocess_text_advanced: bool = False, 
                                             ) -> Dict[str, Dict[str, Any]]:
@@ -707,7 +718,7 @@ class PDFDocumentAnalyzer:
         logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(all_texts_for_analysis_list)}")
         return embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined
 
-    @timing_decorator()
+    #@timing_decorator()
     def analyze_pdf_documents(self, pdf_paths_ordered: List[str],
                               clean_spaces=True, lowercase=False,
                               model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: np_array = None, preprocess_text_advanced: bool = False) -> Dict[str, Dict[str, Any]]:
@@ -732,7 +743,7 @@ class PDFDocumentAnalyzer:
    
     ### ======================================================================================
 
-    @timing_decorator()
+    #@timing_decorator()
     def filter_and_classify_pages(
         self, 
         combined_processed_page_data: Dict[str, Dict[str, Any]],
@@ -980,7 +991,7 @@ class PDFDocumentAnalyzer:
             logger.warning("Contagem de páginas inconsistente em filter_and_classify_pages!")
             logger.warning(f"Total Inicial: {total_pages}, Selecionadas: {selected_relevant_count}, "
                            f"Descartadas Simil.: {discarded_by_similarity_count}, Descartadas Inint.: {discarded_by_unintelligibility_count}")
-        #print('\n')
+        #pr-int('\n')
         #logger.info(f"[DEBUG] Índices relevantes após filtro: \n{sorted(final_selected_ordered_indices)}\n")
         
         return (
@@ -989,7 +1000,7 @@ class PDFDocumentAnalyzer:
             discarded_by_similarity_count
         )
 
-    @timing_decorator()
+    #@timing_decorator()
     def group_texts_by_relevance_and_token_limit(
         self,
         processed_page_data: Dict[str, Dict[str, Any]], # Chave é global_page_key (str)
@@ -1075,7 +1086,6 @@ class PDFDocumentAnalyzer:
         # Recalcula tokens finais do texto agregado para máxima precisão, pois o join(" ") pode adicionar/remover tokens.
         final_aggregated_tokens = count_tokens(accumulated_text, model_name=model_name_for_tokens)
 
-        print("\n")
         if set(relevant_page_ordered_indices) == set(keys_of_included_texts):
             logger.debug("Índices relevantes integram os mesmos índices do texto final agregado.\n")
         else:
@@ -1084,5 +1094,5 @@ class PDFDocumentAnalyzer:
         return keys_of_included_texts, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
 
 execution_time = perf_counter() - start_time
-logger.debug(f"Carregado PDF_PROCESSOR em {execution_time:.4f}s")
+logger.info(f"[DEBUG] Carregado PDF_PROCESSOR em {execution_time:.4f}s")
 

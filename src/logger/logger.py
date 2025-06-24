@@ -1,6 +1,9 @@
+import logging
+logger = logging.getLogger(__name__)
+
 from time import perf_counter
 start_time = perf_counter()
-print(f"{start_time:.4f}s - Iniciando logger.py")
+logger.info(f"{start_time:.4f}s - Iniciando logger.py")
 
 import os, shutil, re
 from time import sleep
@@ -21,9 +24,6 @@ if TYPE_CHECKING:
     from .cloud_logger_handler import LogUploaderStrategy
 
 modules_to_log = []
-
-import logging
-logger = logging.getLogger(__name__)
 
 class ModuleFilter(logging.Filter):
     """
@@ -88,11 +88,13 @@ class LoggerSetup:
     def _create_console_handler(cls, formatter, level=logging.INFO):
         handler = RichHandler(
             level=level,
-            show_level=False,
+            show_level=True,
+            show_path=False,
+            show_time=True,
             rich_tracebacks=True,
             tracebacks_show_locals=False,
             markup=True,
-            keywords=["INFO", "WARNING", "ERROR", "CRITICAL"]
+            keywords=["INFO", "WARNING", "ERROR", "CRITICAL", "DEBUG"]
         )
         handler.setFormatter(formatter)
         return handler
@@ -110,12 +112,12 @@ class LoggerSetup:
         
         if cls._client_uploader_instance:
             uploader_to_use = cls._client_uploader_instance
-            print("LoggerSetup: Usando ClientLogUploader para CloudLogHandler (usuário autenticado).")
+            logger.debug("LoggerSetup: Usando ClientLogUploader para CloudLogHandler (usuário autenticado).")
         elif cls._admin_uploader_instance:
             uploader_to_use = cls._admin_uploader_instance
-            print("LoggerSetup: Usando AdminLogUploader para CloudLogHandler (fallback ou sem usuário).")
+            logger.debug("LoggerSetup: Usando AdminLogUploader para CloudLogHandler (fallback ou sem usuário).")
         else:
-            print("WARNING: LoggerSetup: Nenhum uploader (cliente ou admin) configurado/disponível para CloudLogHandler.")
+            logger.debug("WARNING: LoggerSetup: Nenhum uploader (cliente ou admin) configurado/disponível para CloudLogHandler.")
             return None
 
         # Cria uma nova instância do CloudLogHandler com a estratégia decidida
@@ -127,10 +129,10 @@ class LoggerSetup:
             cloud_handler.setLevel(level)
             cloud_handler.setFormatter(formatter)
             cls._active_cloud_handler_instance = cloud_handler # Guarda a referência da última instância criada
-            print(f"LoggerSetup: CloudLogHandler criado com uploader {uploader_to_use.__class__.__name__}.")
+            logger.debug(f"LoggerSetup: CloudLogHandler criado com uploader {uploader_to_use.__class__.__name__}.")
             return cloud_handler
         except Exception as e:
-            print(f"ERROR: LoggerSetup: Erro ao criar CloudLogHandler: {e}", exc_info=True)
+            logger.debug(f"ERROR: LoggerSetup: Erro ao criar CloudLogHandler: {e}", exc_info=True)
             return None
     
     @classmethod
@@ -144,7 +146,7 @@ class LoggerSetup:
             # Se um novo CloudLogHandler for criado (ex: se o logger for reinicializado),
             # ele pegará o uploader com o contexto mais recente.
         # else: Não imprime warning aqui, add_cloud_logging cuidará da criação.
-        #    print("WARNING: ClientLogUploader não inicializado. Contexto do usuário não pode ser definido.")
+        #    logger.debug("WARNING: ClientLogUploader não inicializado. Contexto do usuário não pode ser definido.")
 
     @classmethod
     def _setup_temporary_logger(cls, logger_name):
@@ -175,9 +177,9 @@ class LoggerSetup:
                     shutil.copy2(base_log_file, dated_log_file)
                     base_log_file.unlink()
                 except (OSError, IOError) as e:
-                    print(f"Erro ao copiar arquivo de log: {e}")
+                    logger.debug(f"Erro ao copiar arquivo de log: {e}")
         except Exception as e:
-            print(f"Erro ao rotacionar arquivo de log: \n{e}")
+            logger.debug(f"Erro ao rotacionar arquivo de log: \n{e}")
 
     @classmethod
     def OLD_initialize(cls,
@@ -220,10 +222,10 @@ class LoggerSetup:
         # A responsabilidade de criar e adicionar o CloudLogHandler ficará totalmente com add_cloud_logging
         #if firebase_client_storage:
         #    cls._client_uploader_instance = ClientLogUploader(firebase_client_storage)
-        #    print("LoggerSetup: Instância de ClientLogUploader criada.")
+        #    logger.debug("LoggerSetup: Instância de ClientLogUploader criada.")
         #if fb_manager_storage_admin:
         #    cls._admin_uploader_instance = AdminLogUploader(fb_manager_storage_admin)
-        #    print("LoggerSetup: Instância de AdminLogUploader criada.")
+        #    logger.debug("LoggerSetup: Instância de AdminLogUploader criada.")
 
         ### file_handler:
         # Cria o nome do arquivo de log com base no nome da rotina
@@ -244,7 +246,7 @@ class LoggerSetup:
                     except (OSError, IOError):
                         pass
         except Exception as e:
-            print(f"Erro ao rotacionar arquivo de log: \n{e}")
+            logger.debug(f"Erro ao rotacionar arquivo de log: \n{e}")
 
         # --- Limit the number of dated log files ---
         cls._cleanup_old_log_files(PATH_LOGS, days_to_keep=7)  # Keep only 7 days of logs
@@ -278,7 +280,7 @@ class LoggerSetup:
         #        cls._apply_module_filter(cloud_log_handler, modules_to_log)
         #        logger.addHandler(cloud_log_handler)
         #else:
-        #    print("LoggerSetup: Nenhum Firebase storage manager fornecido para o logger da nuvem. Cloud logging desabilitado.")
+        #    logger.debug("LoggerSetup: Nenhum Firebase storage manager fornecido para o logger da nuvem. Cloud logging desabilitado.")
 
         # Adiciona o handler personalizado, se fornecido: Usado para handler que imprime no componente do Flet
         if custom_handler:
@@ -342,7 +344,7 @@ class LoggerSetup:
         if dev_mode and allowed_prefixes:
             module_filter = ModuleFilter(prefixes=allowed_prefixes)
             console_handler.addFilter(module_filter)
-            print(f"Filtro de log do console ativado para prefixos: {allowed_prefixes}")
+            logger.debug(f"Filtro de log do console ativado para prefixos: {allowed_prefixes}")
 
         # --- Silencia Loggers de Bibliotecas de Terceiros ---
         # Define um nível mais alto para loggers específicos para reduzir o ruído geral.
@@ -394,15 +396,15 @@ class LoggerSetup:
         Cria os uploaders se necessário.
         """
         if not cls._initialized:
-            print("LoggerSetup ERROR: Logger não inicializado. Chame LoggerSetup.initialize() primeiro.")
+            logger.debug("LoggerSetup ERROR: Logger não inicializado. Chame LoggerSetup.initialize() primeiro.")
             return False
         if not cls._instance: # Logger raiz não configurado
-            print("LoggerSetup ERROR: Logger raiz não está configurado.")
+            logger.debug("LoggerSetup ERROR: Logger raiz não está configurado.")
             return False
 
         # Verifica se um CloudLogHandler já existe para evitar duplicação
         if cls._active_cloud_handler_instance and cls._active_cloud_handler_instance in cls._instance.handlers:
-            print("LoggerSetup: CloudLogHandler já está ativo. Verificando contexto do uploader.")
+            logger.debug("LoggerSetup: CloudLogHandler já está ativo. Verificando contexto do uploader.")
             # Se já existe, apenas garante que o contexto do client_uploader está atualizado
             #if cls._client_uploader_instance and (user_token_for_client or user_id_for_client):
             #    cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
@@ -422,10 +424,10 @@ class LoggerSetup:
             try:
                 _fcs_temp = FirebaseClientStorage() # Instancia se necessário
                 cls._client_uploader_instance = ClientLogUploader(_fcs_temp)
-                print("LoggerSetup: Instância de ClientLogUploader criada dinamicamente em add_cloud_logging.")
+                logger.debug("LoggerSetup: Instância de ClientLogUploader criada dinamicamente em add_cloud_logging.")
                 cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
             except Exception as e_fcs:
-                print(f"LoggerSetup: Erro ao criar FirebaseClientStorage para ClientUploader: {e_fcs}")
+                logger.debug(f"LoggerSetup: Erro ao criar FirebaseClientStorage para ClientUploader: {e_fcs}")
                 # Não prosseguir com client uploader se falhar
         
         # Cria o AdminUploader se não existir (se não houver contexto de cliente ou como fallback)
@@ -433,9 +435,9 @@ class LoggerSetup:
             try:
                 _fms_temp = FbManagerStorage() # Instancia se necessário
                 cls._admin_uploader_instance = AdminLogUploader(_fms_temp)
-                print("LoggerSetup: Instância de AdminLogUploader criada dinamicamente em add_cloud_logging.")
+                logger.debug("LoggerSetup: Instância de AdminLogUploader criada dinamicamente em add_cloud_logging.")
             except Exception as e_fms:
-                print(f"LoggerSetup: Erro ao criar FbManagerStorage para AdminLogUploader: {e_fms}")
+                logger.debug(f"LoggerSetup: Erro ao criar FbManagerStorage para AdminLogUploader: {e_fms}")
 
         cloud_log_handler = cls._create_cloud_logger_handler(
             cls.formatter_detailed,
@@ -444,10 +446,10 @@ class LoggerSetup:
 
         if cloud_log_handler:
             cls._instance.addHandler(cloud_log_handler)
-            print("LoggerSetup: CloudLogHandler adicionado ao logger raiz.")
+            logger.debug("LoggerSetup: CloudLogHandler adicionado ao logger raiz.")
             return True
         else:
-            print("LoggerSetup: Falha ao criar CloudLogHandler. Logging na nuvem não será ativado.")
+            logger.debug("LoggerSetup: Falha ao criar CloudLogHandler. Logging na nuvem não será ativado.")
             return False
         
     @classmethod
@@ -496,7 +498,7 @@ class LoggerSetup:
         do diretório de logs especificado.
         """
         if not log_dir.is_dir():
-            print(f"Diretório de logs '{log_dir}' não encontrado para limpeza.")
+            logger.debug(f"Diretório de logs '{log_dir}' não encontrado para limpeza.")
             return
 
         cutoff_date = datetime.now() - timedelta(days=days_to_keep)
@@ -605,10 +607,10 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
         test_identifier: String única para identificar esta execução de teste nos logs.
         fb_manager_instance: Instância configurada do FirebaseManager (ou similar).
     """
-    print(f"\n--- Iniciando Teste Cloud Logging: {test_identifier} ---")
+    logger.debug(f"\n--- Iniciando Teste Cloud Logging: {test_identifier} ---")
 
     if not fb_manager_instance:
-        print("ERRO TESTE: Instância do Firebase Manager não fornecida. Abortando teste.")
+        logger.debug("ERRO TESTE: Instância do Firebase Manager não fornecida. Abortando teste.")
         return
 
     # --- Configuração do Teste ---
@@ -624,17 +626,17 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
 
     try:
         # --- 1. Inicialização do Logger ---
-        print("Passo 1: Inicializando LoggerSetup...")
+        logger.debug("Passo 1: Inicializando LoggerSetup...")
         LoggerSetup.initialize(
             routine_name=test_routine_name,
             fb_manager_storage_admin=fb_manager_instance,
         )
-        print("LoggerSetup inicializado.")
+        logger.debug("LoggerSetup inicializado.")
 
         # Guarda a instância do handler para chamar métodos diretamente
         cloud_handler_instance = LoggerSetup._active_cloud_handler_instance
         if not cloud_handler_instance:
-             print("AVISO TESTE: Cloud handler não foi criado. Teste pode não funcionar como esperado.")
+             logger.debug("AVISO TESTE: Cloud handler não foi criado. Teste pode não funcionar como esperado.")
              # O teste pode continuar para verificar logs locais, mas a parte da nuvem falhará.
 
         # Define o caminho esperado no cloud (precisa ser calculado como no handler)
@@ -651,86 +653,86 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
         log_filename = f"{username_full}_{datetime.now().strftime('%Y-%m-%d')}.txt"
         cloud_path = log_folder_user / log_filename
         expected_cloud_path_str = cloud_path.as_posix()
-        print(f"Caminho esperado no Cloud Storage: {expected_cloud_path_str}")
+        logger.debug(f"Caminho esperado no Cloud Storage: {expected_cloud_path_str}")
 
         # --- 2. Geração de Logs ---
-        print("\nPasso 2: Gerando logs de teste...")
+        logger.debug("\nPasso 2: Gerando logs de teste...")
         logger = LoggerSetup.get_logger("test_module")
 
         logger.debug(f"Mensagem de DEBUG. {log_marker_debug}") # Não deve ir para a nuvem
         logger.info(f"Mensagem de INFO. {log_marker_info}")
         logger.warning(f"Mensagem de WARNING. {log_marker_warning}")
         logger.error("Mensagem de ERRO (sem marcador único).")
-        print("Logs gerados.")
+        logger.debug("Logs gerados.")
 
         # --- 3. Forçar Upload ---
-        print("\nPasso 3: Forçando upload final (simulando saída)...")
+        logger.debug("\nPasso 3: Forçando upload final (simulando saída)...")
         if cloud_handler_instance:
             # Chama o método que `atexit` chamaria
             cloud_handler_instance._force_upload_on_exit_static(cloud_handler_instance)
             # Dê um tempo extra para garantir que o upload HTTP possa concluir
-            print("Aguardando alguns segundos para o upload completar...")
+            logger.debug("Aguardando alguns segundos para o upload completar...")
             sleep(10) # Ajuste conforme necessário (depende da latência)
         else:
-            print("Cloud handler não existe, pulando upload forçado.")
+            logger.debug("Cloud handler não existe, pulando upload forçado.")
 
 
         # --- 4. Verificação no Firebase ---
-        print("\nPasso 4: Verificando o log no Firebase Storage...")
+        logger.debug("\nPasso 4: Verificando o log no Firebase Storage...")
         if not cloud_handler_instance:
-             print("Cloud handler não existe, pulando verificação no Firebase.")
+             logger.debug("Cloud handler não existe, pulando verificação no Firebase.")
              raise RuntimeError("Teste incompleto: Cloud Handler não foi instanciado.")
 
         downloaded_content = ""
         try:
-            print(f"Tentando baixar: {expected_cloud_path_str}")
+            logger.debug(f"Tentando baixar: {expected_cloud_path_str}")
             downloaded_content = fb_manager_instance.get_text(expected_cloud_path_str)
-            print("Log baixado com sucesso do Firebase Storage.")
+            logger.debug("Log baixado com sucesso do Firebase Storage.")
         except Exception as e:
-            print(f"ERRO TESTE: Falha ao baixar o log do Firebase Storage: {e}")
-            print("Verifique se o caminho está correto, se as credenciais são válidas e se o arquivo existe no bucket.")
+            logger.debug(f"ERRO TESTE: Falha ao baixar o log do Firebase Storage: {e}")
+            logger.debug("Verifique se o caminho está correto, se as credenciais são válidas e se o arquivo existe no bucket.")
             raise # Re-levanta a exceção para indicar falha no teste
 
         # --- 5. Assertivas ---
-        print("\nPasso 5: Validando conteúdo do log baixado...")
+        logger.debug("\nPasso 5: Validando conteúdo do log baixado...")
         assert log_marker_info in downloaded_content, f"ERRO TESTE: Marcador INFO '{log_marker_info}' não encontrado no log!"
-        print(f"OK: Marcador INFO '{log_marker_info}' encontrado.")
+        logger.debug(f"OK: Marcador INFO '{log_marker_info}' encontrado.")
 
         assert log_marker_warning in downloaded_content, f"ERRO TESTE: Marcador WARNING '{log_marker_warning}' não encontrado no log!"
-        print(f"OK: Marcador WARNING '{log_marker_warning}' encontrado.")
+        logger.debug(f"OK: Marcador WARNING '{log_marker_warning}' encontrado.")
 
         assert log_marker_debug not in downloaded_content, f"ERRO TESTE: Marcador DEBUG '{log_marker_debug}' foi encontrado no log da nuvem (não deveria)!"
-        print(f"OK: Marcador DEBUG '{log_marker_debug}' corretamente ausente.")
+        logger.debug(f"OK: Marcador DEBUG '{log_marker_debug}' corretamente ausente.")
 
-        print("\n*** SUCESSO: Teste de Cloud Logging concluído com êxito! ***")
+        logger.debug("\n*** SUCESSO: Teste de Cloud Logging concluído com êxito! ***")
 
     except Exception as e:
-        print(f"\n--- FALHA no Teste Cloud Logging: {test_identifier} ---")
-        print(f"Erro: {e}")
+        logger.debug(f"\n--- FALHA no Teste Cloud Logging: {test_identifier} ---")
+        logger.debug(f"Erro: {e}")
         import traceback
         traceback.print_exc()
-        print("---------------------------------------------------------")
+        logger.debug("---------------------------------------------------------")
         return # Retorna em caso de falha
 
     finally:
         # --- 6. Limpeza (Opcional) ---
-        print("\nPasso 6: Limpeza (Removendo log de teste do Storage)...")
+        logger.debug("\nPasso 6: Limpeza (Removendo log de teste do Storage)...")
         input("Pressione Enter para prosseguir...")
         # ATENÇÃO: Habilite com cuidado. Garanta que `expected_cloud_path_str` está correto.
         cleanup_enabled = True # Mude para False para manter o log no bucket após o teste
         if cleanup_enabled and expected_cloud_path_str and fb_manager_instance:
             try:
-                print(f"Tentando deletar: {expected_cloud_path_str}")
+                logger.debug(f"Tentando deletar: {expected_cloud_path_str}")
                 fb_manager_instance.delete_file(expected_cloud_path_str) # Supondo que seu manager tenha delete_file
-                print("Log de teste removido do Firebase Storage.")
+                logger.debug("Log de teste removido do Firebase Storage.")
             except Exception as e:
-                print(f"AVISO TESTE: Falha ao deletar log de teste '{expected_cloud_path_str}' do Storage: {e}")
+                logger.debug(f"AVISO TESTE: Falha ao deletar log de teste '{expected_cloud_path_str}' do Storage: {e}")
         elif not cleanup_enabled:
-             print("Limpeza desabilitada. O arquivo de log permanecerá no Storage.")
+             logger.debug("Limpeza desabilitada. O arquivo de log permanecerá no Storage.")
         else:
-             print("Limpeza não realizada (sem path esperado ou sem fb_manager).")
+             logger.debug("Limpeza não realizada (sem path esperado ou sem fb_manager).")
 
-        print(f"--- Fim do Teste Cloud Logging: {test_identifier} ---")
+        logger.debug(f"--- Fim do Teste Cloud Logging: {test_identifier} ---")
 
 # Executar o teste
 # A partir de >>> python -i teste.py
@@ -742,4 +744,4 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
 
 
 execution_time = perf_counter() - start_time
-print(f"Carregado LOGGER em {execution_time:.4f}s")
+logger.info(f"Carregado LOGGER em {execution_time:.4f}s")
