@@ -52,6 +52,7 @@ def load_default_analysis_settings(page: ft.Page):
         logger.warning("load_default_analysis_settings: Token/ID de usuário não encontrado. Usando fallbacks.")
         page.session.set(KEY_SESSION_LOADED_LLM_PROVIDERS, []) # Lista vazia de provedores
         page.session.set(KEY_SESSION_USER_LLM_PREFERENCES, {}) # Prefs vazias
+        page.session.set(KEY_SESSION_MODEL_EMBEDDINGS_LIST, []) #
         page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS.copy())
         page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
         return

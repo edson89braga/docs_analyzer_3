@@ -473,6 +473,9 @@ def handle_logout(page: ft.Page) -> None:
         LoggerSetup.set_cloud_user_context(None, None)
         logger.debug("Contexto do logger de nuvem limpo.") # Alterado de info para debug, pois é uma ação interna.
 
+        from src.utils import clear_user_cache
+        clear_user_cache(page)
+        
         page.go("/login")
 
     if threading.current_thread() is threading.main_thread():

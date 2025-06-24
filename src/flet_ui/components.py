@@ -1058,6 +1058,7 @@ class CardWithHeader(ft.Card):
             ),
             bgcolor=header_bgcolor,
             padding=header_padding,
+            expand=True
             #border_radius=ft.border_radius.only(top_left=self.border_radius.top_left if self.border_radius else 5, top_right=self.border_radius.top_right if self.border_radius else 5)
         )
 
@@ -1069,10 +1070,10 @@ class CardWithHeader(ft.Card):
                 self.header_container,
                 ft.Container( # Container para o conteúdo principal, para adicionar padding, etc.
                     content=self.main_content,
-                    padding=16 # Padding padrão para o conteúdo do card
+                    expand=True, padding=16 # Padding padrão para o conteúdo do card
                 )
             ],
-            spacing=0 # Sem espaço entre header e content_container
+            expand=True, spacing=0 # Sem espaço entre header e content_container
         )
 
     def update_title(self, new_title: str):

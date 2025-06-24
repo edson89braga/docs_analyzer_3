@@ -35,6 +35,20 @@ from src.flet_ui.app import main
 from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR 
 from src.utils import register_temp_files_cleanup, check_app_version
 
+import threading
+def load_to_utils():
+    # Antecipando, sob load_progressing_gui, outros imports que serão utilizados em utils.py:
+    start_time_l = perf_counter()
+    logger.info("[DEBUG] Start func.: load_to_utils")
+    import unicodedata
+    import pdfplumber, fitz
+    from unidecode import unidecode
+    from sentence_transformers import SentenceTransformer
+    execution_time_l = perf_counter() - start_time_l
+    logger.info(f"[DEBUG] Finish func.: load_to_utils em {execution_time_l:.4f}s")
+
+threading.Thread(target=load_to_utils, daemon=True).start()
+
 execution_time = perf_counter() - start_time
 logger.info(f"[DEBUG] Carregado RUN em {execution_time:.4f}s")
 

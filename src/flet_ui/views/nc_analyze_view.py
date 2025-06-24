@@ -23,7 +23,6 @@ from src.flet_ui.components import (
 )
 from src.flet_ui import theme
 
-
 from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR, cotacao_dolar_to_real,
                           KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, 
                           FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_LOADED_LLM_PROVIDERS,
@@ -50,19 +49,12 @@ from src.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
 import src.core.ai_orchestrator as ai_orchestrator 
 from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
 
-# Antecipando, sob load_progressing_gui, outros imports que serão utilizados em utils.py:
-import unicodedata
-import pdfplumber, fitz
-from unidecode import unidecode
-from sentence_transformers import SentenceTransformer
-
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
 municipios_list = get_municipios_por_uf_cached()
 
 firestore_client = FirebaseClientFirestore()
 
-parcial_time = perf_counter() - start_time
-logger.info(f"[DEBUG] Carregamento pesado dentro de NC_ANALYZE_VIEW em {parcial_time:.4f}s")
+logger.info(f"[DEBUG] Carregamento pesado dentro de NC_ANALYZE_VIEW em {perf_counter()-start_time:.4f}s")
 
 from src.utils import _SERVER_SIDE_CACHE, get_user_cache, clear_user_cache
 
@@ -2791,6 +2783,7 @@ class LLMStructuredResultDisplay(ft.Column):
             scroll=ft.ScrollMode.ADAPTIVE,
             expand=True,
             spacing=12,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             #horizontal_alignment=ft.CrossAxisAlignment.CENTER # Centraliza os cards
         )
         self.page = page
@@ -2953,15 +2946,15 @@ class LLMStructuredResultDisplay(ft.Column):
         self.gui_fields.clear()
  
         # --- Seção 1: Identificação do Documento ---
-        self.gui_fields["descricao_geral"] = ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, width=1600)
+        self.gui_fields["descricao_geral"] = ft.TextField(label="Descrição Geral", value=self.data.descricao_geral, multiline=True, min_lines=2, dense=True, expand=True) # , width=1600
         self.gui_fields["tipo_documento_origem"] = ft.Dropdown(label="Tipo Documento Origem",
                                                                options=[ft.dropdown.Option(td) for td in tipos_doc],
                                                                value=self.data.tipo_documento_origem if self.data.tipo_documento_origem in tipos_doc else "",
-                                                               width=475, dense=True)
+                                                               dense=True, expand=True) # width=475, 
         self.gui_fields["orgao_origem"] = ft.Dropdown(label="Órgão de Origem",
                                                       options=[ft.dropdown.Option(oo) for oo in origens_doc],
                                                       value=self.data.orgao_origem if self.data.orgao_origem in origens_doc else "",
-                                                      width=480, dense=True) # Removido expand=True
+                                                      dense=True, expand=True) # width=480,
  
         self.dropdown_uf_origem = ft.Dropdown(
             label="UF de Origem", options=[ft.dropdown.Option(uf) for uf in ufs_list],
@@ -2976,7 +2969,7 @@ class LLMStructuredResultDisplay(ft.Column):
             label="Município de Origem",
             options=[ft.dropdown.Option(m) for m in municipios_origem_init],
             value=municipio_origem if municipio_origem else "",
-            dense=True, width=320, # Removido expand=True
+            dense=True, width=320
         )
         self.gui_fields["municipio_origem"] = self.dropdown_municipio_origem
         
@@ -2985,9 +2978,9 @@ class LLMStructuredResultDisplay(ft.Column):
         id_doc_card_content = ft.Column([
             ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["descricao_geral"]])]),
             ft.ResponsiveRow([
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["tipo_documento_origem"], self._create_justificativa_icon(self.data.justificativa_tipo_documento_origem)], alignment=ft.MainAxisAlignment.START, wrap=False)]),
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["orgao_origem"], self._create_justificativa_icon(self.data.justificativa_orgao_origem)], alignment=ft.MainAxisAlignment.START, wrap=False)]),
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.dropdown_uf_origem, self.dropdown_municipio_origem, self._create_justificativa_icon(self.data.justificativa_municipio_uf_origem)], spacing=5, wrap=True, alignment=ft.MainAxisAlignment.START)])
+                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["tipo_documento_origem"], self._create_justificativa_icon(self.data.justificativa_tipo_documento_origem)], alignment=ft.MainAxisAlignment.START, wrap=False, expand=True)]),
+                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["orgao_origem"], self._create_justificativa_icon(self.data.justificativa_orgao_origem)], alignment=ft.MainAxisAlignment.START, wrap=False, expand=True)]),
+                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.dropdown_uf_origem, self.dropdown_municipio_origem, self._create_justificativa_icon(self.data.justificativa_municipio_uf_origem)], spacing=5, wrap=True, alignment=ft.MainAxisAlignment.START, expand=True)])
             ], vertical_alignment=ft.CrossAxisAlignment.START)
         ], spacing=12)
         
@@ -2995,7 +2988,7 @@ class LLMStructuredResultDisplay(ft.Column):
         self.controls.append(id_doc_card)
  
         # --- Seção 2: Detalhes do Fato ---
-        self.gui_fields["resumo_fato"] = ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, width=1600)
+        self.gui_fields["resumo_fato"] = ft.TextField(label="Resumo do Fato", value=self.data.resumo_fato, multiline=True, min_lines=3, dense=True, expand=True) # width=1600
         
         self.dropdown_uf_fato = ft.Dropdown(
             label="UF do Fato", options=[ft.dropdown.Option(uf) for uf in ufs_list],
@@ -3010,7 +3003,7 @@ class LLMStructuredResultDisplay(ft.Column):
             label="Município do Fato",
             options=[ft.dropdown.Option(m) for m in municipios_fato_init],
             value=municipio_fato if municipio_fato else "",
-            dense=True, width=320, # Removido expand=True
+            dense=True, width=320
         )
         self.gui_fields["municipio_fato"] = self.dropdown_municipio_fato
         self._atualizar_municipios_fato()
@@ -3018,21 +3011,23 @@ class LLMStructuredResultDisplay(ft.Column):
         self.gui_fields["tipo_local"] = ft.Dropdown(label="Tipo de Local",
                                                     options=[ft.dropdown.Option(tl) for tl in tipos_locais],
                                                     value=self.data.tipo_local if self.data.tipo_local in tipos_locais else "",
-                                                    width=480, dense=True) # expand=True
+                                                    dense=True, expand=True) # width=480, 
         
         valor_apuracao_str = f"{self.data.valor_apuracao:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if isinstance(self.data.valor_apuracao, float) else str(self.data.valor_apuracao)
         self.gui_fields["valor_apuracao"] = ft.TextField(label="Valor da Apuração (R$)", value=valor_apuracao_str, keyboard_type=ft.KeyboardType.NUMBER,
-                                                         width=475, prefix_text="R$ ", dense=True)
+                                                         prefix_text="R$ ", dense=True, expand=True) # width=475, 
         
-        self.gui_fields["pessoas_envolvidas"] = ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, width=1600)
-        self.gui_fields["linha_do_tempo"] = ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, width=1600)
+        self.gui_fields["pessoas_envolvidas"] = ft.TextField(label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", multiline=True, min_lines=2, 
+                                                             hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", dense=True, expand=True) # , width=1600
+        self.gui_fields["linha_do_tempo"] = ft.TextField(label="Linha do Tempo (Evento - Data)", value="\n".join(self.data.linha_do_tempo) if self.data.linha_do_tempo else "", multiline=True, min_lines=2, 
+                                                         hint_text="Um evento por linha: Descrição do Evento - DD/MM/AAAA", dense=True, expand=True) # width=1600
  
         det_fato_card_content = ft.Column([
             ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["resumo_fato"]])]),
             ft.ResponsiveRow([
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.dropdown_uf_fato, self.dropdown_municipio_fato, self._create_justificativa_icon(self.data.justificativa_municipio_uf_fato)], spacing=5, wrap=True, alignment=ft.MainAxisAlignment.START)]),
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["tipo_local"], self._create_justificativa_icon(self.data.justificativa_tipo_local)], alignment=ft.MainAxisAlignment.START)]),
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["valor_apuracao"], self._create_justificativa_icon(self.data.justificativa_valor_apuracao)], alignment=ft.MainAxisAlignment.START)]),
+                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.dropdown_uf_fato, self.dropdown_municipio_fato, self._create_justificativa_icon(self.data.justificativa_municipio_uf_fato)], spacing=5, wrap=True, alignment=ft.MainAxisAlignment.START, expand=True)]),
+                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["tipo_local"], self._create_justificativa_icon(self.data.justificativa_tipo_local)], alignment=ft.MainAxisAlignment.START, expand=True)]),
+                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["valor_apuracao"], self._create_justificativa_icon(self.data.justificativa_valor_apuracao)], alignment=ft.MainAxisAlignment.START, expand=True)]),
             ], vertical_alignment=ft.CrossAxisAlignment.START),
             ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["pessoas_envolvidas"]])]),
             ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["linha_do_tempo"]])]),
@@ -3044,39 +3039,103 @@ class LLMStructuredResultDisplay(ft.Column):
         # --- Seção 3: Classificação e Encaminhamento ---
         self.gui_fields["area_atribuicao"] = ft.Dropdown(label="Área de Atribuição", options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição],
                                                          value=self.data.area_atribuicao if self.data.area_atribuicao in areas_de_atribuição else "",
-                                                         width=475, dense=True)
+                                                         dense=True, expand=True, col=4) # width=475, 
         self.gui_fields["destinacao"] = ft.Dropdown(label="Destinação", options=[ft.dropdown.Option(d) for d in destinacoes_completas],
                                                     value=self.data.destinacao if self.data.destinacao in destinacoes_completas else "",
-                                                    width=480, dense=True)
+                                                    dense=True, expand=True, col=4) # width=480, 
         self.gui_fields["tipo_a_autuar"] = ft.Dropdown(label="Tipo a Autuar", options=[ft.dropdown.Option(ta) for ta in tipos_a_autuar],
                                                        value=self.data.tipo_a_autuar if self.data.tipo_a_autuar in tipos_a_autuar else "",
-                                                       width=475, dense=True)
-        self.gui_fields["tipificacao_penal"] = ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, width=475, dense=True, height=58)
+                                                       dense=True, expand=True, col=4) # width=475, 
+        self.gui_fields["tipificacao_penal"] = ft.TextField(label="Tipificação Penal", value=self.data.tipificacao_penal, height=58, expand=True) # width=475, 
         self.gui_fields["materia_especial"] = ft.Dropdown(label="Tratamento especial", options=[ft.dropdown.Option(mp) for mp in materias_prometheus],
                                                     value=self.data.materia_especial if self.data.materia_especial in materias_prometheus else "",
-                                                    width=480, dense=True)
+                                                    expand=True) # width=480, 
         self.gui_fields["assunto_re"] = ft.Dropdown(label="Assunto (RE)", options=[ft.dropdown.Option(ar) for ar in assuntos_re],
                                                     value=self.data.assunto_re if self.data.assunto_re in assuntos_re else "",
-                                                    width=475, dense=True)
+                                                    expand=True) # width=475, 
  
         class_enc_card_content = ft.Column([
-            ft.ResponsiveRow([
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["area_atribuicao"], self._create_justificativa_icon(self.data.justificativa_area_atribuicao)], alignment=ft.MainAxisAlignment.START)]),
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["destinacao"], self._create_justificativa_icon(self.data.justificativa_destinacao)], alignment=ft.MainAxisAlignment.START)]),
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["tipo_a_autuar"], self._create_justificativa_icon(self.data.justificativa_tipo_a_autuar)], alignment=ft.MainAxisAlignment.START)]),
-            ], vertical_alignment=ft.CrossAxisAlignment.START),
-            ft.ResponsiveRow([
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["tipificacao_penal"], self._create_justificativa_icon(self.data.justificativa_tipificacao_penal)], alignment=ft.MainAxisAlignment.START)]),
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["materia_especial"], self._create_justificativa_icon(self.data.justificativa_materia_especial)], alignment=ft.MainAxisAlignment.START)]),
-                ft.Column(col={"lg": 4, "md": 12, "sm": 12}, controls=[ft.Row([self.gui_fields["assunto_re"], self._create_justificativa_icon(self.data.justificativa_assunto_re)], alignment=ft.MainAxisAlignment.START)]),
-            ], vertical_alignment=ft.CrossAxisAlignment.START),
-        ], spacing=12)
- 
+            ft.ResponsiveRow(
+                controls=[
+                    ft.Column(
+                        col={"lg": 4, "md": 6, "sm": 12},
+                        controls=[
+                            ft.Row( # Row é filha direta da Column da grade
+                                controls=[
+                                    self.gui_fields["area_atribuicao"], # Este tem expand=True
+                                    self._create_justificativa_icon(self.data.justificativa_area_atribuicao)
+                                ], expand=True
+                            )
+                        ], horizontal_alignment=ft.CrossAxisAlignment.STRETCH
+                    ),
+                    ft.Column(
+                        col={"lg": 4, "md": 6, "sm": 12},
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    self.gui_fields["destinacao"], 
+                                    self._create_justificativa_icon(self.data.justificativa_destinacao)
+                                ], expand=True
+                            )
+                        ], horizontal_alignment=ft.CrossAxisAlignment.STRETCH
+                    ),
+                    ft.Column(
+                        col={"lg": 4, "md": 6, "sm": 12},
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    self.gui_fields["tipo_a_autuar"], # Este tem expand=True
+                                    self._create_justificativa_icon(self.data.justificativa_tipo_a_autuar)
+                                ], expand=True
+                            )
+                        ], horizontal_alignment=ft.CrossAxisAlignment.STRETCH
+                    ),
+                ]
+            ),
+            ft.ResponsiveRow(
+                controls=[
+                    ft.Column(
+                        col={"lg": 4, "md": 6, "sm": 12},
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    self.gui_fields["tipificacao_penal"], # Este tem expand=True
+                                    self._create_justificativa_icon(self.data.justificativa_tipificacao_penal)
+                                ], expand=True
+                            )
+                        ], horizontal_alignment=ft.CrossAxisAlignment.STRETCH
+                    ),
+                    ft.Column(
+                        col={"lg": 4, "md": 6, "sm": 12},
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    self.gui_fields["materia_especial"], # Este tem expand=True
+                                    self._create_justificativa_icon(self.data.justificativa_materia_especial)
+                                ], expand=True
+                            )
+                        ], horizontal_alignment=ft.CrossAxisAlignment.STRETCH
+                    ),
+                    ft.Column(
+                        col={"lg": 4, "md": 6, "sm": 12},
+                        controls=[
+                            ft.Row(
+                                controls=[
+                                    self.gui_fields["assunto_re"], # Este tem expand=True
+                                    self._create_justificativa_icon(self.data.justificativa_assunto_re)
+                                ], expand=True
+                            )
+                        ], horizontal_alignment=ft.CrossAxisAlignment.STRETCH
+                    ),
+                ]
+            ),
+        ], spacing=12, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+
         class_enc_card = CardWithHeader(title="Classificação e Encaminhamento", content=class_enc_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), expand=True) # width=1640
         self.controls.append(class_enc_card)
  
         # --- Seção 4: Observações ---
-        self.gui_fields["observacoes"] = ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, width=1600)
+        self.gui_fields["observacoes"] = ft.TextField(label="Observações", value=self.data.observacoes, multiline=True, min_lines=2, dense=True, expand=True) # , width=1600
         obs_card_content = ft.Column([ft.ResponsiveRow([ft.Column(col=12, controls=[self.gui_fields["observacoes"]])])], spacing=10)
  
         obs_card = CardWithHeader(title="Observações Adicionais", content=obs_card_content, header_bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), expand=True) # width=1640  # header_bgcolor=ft.Colors.GREY_300
