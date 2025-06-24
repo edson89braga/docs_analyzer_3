@@ -49,18 +49,6 @@ import flet as ft
 # Importa a função 'main' do seu módulo app dentro de flet_ui
 from src.flet_ui.app import main
 
-# Silencia logs de bibliotecas 
-logging.getLogger("flet_core").setLevel(logging.WARNING)
-logging.getLogger("flet_runtime").setLevel(logging.WARNING)
-logging.getLogger("flet_web").setLevel(logging.WARNING)
-logging.getLogger("flet").setLevel(logging.WARNING)
-logging.getLogger("websockets").setLevel(logging.WARNING)
-logging.getLogger("watchdog").setLevel(logging.WARNING)
-logging.getLogger("uvicorn").setLevel(logging.INFO) # Pode voltar para INFO se o patch funcionar
-logging.getLogger("uvicorn.error").setLevel(logging.INFO)
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING) # Manter acesso em WARNING
-logging.getLogger("starlette").setLevel(logging.WARNING)
-
 from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR 
 from src.utils import register_temp_files_cleanup, check_app_version
 

@@ -1,8 +1,6 @@
 ======================================================================================
 # TODO: Próximas Tarefas:
 
-> revisar sistemática do logging;
-> Subir prompts para firestore
 > pyinstaller e testes na rede;
 
 -------------------

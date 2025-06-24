@@ -10,7 +10,7 @@ logger.debug(f"{start_time:.4f}s - Iniciando nc_analyze_view.py")
 import flet as ft
 import threading, os, shutil, json
 from typing import Optional, Dict, Any, List, Union, Tuple, Callable
-from time import time, sleep, perf_counter
+from time import time, sleep
 from datetime import datetime
 from enum import Enum
 #from pathlib import Path
@@ -240,7 +240,10 @@ class AnalyzePDFViewContent(ft.Column):
         
         self.user_cache = get_user_cache(self.page)
 
+        start_time_p = perf_counter()
         load_prompts_from_firestore(self.page)
+        execution_time_p = perf_counter() - start_time_p
+        logger.debug(f"Carregado Prompts_from_firestore em {execution_time_p:.4f}s")
 
         self._build_gui_structure()
         self.feedback_workflow_manager = FeedbackWorkflowManager(self.page, self)

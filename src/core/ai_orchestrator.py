@@ -567,8 +567,8 @@ def analyze_text_with_llm(
                         user="Assistant_NC_Analytics" 
                     )
                     dados_segmentados.append(response)
-                    print(f"[DEBUG] Final response for segment: {response.output_text}")
-                    print(f"[DEBUG] Token usage info for segment: {response.usage}\n\n")
+                    #logger.debug(f"Final response for segment: {response.output_text}")
+                    logger.debug(f"Token usage info for segment: {response.usage}\n\n")
                 
                 parser_prompt_final = return_parse_prompt([response.output_text for response in dados_segmentados])
                 
@@ -580,8 +580,8 @@ def analyze_text_with_llm(
                 )
                 dados_segmentados.append(response)
                 
-                print(f"[DEBUG] Final response for segment: {response.output_text}")
-                print(f"[DEBUG] Token usage info for segment: {response.usage}\n\n")
+                #logger.debug(f"Final response for segment: {response.output_text}")
+                logger.debug(f"Token usage info for segment: {response.usage}\n\n")
                 
                 final_response = _get_final_response(dados_segmentados, formatted_initial_analysis)
                 
@@ -629,7 +629,6 @@ def analyze_text_with_llm(
                     "successful_requests": cb.successful_requests,
                     "total_cost_usd": cb.total_cost
                 }
-                print('\n')
                 logger.info(f"Uso de tokens (OpenAI): {token_usage_info}")
             
             # Processar o resultado da cadeia
@@ -669,7 +668,7 @@ def analyze_text_with_llm(
     finally:
         os.environ["OPENAI_API_KEY"] = ""
 
-    print('\n\n', f'final_response: {type(final_response)}\n', final_response, '\n\n')
+    #print('\n\n', f'final_response: {type(final_response)}\n', final_response, '\n\n')
 
     # Normalizações e revisões devem ser feitas aqui
     final_response = normalizing_function(final_response)

@@ -26,14 +26,24 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ModuleFilter(logging.Filter):
-    """Filtro para registrar logs apenas de módulos específicos."""
-    
-    def __init__(self, modules: List[str]):
+    """
+    Filtro para permitir logs apenas de módulos que começam com um
+    dos prefixos especificados.
+    """
+    def __init__(self, prefixes: List[str]):
+        """
+        Inicializa o filtro.
+        Args:
+            prefixes: Uma lista de prefixos de nome de módulo a serem permitidos.
+                      Ex: ['src', 'meu_outro_modulo_raiz']
+        """
         super().__init__()
-        self.modules = modules
-    
+        self.prefixes = tuple(prefixes)
+
     def filter(self, record: logging.LogRecord) -> bool:
-        return record.module in self.modules
+        """Permite a passagem do log se o nome do logger começar com algum dos prefixos."""
+        # record.name contém o nome completo do logger (ex: 'src.flet_ui.views.home_view')
+        return record.name.startswith(self.prefixes)
 
 class LoggerSetup:
     """Classe responsável pela configuração e setup de loggers."""
@@ -47,7 +57,7 @@ class LoggerSetup:
     
     # Formato resumido para a saída padrão, sem data e hora
     formatter_resumed = logging.Formatter( # Retirado %(asctime)s pois já vem embutido no RichHandler
-        fmt='%(message)s', 
+        fmt='%(levelname)-8s | %(message)s', 
         datefmt='%H:%M:%S'
     )
     
@@ -170,16 +180,7 @@ class LoggerSetup:
             print(f"Erro ao rotacionar arquivo de log: \n{e}")
 
     @classmethod
-    def _apply_module_filter(cls, logger, modules_to_log):
-        """Aplica o filtro de módulos de forma consistente."""
-        if not modules_to_log:
-            return
-            
-        module_filter = ModuleFilter(modules_to_log)
-        logger.addFilter(module_filter) 
-
-    @classmethod
-    def initialize(cls,
+    def OLD_initialize(cls,
                    routine_name: str,
                    #firebase_client_storage: Optional['FirebaseClientStorage'] = None,
                    #fb_manager_storage_admin: Optional['FbManagerStorage'] = None,
@@ -254,7 +255,6 @@ class LoggerSetup:
                 cls.formatter_detailed, 
                 logging.DEBUG
             )
-        cls._apply_module_filter(file_handler, modules_to_log)
 
         ### console_handler: 
         # Cria o console_handler com o formato resumido
@@ -262,12 +262,9 @@ class LoggerSetup:
 
         ### Logger Root:
         # Cria o logger root
-        logger = logging.getLogger('root')
+        logger = logging.getLogger()
         logger.setLevel(logging.DEBUG)
         logger.handlers.clear()
-
-        # Aplica o filtro de módulos ao logger root se especificado
-        cls._apply_module_filter(logger, modules_to_log)
 
         ### Add handlers:
         # Adiciona os handlers ao logger root
@@ -294,6 +291,97 @@ class LoggerSetup:
         
         # Atualiza todos os loggers já criados
         cls._update_existing_loggers()
+
+    @classmethod
+    def initialize(cls,
+                   routine_name: str,
+                   modules_to_log: Optional[List[str]] = None, # Mantido, mas a nova lógica usa o prefixo 'src'
+                   custom_handler: Optional[logging.Handler] = None,
+                   dev_mode: bool = False) -> None:
+        """
+        Inicializa o logger global. Deve ser chamado uma vez no início do programa.
+        
+        Args:
+            routine_name: Nome da rotina para o arquivo de log.
+            modules_to_log: Lista de prefixos de módulos para filtrar os logs no console. Se None, usa ['src'].
+            custom_handler: Handler personalizado para ser adicionado ao logger.
+            dev_mode: Se True, define o nível do console para DEBUG.
+        """
+        if cls._initialized:
+            # Se já inicializado, apenas loga uma mensagem e retorna para evitar reconfiguração.
+            if cls._instance:
+                cls._instance.debug("LoggerSetup.initialize chamado novamente, mas já inicializado. Ignorando.")
+            return
+
+        # Define o nível do console com base no modo de desenvolvimento
+        console_level = logging.DEBUG if dev_mode else logging.INFO
+
+        # Usamos ['src'] como padrão para filtrar apenas os módulos do seu projeto.
+        allowed_prefixes = modules_to_log if modules_to_log is not None else ['src', '__main__']
+
+        # Cria o nome do arquivo de log com base no nome da rotina
+        safe_routine_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in routine_name)
+        
+        # Rotaciona o log antigo
+        current_date = datetime.now().strftime('%Y-%m-%d')
+        base_log_file = PATH_LOGS / f"{safe_routine_name}.log"
+        dated_log_file = PATH_LOGS / f"{safe_routine_name}_{current_date}.log"
+        cls._rotate_log_file(base_log_file, dated_log_file)
+
+        # Limpa logs mais antigos
+        cls._cleanup_old_log_files(PATH_LOGS, days_to_keep=7)
+
+        # --- Cria Handlers ---
+        file_handler = cls._create_file_handler(
+            base_log_file,
+            cls.formatter_detailed, 
+            logging.DEBUG  # Arquivo sempre em DEBUG
+        )
+        console_handler = cls._create_console_handler(cls.formatter_resumed, console_level)
+
+        if dev_mode and allowed_prefixes:
+            module_filter = ModuleFilter(prefixes=allowed_prefixes)
+            console_handler.addFilter(module_filter)
+            print(f"Filtro de log do console ativado para prefixos: {allowed_prefixes}")
+
+        # --- Silencia Loggers de Bibliotecas de Terceiros ---
+        # Define um nível mais alto para loggers específicos para reduzir o ruído geral.
+        # Isso afeta tanto o console quanto o arquivo, o que é bom.
+        logging.getLogger("flet_core").setLevel(logging.WARNING)
+        logging.getLogger("flet_runtime").setLevel(logging.WARNING)
+        logging.getLogger("flet_web").setLevel(logging.WARNING)
+        logging.getLogger("flet").setLevel(logging.WARNING)
+        logging.getLogger("websockets").setLevel(logging.WARNING)
+        logging.getLogger("watchdog").setLevel(logging.WARNING)
+        logging.getLogger("uvicorn").setLevel(logging.INFO)
+        logging.getLogger("uvicorn.error").setLevel(logging.INFO)
+        logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+        logging.getLogger("starlette").setLevel(logging.WARNING)
+        logging.getLogger("urllib3.connectionpool").setLevel(logging.INFO)
+        logging.getLogger("asyncio").setLevel(logging.INFO)
+        logging.getLogger("keyring.backend").setLevel(logging.INFO)
+
+        # --- Configura o Logger Raiz ---
+        logger = logging.getLogger() # Pega o logger raiz
+        logger.setLevel(logging.DEBUG) # O logger raiz deve ter o nível mais baixo
+        logger.handlers.clear() # Limpa handlers pré-existentes do raiz
+
+        # Adiciona os novos handlers
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+
+        if custom_handler:
+            logger.addHandler(custom_handler)
+
+        cls._instance = logger
+        cls._initialized = True
+        
+        # Atualiza loggers que possam ter sido criados antes da inicialização
+        cls._update_existing_loggers()
+
+        # Loga a mensagem de inicialização
+        init_mode = "MODO DE DESENVOLVIMENTO (DEBUG no console)" if dev_mode else "MODO DE PRODUÇÃO (INFO no console)"
+        logger.info(f"LoggerSetup inicializado com sucesso em {init_mode}.")
 
     @classmethod
     def add_cloud_logging(
@@ -369,7 +457,7 @@ class LoggerSetup:
             # Remove handlers antigos
             logger.handlers.clear()
             # Configura o novo logger com base no root logger
-            if name != 'root':
+            if name is not None:
                 logger.parent = cls._instance
     
     @classmethod
@@ -383,7 +471,7 @@ class LoggerSetup:
         Returns:
             logging.Logger: Logger configurado
         """
-        logger_name = name if name else 'root'
+        logger_name = name 
         
         if logger_name in cls._loggers:
             return cls._loggers[logger_name]
@@ -413,9 +501,10 @@ class LoggerSetup:
 
         cutoff_date = datetime.now() - timedelta(days=days_to_keep)
         files_removed_count = 0
-        logger = cls.get_logger(__name__) # Usa o próprio logger para registrar a ação
+        #logger = cls.get_logger(__name__) # Usa o próprio logger para registrar a ação
+        cleanup_logger = logging.getLogger(__name__)
         
-        logger.info(f"Iniciando limpeza de logs antigos (mais de {days_to_keep} dias) em '{log_dir}'...")
+        cleanup_logger.info(f"Iniciando limpeza de logs antigos (mais de {days_to_keep} dias) em '{log_dir}'...")
 
         # Usa rglob para encontrar arquivos em subdiretórios também
         for file_path in log_dir.rglob('*'):
@@ -429,11 +518,11 @@ class LoggerSetup:
                         files_removed_count += 1
                 except FileNotFoundError:
                     # O arquivo pode ter sido removido por outro processo entre o rglob e o stat/unlink
-                    logger.debug(f"Arquivo '{file_path}' não encontrado durante a limpeza (concorrência?).")
+                    cleanup_logger.debug(f"Arquivo '{file_path}' não encontrado durante a limpeza (concorrência?).")
                 except Exception as e:
-                    logger.error(f"Erro ao tentar remover o arquivo de log antigo '{file_path}': {e}", exc_info=False)
+                    cleanup_logger.error(f"Erro ao tentar remover o arquivo de log antigo '{file_path}': {e}", exc_info=False)
         
-        logger.info(f"Limpeza de logs antigos concluída. {files_removed_count} arquivo(s) removido(s).")
+        cleanup_logger.info(f"Limpeza de logs antigos concluída. {files_removed_count} arquivo(s) removido(s).")
 
     @classmethod
     def cleanup_cloud_logs(cls, storage_manager: FbManagerStorage, days_to_keep: int, dry_run: bool = False):
