@@ -51,6 +51,19 @@ def clear_user_cache(page, preserve_keys: Optional[List[str]] = None):
         del _SERVER_SIDE_CACHE[session_id]
         logger.debug(f"Cache completo do lado do servidor limpo para a sessão {session_id}.")
 
+def get_resource_path(relative_path):
+    """
+    Obtém o caminho correto para recursos/assets tanto em desenvolvimento
+    quanto em ambiente frozen
+    """
+    if getattr(sys, 'frozen', False):
+        # PyInstaller cria uma pasta temporária
+        base_path = sys._MEIPASS
+    else:
+        # Desenvolvimento
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    return os.path.join(base_path, relative_path)
 
 import functools, urllib, ssl
 def with_proxy(skip_ssl_verify: bool = True):
@@ -496,7 +509,7 @@ def update_dict_municipios_local() -> dict[str, list[str]]:
                               Retorna um dicionário vazio em caso de erro.
     """
     import json
-    file_path = os.path.join(ASSETS_DIR_ABS, 'dict_municipios.json')
+    file_path = get_resource_path('assets\\dict_municipios.json')
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     ufs = get_uf_list()
     dict_municipios = {uf: [] for uf in ufs}
@@ -524,7 +537,7 @@ def load_dict_municipios_local() -> dict[str, list[str]]:
     """
     try:
         import json
-        file_path = os.path.join(ASSETS_DIR_ABS, 'dict_municipios.json')
+        file_path = get_resource_path('assets\\dict_municipios.json')
         if os.path.exists(file_path):
             with open(file_path, 'r', encoding='utf-8') as f:
                 return json.load(f)

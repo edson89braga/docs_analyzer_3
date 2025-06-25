@@ -13,6 +13,7 @@ from docx import Document
 
 from src.core.prompts import formatted_initial_analysis # Para type hinting e acesso aos campos
 from src.settings import ASSETS_DIR_ABS # Para acessar a pasta de assets
+from src.utils import get_resource_path
 
 TEMPLATES_SUBDIR = "templates_docx"
 
@@ -25,7 +26,7 @@ class DocxExporter:
         """
         Inicializa o DocxExporter, configurando o diretório de templates.
         """
-        self.templates_dir = os.path.join(ASSETS_DIR_ABS, TEMPLATES_SUBDIR)
+        self.templates_dir = get_resource_path(f"assets\\{TEMPLATES_SUBDIR}")
         os.makedirs(self.templates_dir, exist_ok=True) # Garante que o diretório exista
 
     def _get_field_display_name(self, field_name: str) -> str:

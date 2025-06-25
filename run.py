@@ -130,19 +130,7 @@ def setup_library_fixes():
 
 # ===============================================================================
 # 4. GERENCIAMENTO DE RECURSOS E ASSETS
-def get_resource_path(relative_path):
-    """
-    Obtém o caminho correto para recursos/assets tanto em desenvolvimento
-    quanto em ambiente frozen
-    """
-    if getattr(sys, 'frozen', False):
-        # PyInstaller cria uma pasta temporária
-        base_path = sys._MEIPASS
-    else:
-        # Desenvolvimento
-        base_path = os.path.dirname(os.path.abspath(__file__))
-    
-    return os.path.join(base_path, relative_path)
+# get_resource_path -> movido para utils.py
 
 # ===============================================================================
 # 5. CONFIGURAÇÕES DE REDE E PROXY
@@ -197,7 +185,7 @@ def setup_global_exception_handler():
 def initialize_app():
     """Inicializa todas as configurações necessárias"""
     # Sem pyi_splash
-    
+
     # 1. Configura ambiente frozen
     setup_frozen_environment()
     
@@ -242,6 +230,15 @@ from src.utils import register_temp_files_cleanup
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
+    
+    if getattr(sys, 'frozen', False):
+        # Em modo compilado (PyInstaller), os assets estão na pasta temporária
+        base_path = sys._MEIPASS
+        final_assets_dir = os.path.join(base_path, "assets")
+    else:
+        # Em modo de desenvolvimento, usa o caminho absoluto
+        final_assets_dir = ASSETS_DIR_ABS
+
     register_temp_files_cleanup(UPLOAD_TEMP_DIR)
 
     temp_exports_full_path = os.path.join(ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR)
@@ -256,7 +253,7 @@ if __name__ == "__main__":
         target=main,                 # Função principal a ser executada
         view=ft.AppView.WEB_BROWSER, # Executa como uma aplicação web no navegador padrão
         port=8550,                   # Porta em que a aplicação será servida (ex: http://localhost:8550)
-        assets_dir=ASSETS_DIR_ABS,   # Descomente se você tiver uma pasta 'assets' na raiz
+        assets_dir=final_assets_dir, # Descomente se você tiver uma pasta 'assets' na raiz
         upload_dir=UPLOAD_TEMP_DIR
     )
 

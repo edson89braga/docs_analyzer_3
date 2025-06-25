@@ -37,7 +37,7 @@ from src.settings import (KEY_SESSION_CURRENT_BATCH_NAME, KEY_SESSION_PDF_FILES_
 from src.services.firebase_client import FirebaseClientFirestore, _from_firestore_value
 
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
-                        get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l)
+                        get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l, get_resource_path)
 
 # Outros imports pesados aqui:
 from src.core.prompts import (formatted_initial_analysis, get_prompts_for_initial_analysis)
@@ -104,7 +104,7 @@ def load_prompts_from_firestore(page: ft.Page):
     user_id = page.session.get("auth_user_id")
     user_cache = get_user_cache(page)
 
-    prompts_path = os.path.join(ASSETS_DIR_ABS, 'dict_prompts.json')
+    prompts_path = get_resource_path('assets\\dict_prompts.json')
     os.makedirs(os.path.dirname(prompts_path), exist_ok=True)
 
     loaded_components = None
