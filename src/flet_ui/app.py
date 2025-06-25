@@ -542,6 +542,9 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         
         # Se autenticado, carrega as configurações em uma thread
         if page.session.contains_key("auth_id_token"):
+            from src.utils import check_app_version
+            check_app_version()
+
             logger.debug("Usuário autenticado. Disparando carregamento de settings em background.")
             threading.Thread(target=threaded_load_settings, args=(page,), daemon=True).start()
             

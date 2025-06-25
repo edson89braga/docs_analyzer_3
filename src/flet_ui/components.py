@@ -1914,12 +1914,11 @@ class ManagedAlertDialog(ft.AlertDialog):
         """
         if self.open:
             self.open = False
-            self.page_ref.update(self) # Atualiza apenas o diálogo para processar o open=False
+            self.page_ref.update() # (self) Atualiza apenas o diálogo para processar o open=False
             logger.debug(f"ManagedAlertDialog: Fechamento visual iniciado. Agendando finalização.")
             threading.Timer(self.close_delay_seconds, self._finish_close_action).start()
         else:
              logger.debug("ManagedAlertDialog: _trigger_close_with_timer chamado, mas diálogo já estava fechado.")
-
 
     def _finish_close_action(self):
         """
@@ -1943,7 +1942,6 @@ class ManagedAlertDialog(ft.AlertDialog):
             if update_lock:
                 with update_lock: self.page_ref.update()
             else: self.page_ref.update()
-
 
     def show(self):
         """Adiciona ao overlay (se não estiver) e abre o diálogo."""

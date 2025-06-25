@@ -7,8 +7,6 @@ logger.debug(f"{start_time:.4f}s - Iniciando pdf_processor.py")
 
 DEBUG_MODE = False
 
-from src.utils import timing_decorator
-
 ### nltk_initializer:
 import nltk
 import warnings

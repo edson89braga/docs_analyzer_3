@@ -26,7 +26,7 @@ from langchain_community.callbacks.manager import get_openai_callback
 # Imports do Projeto
 from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 
-from src.utils import timing_decorator
+from src.utils import with_proxy
 from src.core.prompts import (output_formats, review_function, normalizing_function, # prompts
                                 formatted_initial_analysis, try_convert_to_pydantic_format, return_parse_prompt)
 
@@ -242,7 +242,7 @@ def criar_batches(
 
 client_openai = None
 
-@timing_decorator()
+@with_proxy()
 def get_embeddings_from_api(
     pages_texts: List[str],
     model_embedding: str = 'text-embedding-3-small',
@@ -482,7 +482,7 @@ def _get_token_usage_info(dados_segmentados: List[Any], waited_cached_tokens: in
     return token_usage_info
 
 # --- Função Principal de Análise ---
-@timing_decorator()
+@with_proxy()
 def analyze_text_with_llm(
         prompt_name: str,
         prompts: Dict[str, List],

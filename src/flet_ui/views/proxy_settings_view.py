@@ -1,4 +1,7 @@
 # src/flet_ui/views/proxy_settings_view.py
+
+### Por ora, módulo DESCONTINUADO para voltar a usar o show_proxy_settings_dialog em dialog.py.
+
 import flet as ft
 from typing import Optional
 

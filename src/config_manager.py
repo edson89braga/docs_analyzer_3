@@ -98,6 +98,7 @@ def save_proxy_settings(config: Dict[str, Any]) -> bool:
         password_to_save = config.get(K_PROXY_PASSWORD) # Pega a senha vinda da UI, além do resultado do checkbox passwd_saved
 
         if username:
+            username = username.split('@')[0]
             logger.info("Salvando username do proxy no Keyring.")
             keyring.set_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME, username)
             if password_to_save:

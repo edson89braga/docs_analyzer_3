@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any
 from src.settings import PATH_IMAGE_LOGO_DEPARTAMENTO, APP_TITLE, APP_VERSION
 
 from src.services.firebase_client import FbManagerAuth # Ajuste o caminho se FbManagerAuth estiver em outro lugar
+from src.flet_ui.layout import show_proxy_settings_dialog
 from src.flet_ui.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField
 from src.flet_ui import theme # Para cores de erro, etc.
 from src.logger.logger import LoggerSetup
@@ -85,6 +86,13 @@ def create_login_view(page: ft.Page) -> ft.View:
     )
 
     remember_me_checkbox = ft.Checkbox(label="Lembrar de mim", value=True) # Default True
+
+    proxy_settings_button = ft.ElevatedButton(
+        "Configurações de Proxy",
+        icon=ft.icons.NETWORK_CHECK_ROUNDED,
+        #icon=ft.icons.SETTINGS_ETHERNET_ROUNDED,
+        on_click=lambda _: show_proxy_settings_dialog(page)
+    )
 
     def _resend_verification_email(id_token: str):
         """
@@ -259,6 +267,9 @@ def create_login_view(page: ft.Page) -> ft.View:
 
                 logger.info(f"Contexto do logger de nuvem atualizado para usuário {user_id}.")
 
+                from src.utils import check_app_version
+                check_app_version()
+
                 page.go("/home")
 
             else: # Falha na autenticação
@@ -386,6 +397,8 @@ def create_login_view(page: ft.Page) -> ft.View:
             ft.Container(height=10),
             ft.Row([forgot_password_button], alignment=ft.MainAxisAlignment.CENTER),
             ft.Row([create_account_button], alignment=ft.MainAxisAlignment.CENTER),
+            ft.Container(height=15),
+            ft.Row([proxy_settings_button], alignment=ft.MainAxisAlignment.CENTER),
         ],
         width=400, # Largura do card de login
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,

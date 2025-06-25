@@ -238,6 +238,30 @@ Para mais detalhes, consulte:
             color=theme.COLOR_WARNING
         )
 
+    def handle_proxy_settings_click(e: ft.ControlEvent):
+        """
+        Exibe um SnackBar informando que as configurações de proxy são
+        gerenciadas na tela de login e oferece uma ação para deslogar.
+        """
+        logger.debug("Item de menu 'Configs. Proxy' clicado.")
+        snackbar = page.data.get("global_snackbar")
+        if snackbar:
+            snackbar.content = ft.Text("Configurações de Proxy são gerenciadas na tela de Login.")
+            snackbar.action = "SAIR E CONFIGURAR"
+            # handle_logout já está disponível neste escopo
+            snackbar.on_action = lambda _: handle_logout(page)
+            snackbar.bgcolor = theme.COLOR_INFO
+            snackbar.duration = 8000
+            snackbar.open = True
+            
+            # Garante a atualização da UI de forma segura
+            update_lock = page.data.get("global_update_lock")
+            if update_lock:
+                with update_lock:
+                    page.update()
+            else:
+                page.update()
+
     user_display_name = page.session.get("auth_display_name") or \
                         (page.client_storage.get("auth_display_name") if page.client_storage else None)
 
@@ -271,7 +295,8 @@ Para mais detalhes, consulte:
                 ft.PopupMenuItem(text="Perfil", icon=ft.Icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")),
                 ft.PopupMenuItem(text="Histórico de Uso", icon=ft.Icons.HISTORY, on_click=show_history_placeholder),
                 ft.PopupMenuItem(text="Provedores LLM", icon=ft.Icons.MODEL_TRAINING_OUTLINED, on_click=lambda _: page.go("/settings/llm")),
-                ft.PopupMenuItem(text="Configs. Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=lambda _: page.go("/settings/proxy")),
+                #ft.PopupMenuItem(text="Configs. Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=lambda _: page.go("/settings/proxy")),
+                ft.PopupMenuItem(text="Configs. Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=handle_proxy_settings_click),
                 ft.PopupMenuItem(text="Termos e Condições", icon=ft.Icons.POLICY_OUTLINED, on_click=show_terms_dialog),
                 ft.PopupMenuItem(),
                 ft.PopupMenuItem(text="Sair", icon=ft.Icons.LOGOUT, on_click=lambda _: handle_logout(page))
@@ -413,7 +438,7 @@ def create_footer(page: ft.Page) -> ft.BottomAppBar:
     )
 
 import threading
-from src.flet_ui.components import hide_loading_overlay
+from src.flet_ui.components import show_loading_overlay, hide_loading_overlay
 from src.logger.cloud_logger_handler import ClientLogUploader
 
 def handle_logout(page: ft.Page) -> None:
@@ -501,6 +526,7 @@ def show_proxy_settings_dialog(page: ft.Page) -> None:
     from src.settings import (K_PROXY_ENABLED, K_PROXY_PASSWORD_SAVED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, K_PROXY_PASSWORD,
                             PROXY_URL_DEFAULT, PROXY_PORT_DEFAULT)
     from src.config_manager import get_proxy_settings, save_proxy_settings
+    from src.utils import test_connection
 
     def host_validator(value: str) -> Optional[str]:
         """
@@ -574,6 +600,47 @@ def show_proxy_settings_dialog(page: ft.Page) -> None:
     save_password_checkbox = ft.Checkbox(
         label="Salvar Senha",
         value=current_settings.get(K_PROXY_PASSWORD_SAVED, False)
+    )
+
+    def handle_test_connection_click(e: ft.ControlEvent):
+        show_loading_overlay(page, "Testando conexão...")
+        
+        is_proxy_enabled_in_ui = proxy_enabled_switch.value
+
+        # Salva temporariamente as configurações da GUI para o teste sem persistir no keyring ainda.
+        temp_settings = {
+            K_PROXY_ENABLED: is_proxy_enabled_in_ui,
+            K_PROXY_IP_URL: proxy_host_field.value,
+            K_PROXY_PORT: proxy_port_field.value,
+            K_PROXY_USERNAME: proxy_user_field.value,
+            K_PROXY_PASSWORD_SAVED: save_password_checkbox.value
+        }
+        if proxy_password_field.value:
+            temp_settings[K_PROXY_PASSWORD] = proxy_password_field.value
+        
+        # Salva as configurações para que @with_proxy as veja
+        save_proxy_settings(temp_settings)
+        
+        result = test_connection(use_proxy=is_proxy_enabled_in_ui)
+        
+        hide_loading_overlay(page)
+        
+        if result["success"]:
+            show_snackbar(page, result["message"], color=theme.COLOR_SUCCESS)
+            logger.info(f"Result[message]: {result['message']}")
+        else:
+            show_snackbar(page, result["message"], color=theme.COLOR_ERROR, duration=7000)
+            logger.warning(f"Result[message]: {result['message']}")
+        
+        # Retorna um valor que NÃO seja False para sinalizar ao ManagedAlertDialog que feche.
+        return {"action": "tested"}
+
+    # --- Criação do botão de teste ---
+    test_connection_button = ft.ElevatedButton(
+        "Testar Conexão",
+        icon=ft.icons.NETWORK_CHECK_ROUNDED,
+        on_click=handle_test_connection_click,
+        width=200
     )
 
     def on_save_button_click(e: ft.ControlEvent) -> Optional[Dict[str, Any]]:
@@ -692,10 +759,12 @@ def show_proxy_settings_dialog(page: ft.Page) -> None:
         elif result_data == "cancelled":
             logger.debug("Operação de proxy cancelada pelo usuário.")
 
-    actions_list = [
-        ft.ElevatedButton("Cancelar", on_click=on_cancel_button_click, data="cancel_action_completed", width=150),
-        ft.ElevatedButton("Salvar", on_click=on_save_button_click, data="save_action_completed", width=150),
-        ft.ElevatedButton("Remover Tudo", on_click=on_delete_button_click, data="delete_action_completed", tooltip="Limpa todas as configurações de proxy salvas.", width=150)
+    actions_list = [    
+        test_connection_button,
+        ft.Container(expand=True),
+        ft.ElevatedButton("Salvar", on_click=on_save_button_click, data="save_action_completed", width=120),
+        ft.ElevatedButton("Resetar Dados", on_click=on_delete_button_click, data="delete_action_completed", tooltip="Limpa todas as configurações de proxy salvas.", width=120),
+        ft.ElevatedButton("Cancelar", on_click=on_cancel_button_click, data="cancel_action_completed", width=120),
     ]
 
     dialog_content_column = ft.Column(
@@ -704,8 +773,10 @@ def show_proxy_settings_dialog(page: ft.Page) -> None:
         proxy_port_field,
         proxy_user_field,
         ft.Row([proxy_password_field, save_password_checkbox], expand=True),
-        ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
-        security_warning_text
+        ft.Divider(height=8, color=ft.Colors.TRANSPARENT),
+        security_warning_text,
+        #ft.Divider(height=8, color=ft.colors.TRANSPARENT),
+        #ft.Row([test_connection_button], alignment=ft.MainAxisAlignment.CENTER),
         ],
         tight=True, scroll=ft.ScrollMode.ADAPTIVE, width=560
     )

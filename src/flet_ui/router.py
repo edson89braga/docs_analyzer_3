@@ -49,7 +49,7 @@ _view_module_map = {
     "/signup": ("src.flet_ui.views.signup_view", "create_signup_view"),
     "/home": ("src.flet_ui.views.home_view", "create_home_view2"),
     "/profile": ("src.flet_ui.views.profile_view", "create_profile_view"),
-    "/settings/proxy": ("src.flet_ui.views.proxy_settings_view", "create_proxy_settings_content"),
+    #"/settings/proxy": ("src.flet_ui.views.proxy_settings_view", "create_proxy_settings_content"),
     "/settings/llm": ("src.flet_ui.views.llm_settings_view", "create_llm_settings_view"),
     "/analyze_pdf": ("src.flet_ui.views.nc_analyze_view", "create_analyze_pdf_content"),
     "/chat_pdf": ("src.flet_ui.views.others_view", "create_chat_pdf_content"),

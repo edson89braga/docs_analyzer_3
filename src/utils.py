@@ -74,12 +74,18 @@ def with_proxy(skip_ssl_verify: bool = True):
         def wrapper(*args, **kwargs):
             """A função wrapper que aplica e restaura as configurações."""
             # Salva o estado original do ambiente e SSL
-            previous_http_proxy = os.environ.get('HTTP_PROXY', '')
-            previous_https_proxy = os.environ.get('HTTPS_PROXY', '')
-            previous_wdm_ssl_verify = os.environ.get('WDM_SSL_VERIFY', '') # Era '1', mas '' é mais seguro como padrão não definido
-            previous_pyhttps_verify = os.environ.get('PYTHONHTTPSVERIFY', '') # Era '1', mas '' é mais seguro
-            previous_ssl_cert_file = os.environ.get('SSL_CERT_FILE', '')
-            previous_requests_ca = os.environ.get('REQUESTS_CA_BUNDLE', '')
+            # previous_http_proxy = os.environ.get('HTTP_PROXY', '')
+            # previous_https_proxy = os.environ.get('HTTPS_PROXY', '')
+            # previous_wdm_ssl_verify = os.environ.get('WDM_SSL_VERIFY', '') # Era '1', mas '' é mais seguro como padrão não definido
+            # previous_pyhttps_verify = os.environ.get('PYTHONHTTPSVERIFY', '') # Era '1', mas '' é mais seguro
+            # previous_ssl_cert_file = os.environ.get('SSL_CERT_FILE', '')
+            # previous_requests_ca = os.environ.get('REQUESTS_CA_BUNDLE', '')
+
+            previous_env = {key: os.environ.get(key, '') for key in [
+                'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy',
+                'WDM_SSL_VERIFY', 'PYTHONHTTPSVERIFY', 'SSL_CERT_FILE', 'REQUESTS_CA_BUNDLE'
+            ]}
+
             original_ssl_context = ssl._create_default_https_context
             logger.debug(f"with_proxy: Estado inicial salvo. skip_ssl_verify={skip_ssl_verify}")
 
@@ -98,7 +104,7 @@ def with_proxy(skip_ssl_verify: bool = True):
                     if not ip or not port:
                         logger.warning("Proxy habilitado mas IP ou Porta não definidos no config_manager. Proxy não será aplicado.")
                     else:
-                        logger.info(f"Proxy habilitado via config_manager: {ip}:{port}, User: {username}, Password Saved: {password_saved}")
+                        logger.debug(f"Proxy habilitado via config_manager: {ip}:{port}, User: {username}, Password Saved: {password_saved}")
                         proxy_url_base = f"http://{ip}:{port}"
                         proxy_url_auth = None
 
@@ -168,9 +174,13 @@ def with_proxy(skip_ssl_verify: bool = True):
                             except Exception as e:
                                 logger.error(f"Erro ao tentar configurar 'requests' para SSL: {e}", exc_info=True)
                         else:
-                             logger.info("Verificação de certificado SSL mantida (skip_ssl_verify=False).")
+                             logger.debug("Verificação de certificado SSL mantida (skip_ssl_verify=False).")
                 else:
                     logger.debug("Proxy desabilitado ou não configurado no config_manager.")
+                    # Limpa todas as variáveis de proxy quando desabilitado
+                    logger.debug("Proxy desabilitado. Limpando variáveis de ambiente relacionadas a proxy.")
+                    for var in ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']:
+                        os.environ.pop(var, None)
 
                 # Executa a função original decorada
                 return func(*args, **kwargs)
@@ -181,29 +191,72 @@ def with_proxy(skip_ssl_verify: bool = True):
                  raise # Re-lançar a exceção para não mascarar problemas
 
             finally:
-                # Restaura TUDO para o estado original, não importa o que aconteceu
-                logger.debug("with_proxy: Restaurando estado original do ambiente e SSL...")
-                os.environ['HTTP_PROXY'] = previous_http_proxy
-                os.environ['HTTPS_PROXY'] = previous_https_proxy
-                os.environ['WDM_SSL_VERIFY'] = previous_wdm_ssl_verify
-                os.environ['PYTHONHTTPSVERIFY'] = previous_pyhttps_verify
-                os.environ['SSL_CERT_FILE'] = previous_ssl_cert_file
-                os.environ['REQUESTS_CA_BUNDLE'] = previous_requests_ca
+                # Restaura o estado original
+                logger.debug("with_proxy: Restaurando estado original.")
+                for key, value in previous_env.items():
+                    if value:
+                        os.environ[key] = value
+                    else:
+                        os.environ.pop(key, None)
                 ssl._create_default_https_context = original_ssl_context
-
-                # Remover chaves se elas não existiam antes
-                if not previous_http_proxy: os.environ.pop('HTTP_PROXY', None)
-                if not previous_https_proxy: os.environ.pop('HTTPS_PROXY', None)
-                if not previous_wdm_ssl_verify: os.environ.pop('WDM_SSL_VERIFY', None)
-                if not previous_pyhttps_verify: os.environ.pop('PYTHONHTTPSVERIFY', None)
-                if not previous_ssl_cert_file: os.environ.pop('SSL_CERT_FILE', None)
-                if not previous_requests_ca: os.environ.pop('REQUESTS_CA_BUNDLE', None)
-
                 logger.debug("with_proxy: Restauração concluída.")
 
         return wrapper
     return decorator    # @with_proxy(skip_ssl_verify=False)
 
+@with_proxy() # Usa as configurações de proxy do ambiente
+def test_connection(use_proxy: bool) -> dict:
+    """
+    Tenta fazer uma requisição a um endpoint confiável para testar a conexão.
+    Pode usar ou não as configurações de proxy do ambiente.
+
+    Args:
+        use_proxy (bool): Se True, a requisição tentará usar o proxy configurado
+                          no ambiente (pelo decorador). Se False, tentará uma conexão direta.
+
+    Returns:
+        Um dicionário com o status e a mensagem.
+    """
+    import requests
+
+    #test_url = "https://api.openai.com"
+    test_url = "https://www.google.com"
+    logger.info(f"Testando conexão de rede para: {test_url} (Usando Proxy: {use_proxy})")
+    
+    # Se não for para usar proxy, definimos explicitamente os proxies como None
+    # para a chamada do requests, sobrepondo as variáveis de ambiente que o
+    # decorador @with_proxy possa ter definido.
+    proxies = {} if not use_proxy else {
+        'http': os.environ.get('HTTP_PROXY'),
+        'https': os.environ.get('HTTPS_PROXY'),
+    }
+    try:
+        # Passamos o dicionário de proxies para a chamada
+        response = requests.get(test_url, timeout=10, proxies=proxies)
+        
+        if response.status_code == 200:
+            return {"success": True, "message": "Conexão bem-sucedida!"}
+        elif response.status_code == 407:
+            return {"success": False, "message": "Falha na autenticação do proxy (407). Verifique usuário/senha."}
+        else:
+            return {"success": False, "message": f"Erro HTTP {response.status_code}. O host do proxy pode estar incorreto ou o destino bloqueado."}
+            
+    except requests.exceptions.ProxyError as e:
+        logger.error(f"Erro de proxy ao testar conexão: {e}", exc_info=True)
+        # Extrai a causa raiz para uma mensagem mais clara
+        proxy_url_raw = os.environ.get('HTTP_PROXY') or os.environ.get('HTTPS_PROXY') or ''
+        safe_proxy_url = re.sub(r'//.*@', '//***:***@', proxy_url_raw)
+        return {"success": False, "message": f"Erro de Proxy: Não foi possível conectar ao host '{safe_proxy_url}'. Verifique o endereço e a porta."}
+    except requests.exceptions.ConnectTimeout:
+        return {"success": False, "message": "Tempo de conexão esgotado. Verifique as configurações de proxy ou a rede."}
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Erro de requisição ao testar conexão: {e}", exc_info=True)
+        status_code = getattr(e.response, 'status_code', 'N/A')
+        if status_code != 'N/A':
+            return {"success": False, "message": f"Erro de rede ({status_code}). Verifique sua conexão."}
+        else:
+            return {"success": False, "message": "Erro de rede. Verifique sua conexão com a internet."}
+    
 # 1. Declarar variáveis globais para os módulos pesados.
 _utils_initialized = False
 _requests: Optional[Any] = None
@@ -851,6 +904,7 @@ def testando_similaridade_rouge_l():
 import sys, tkinter
 import tkinter.messagebox
 
+@with_proxy()
 def check_app_version() -> None:
     """
     Verifica se a versão local do aplicativo corresponde à versão mais recente
