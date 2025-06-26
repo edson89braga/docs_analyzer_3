@@ -203,7 +203,7 @@ def create_signup_view(page: ft.Page) -> ft.View:
     signup_button = ft.ElevatedButton(
         text="Criar Conta",
         on_click=handle_signup_click,
-        icon=ft.icons.PERSON_ADD,
+        icon=ft.Icons.PERSON_ADD,
         width=200,
         style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))
     )

@@ -52,7 +52,7 @@ class LLMConfigCard(CardWithHeader):
              title=provider_data.get('name_display', 'Provedor Desconhecido'), # Título do card
              content=ft.Column([], spacing=10), # Conteúdo será preenchido abaixo
              card_elevation=2,
-             header_bgcolor=ft.colors.with_opacity(0.05, theme.PRIMARY)
+             header_bgcolor=ft.Colors.with_opacity(0.05, theme.PRIMARY)
         )
 
         self.page = page
@@ -74,10 +74,10 @@ class LLMConfigCard(CardWithHeader):
             hint_text="Cole sua chave API aqui",
             expand=True
         )
-        self.key_configured_icon = ft.Icon(name=ft.icons.HELP_OUTLINE, color=theme.COLOR_WARNING, tooltip="Status da chave desconhecido")
+        self.key_configured_icon = ft.Icon(name=ft.Icons.HELP_OUTLINE, color=theme.COLOR_WARNING, tooltip="Status da chave desconhecido")
 
-        save_button = ft.ElevatedButton("Salvar Chave", icon=ft.icons.SAVE, on_click=self._handle_save_api_key)
-        clear_button = ft.ElevatedButton("Limpar Chave", icon=ft.icons.DELETE_OUTLINE, on_click=self._handle_clear_api_key, color=ft.colors.WHITE, bgcolor=theme.COLOR_ERROR)
+        save_button = ft.ElevatedButton("Salvar Chave", icon=ft.Icons.SAVE, on_click=self._handle_save_api_key)
+        clear_button = ft.ElevatedButton("Limpar Chave", icon=ft.Icons.DELETE_OUTLINE, on_click=self._handle_clear_api_key, color=ft.Colors.WHITE, bgcolor=theme.COLOR_ERROR)
 
         # Simulação de um campo para a URL da API, mas por ora é read-only
         api_url_display = ft.TextField(label="URL Base da API", value=self.api_url_default, read_only=True, border=ft.InputBorder.NONE, text_size=11)
@@ -87,7 +87,7 @@ class LLMConfigCard(CardWithHeader):
                 ft.Row([self.api_key_field, self.key_configured_icon], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.status_text,
                 ft.Row([clear_button, save_button], alignment=ft.MainAxisAlignment.END, spacing=10),
-                ft.Divider(height=1, color=ft.colors.TRANSPARENT),
+                ft.Divider(height=1, color=ft.Colors.TRANSPARENT),
             ]
         )
 
@@ -101,8 +101,8 @@ class LLMConfigCard(CardWithHeader):
 
         Args:
             status_msg (str): Mensagem de status a ser exibida.
-            status_color (str): Cor da mensagem de status (ex: ft.colors.RED, theme.COLOR_SUCCESS).
-            key_icon (str): Nome do ícone Flet para o status da chave (ex: ft.icons.CHECK_CIRCLE_OUTLINE).
+            status_color (str): Cor da mensagem de status (ex: ft.Colors.RED, theme.COLOR_SUCCESS).
+            key_icon (str): Nome do ícone Flet para o status da chave (ex: ft.Icons.CHECK_CIRCLE_OUTLINE).
             key_icon_color (str): Cor do ícone de status da chave.
             key_icon_tooltip (str): Texto de dica para o ícone de status.
             api_key_hint (str): Texto de dica para o campo de entrada da chave API.
@@ -154,11 +154,11 @@ class LLMConfigCard(CardWithHeader):
         Atualiza a UI do card com o status correspondente.
         """
         logger.info(f"Carregando status da chave API salva para {self.system_name}...")
-        self.update_card_content_status("Verificando...", theme.COLOR_INFO, ft.icons.HOURGLASS_EMPTY, theme.COLOR_INFO, "Verificando status...", "Aguarde...")
+        self.update_card_content_status("Verificando...", theme.COLOR_INFO, ft.Icons.HOURGLASS_EMPTY, theme.COLOR_INFO, "Verificando status...", "Aguarde...")
 
         context = self._get_current_user_context()
         if not context:
-            self.update_card_content_status("Erro de sessão.", theme.COLOR_ERROR, ft.icons.ERROR_OUTLINE, theme.COLOR_ERROR, "Erro de sessão", "Erro de sessão")
+            self.update_card_content_status("Erro de sessão.", theme.COLOR_ERROR, ft.Icons.ERROR_OUTLINE, theme.COLOR_ERROR, "Erro de sessão", "Erro de sessão")
             if self.on_key_status_change: self.on_key_status_change(self.system_name, False) # Notifica falha
             return
 
@@ -169,7 +169,7 @@ class LLMConfigCard(CardWithHeader):
             logger.info(f"Chave API para {self.system_name} encontrada descriptografada na sessão (cache).")
             self.update_card_content_status(
                 "Chave API configurada e pronta (em cache).", theme.COLOR_SUCCESS,
-                ft.icons.CHECK_CIRCLE_OUTLINE, theme.COLOR_SUCCESS, "Chave API configurada",
+                ft.Icons.CHECK_CIRCLE_OUTLINE, theme.COLOR_SUCCESS, "Chave API configurada",
                 "Chave API configurada. Preencha para alterar."
             )
             if self.on_key_status_change: self.on_key_status_change(self.system_name, True)
@@ -188,7 +188,7 @@ class LLMConfigCard(CardWithHeader):
                     self.page.session.set(session_key_decrypted, decrypted_key)
                     self.update_card_content_status(
                         "Chave API configurada e pronta.", theme.COLOR_SUCCESS, # Mensagem mais direta
-                        ft.icons.CHECK_CIRCLE_OUTLINE, theme.COLOR_SUCCESS, "Chave API configurada e carregada na sessão",
+                        ft.Icons.CHECK_CIRCLE_OUTLINE, theme.COLOR_SUCCESS, "Chave API configurada e carregada na sessão",
                         "Chave API configurada. Preencha para alterar."
                     )
                     if self.on_key_status_change: self.on_key_status_change(self.system_name, True)
@@ -196,7 +196,7 @@ class LLMConfigCard(CardWithHeader):
                     logger.error(f"Falha ao descriptografar chave API para {self.system_name} do Firestore.")
                     self.update_card_content_status(
                         "Chave API salva, mas falha ao acessar.", theme.COLOR_ERROR, # Mensagem ajustada
-                        ft.icons.LOCK_ALERT_OUTLINED, theme.COLOR_ERROR, "Chave API salva, mas erro ao descriptografar",
+                        ft.Icons.LOCK_ALERT_OUTLINED, theme.COLOR_ERROR, "Chave API salva, mas erro ao descriptografar",
                         "Erro ao acessar a chave. Tente salvá-la novamente."
                     )
                     if self.on_key_status_change: self.on_key_status_change(self.system_name, False)
@@ -204,7 +204,7 @@ class LLMConfigCard(CardWithHeader):
                 logger.info(f"Nenhuma chave API encontrada para {self.system_name} no Firestore.")
                 self.update_card_content_status(
                     "Nenhuma chave API configurada.", theme.COLOR_WARNING,
-                    ft.icons.WARNING_AMBER_OUTLINED, theme.COLOR_WARNING, "Chave API não configurada",
+                    ft.Icons.WARNING_AMBER_OUTLINED, theme.COLOR_WARNING, "Chave API não configurada",
                     "Nenhuma chave API configurada para este serviço."
                 )
                 if self.on_key_status_change: self.on_key_status_change(self.system_name, False)
@@ -212,7 +212,7 @@ class LLMConfigCard(CardWithHeader):
             logger.error(f"Erro ao carregar/descriptografar chave API para {self.system_name}: {e}", exc_info=True)
             self.update_card_content_status(
                 "Erro ao carregar configuração da chave.", theme.COLOR_ERROR,
-                ft.icons.ERROR_OUTLINE, theme.COLOR_ERROR, "Erro ao carregar",
+                ft.Icons.ERROR_OUTLINE, theme.COLOR_ERROR, "Erro ao carregar",
                 "Erro ao carregar configuração da chave."
             )
             if self.on_key_status_change: self.on_key_status_change(self.system_name, False)
@@ -240,7 +240,7 @@ class LLMConfigCard(CardWithHeader):
             if not credentials_manager.get_encryption_key():
                 logger.error("Chave de criptografia Fernet local não encontrada.")
                 show_snackbar(self.page, "Erro de configuração: Chave de criptografia principal ausente.", color=theme.COLOR_ERROR)
-                self.update_card_content_status("Erro: Chave de criptografia local ausente.", theme.COLOR_ERROR, ft.icons.ERROR, theme.COLOR_ERROR, "Erro", "Erro")
+                self.update_card_content_status("Erro: Chave de criptografia local ausente.", theme.COLOR_ERROR, ft.Icons.ERROR, theme.COLOR_ERROR, "Erro", "Erro")
                 return
             encrypted_key_bytes = credentials_manager.encrypt(new_api_key_value)
         except Exception as enc_ex:
@@ -362,7 +362,7 @@ class LLMSettingsViewContent(ft.Column):
         )
         self.save_preferences_button = ft.ElevatedButton(
             "Salvar Preferências",
-            icon=ft.icons.SETTINGS_APPLICATIONS_SHARP, # CHECK_CIRCLE_OUTLINE
+            icon=ft.Icons.SETTINGS_APPLICATIONS_SHARP, # CHECK_CIRCLE_OUTLINE
             on_click=self._handle_save_preferences,
             disabled=True # Habilita após alguma mudança
         )
@@ -382,7 +382,7 @@ class LLMSettingsViewContent(ft.Column):
             ft.Text(
                 "Gerencie suas chaves de API e defina o provedor/modelo padrão para as análises.\n"
                 "As chaves API são criptografadas localmente antes de serem salvas.",
-                size=14, color=ft.colors.with_opacity(0.8, ft.colors.ON_SURFACE), text_align=ft.TextAlign.CENTER
+                size=14, color=ft.Colors.with_opacity(0.8, ft.Colors.ON_SURFACE), text_align=ft.TextAlign.CENTER
             ),
             ft.Divider(height=10),
             CardWithHeader(
@@ -394,7 +394,7 @@ class LLMSettingsViewContent(ft.Column):
                         ft.Row([self.status_preferences_text], alignment=ft.MainAxisAlignment.CENTER, spacing=5)
                     ], spacing=15
                 ),
-                header_bgcolor=ft.colors.with_opacity(0.05, theme.PRIMARY),
+                header_bgcolor=ft.Colors.with_opacity(0.05, theme.PRIMARY),
                 card_elevation=1,
                 width = WIDTH_CONTAINER_CONFIGS
             ),
@@ -403,7 +403,7 @@ class LLMSettingsViewContent(ft.Column):
             ft.Text("Chaves de API por Provedor", style=ft.TextThemeStyle.TITLE_MEDIUM, text_align=ft.TextAlign.CENTER),
             self.cards_container,
             # Botão para adicionar novo provedor (funcionalidade futura, gerenciada pelo Admin)
-            # ft.ElevatedButton("Adicionar Novo Provedor LLM (Admin)", icon=ft.icons.ADD_CIRCLE_OUTLINE, disabled=True)
+            # ft.ElevatedButton("Adicionar Novo Provedor LLM (Admin)", icon=ft.Icons.ADD_CIRCLE_OUTLINE, disabled=True)
         ]
 
     def _get_loaded_providers(self) -> List[Dict[str, Any]]:

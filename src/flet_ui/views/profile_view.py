@@ -295,7 +295,7 @@ def create_profile_view(page: ft.Page) -> ft.View:
             spacing=15
         ),
         card_elevation=2,
-        header_bgcolor=ft.colors.with_opacity(0.3, theme.COLOR_INFO)
+        header_bgcolor=ft.Colors.with_opacity(0.3, theme.COLOR_INFO)
     )
 
     change_password_button = ft.ElevatedButton("Alterar Senha", on_click=handle_change_password)
@@ -312,15 +312,15 @@ def create_profile_view(page: ft.Page) -> ft.View:
             spacing=15
         ),
         card_elevation=2,
-        header_bgcolor=ft.colors.with_opacity(0.3, theme.COLOR_WARNING)
+        header_bgcolor=ft.Colors.with_opacity(0.3, theme.COLOR_WARNING)
     )
 
     delete_account_button = ft.ElevatedButton(
         "Excluir Minha Conta",
         on_click=handle_delete_account_click,
-        color=ft.colors.WHITE, # Texto branco
+        color=ft.Colors.WHITE, # Texto branco
         bgcolor=theme.COLOR_ERROR, # Fundo vermelho
-        icon=ft.icons.DELETE_FOREVER
+        icon=ft.Icons.DELETE_FOREVER
     )
 
     danger_zone_section = CardWithHeader(
@@ -328,13 +328,13 @@ def create_profile_view(page: ft.Page) -> ft.View:
         content=ft.Column(
             [
                 ft.Text("Ações nesta seção podem ter consequências permanentes.", size=12, italic=True),
-                ft.Divider(height=10, color=ft.colors.TRANSPARENT),
+                ft.Divider(height=10, color=ft.Colors.TRANSPARENT),
                 ft.Row([delete_account_button], alignment=ft.MainAxisAlignment.START)
             ],
             spacing=10
         ),
         card_elevation=2,
-        header_bgcolor=ft.colors.with_opacity(0.3, theme.COLOR_ERROR) # Cabeçalho com tom de perigo
+        header_bgcolor=ft.Colors.with_opacity(0.3, theme.COLOR_ERROR) # Cabeçalho com tom de perigo
     )
 
     # --- Layout Principal da View de Perfil ---

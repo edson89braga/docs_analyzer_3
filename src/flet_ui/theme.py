@@ -119,7 +119,7 @@ WIDTH_CONTAINER_CONFIGS = 700
 
 # Cores para Cards e Panels
 PANEL_HEADER_BGCOLOR = ft.Colors.with_opacity(0.05, ft.Colors.SECONDARY) # Usando PRIMARY que já deve estar definido
-PANEL_CONTENT_BGCOLOR = ft.colors.BACKGROUND # SURFACE Ou ft.colors.BACKGROUND, ou uma cor customizada
+PANEL_CONTENT_BGCOLOR = ft.Colors.SURFACE # Ou ft.Colors.BACKGROUND, ou uma cor customizada
 
 
 execution_time = perf_counter() - start_time

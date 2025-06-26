@@ -28,13 +28,13 @@ def create_home_view(page: ft.Page) -> ft.Control:
             width=200, # Reduzido para dar espaço ao texto
             height=200,
             fit=ft.ImageFit.CONTAIN,
-            error_content=ft.Text("Erro ao carregar imagem do logo.", color=ft.colors.RED)
+            error_content=ft.Text("Erro ao carregar imagem do logo.", color=ft.Colors.RED)
         )
     except Exception as e:
         logger.error(f"Erro ao tentar carregar a imagem do logo '{PATH_IMAGE_LOGO_DEPARTAMENTO}': {e}")
         department_logo = ft.Container(
             content=ft.Text(f"Não foi possível carregar a imagem do logo.",
-                            color=ft.colors.ORANGE_ACCENT_700, style=ft.TextThemeStyle.BODY_LARGE),
+                            color=ft.Colors.ORANGE_ACCENT_700, style=ft.TextThemeStyle.BODY_LARGE),
             padding=20,
             alignment=ft.alignment.center
         )
@@ -51,7 +51,7 @@ def create_home_view(page: ft.Page) -> ft.Control:
         "Ferramenta inteligente para análise de documentos e otimização de rotinas da Polícia Federal.",
         style=ft.TextThemeStyle.TITLE_MEDIUM, # Tamanho adequado para subtítulo
         text_align=ft.TextAlign.CENTER,
-        color=ft.colors.with_opacity(0.85, ft.colors.ON_SURFACE) # Cor suave
+        color=ft.Colors.with_opacity(0.85, ft.Colors.ON_SURFACE) # Cor suave
     )
 
     intro_text_2 = ft.Text(
@@ -60,7 +60,7 @@ def create_home_view(page: ft.Page) -> ft.Control:
         style=ft.TextThemeStyle.BODY_LARGE,
         text_align=ft.TextAlign.CENTER,
         width=1000, # Limita a largura para melhor legibilidade
-        color=ft.colors.with_opacity(0.75, ft.colors.ON_SURFACE)
+        color=ft.Colors.with_opacity(0.75, ft.Colors.ON_SURFACE)
     )
     
     version_text = ft.Text(
@@ -68,7 +68,7 @@ def create_home_view(page: ft.Page) -> ft.Control:
         style=ft.TextThemeStyle.BODY_MEDIUM,
         text_align=ft.TextAlign.CENTER,
         italic=True,
-        color=ft.colors.with_opacity(0.6, ft.colors.ON_SURFACE)
+        color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)
     )
 
     main_content = ft.Column(
@@ -114,7 +114,7 @@ def create_feature_card(page: ft.Page, title: str, description: str, icon: str, 
             ft.Icon(name=icon, size=36, color=theme.PRIMARY),
             ft.Container(height=8),
             ft.Text(title, weight=ft.FontWeight.BOLD, size=16, text_align=ft.TextAlign.CENTER),
-            ft.Text(description, size=13, text_align=ft.TextAlign.CENTER, color=ft.colors.with_opacity(0.8, ft.colors.ON_SURFACE)),
+            ft.Text(description, size=13, text_align=ft.TextAlign.CENTER, color=ft.Colors.with_opacity(0.8, ft.Colors.ON_SURFACE)),
         ],
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         spacing=5,
@@ -160,13 +160,13 @@ def create_home_view2(page: ft.Page) -> ft.Control:
             width=200,
             height=200,
             fit=ft.ImageFit.CONTAIN,
-            error_content=ft.Text("Erro ao carregar imagem do logo.", color=ft.colors.RED)
+            error_content=ft.Text("Erro ao carregar imagem do logo.", color=ft.Colors.RED)
         )
     except Exception as e:
         logger.error(f"Erro ao tentar carregar a imagem do logo '{PATH_IMAGE_LOGO_DEPARTAMENTO}': {e}")
         department_logo = ft.Container(
             content=ft.Text(f"Não foi possível carregar o logo.",
-                            color=ft.colors.ORANGE_ACCENT_700, style=ft.TextThemeStyle.BODY_LARGE),
+                            color=ft.Colors.ORANGE_ACCENT_700, style=ft.TextThemeStyle.BODY_LARGE),
             padding=20, alignment=ft.alignment.center
         )
 
@@ -186,7 +186,7 @@ def create_home_view2(page: ft.Page) -> ft.Control:
         style=ft.TextThemeStyle.TITLE_MEDIUM,
         text_align=ft.TextAlign.CENTER,
         width=1000, # Limita a largura
-        color=ft.colors.with_opacity(0.85, ft.colors.ON_SURFACE)
+        color=ft.Colors.with_opacity(0.85, ft.Colors.ON_SURFACE)
     )
 
     # Cards de Funcionalidades
@@ -224,7 +224,7 @@ def create_home_view2(page: ft.Page) -> ft.Control:
         style=ft.TextThemeStyle.BODY_MEDIUM,
         text_align=ft.TextAlign.CENTER,
         italic=True,
-        color=ft.colors.with_opacity(0.6, ft.colors.ON_SURFACE)
+        color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)
     )
 
     main_content_column = ft.Column(
@@ -245,7 +245,7 @@ def create_home_view2(page: ft.Page) -> ft.Control:
                     size=13,
                     italic=True,
                     text_align=ft.TextAlign.CENTER,
-                    color=ft.colors.with_opacity(0.9, ft.colors.ON_SURFACE)
+                    color=ft.Colors.with_opacity(0.9, ft.Colors.ON_SURFACE)
                 ),
                 width=800, # Limita a largura do aviso
                 # padding=ft.padding.only(bottom=20)

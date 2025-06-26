@@ -27,7 +27,7 @@ from .layout import show_snackbar, create_app_bar, create_navigation_rail, handl
 #from .components import ...
 from .router import route_change_content_only 
 from . import theme
-error_color = theme.COLOR_ERROR if hasattr(theme, 'COLOR_ERROR') else ft.colors.RED
+error_color = theme.COLOR_ERROR if hasattr(theme, 'COLOR_ERROR') else ft.Colors.RED
 
 from src.services.firebase_client import FbManagerAuth, FirebaseClientFirestore, _from_firestore_value
 from src.logger.logger import LoggerSetup
@@ -417,7 +417,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
     page.overlay.append(page_file_picker)
     page.data["global_file_picker"] = page_file_picker
 
-    page_snackbar = ft.SnackBar(content=ft.Text(""), show_close_icon=True, action_color=ft.colors.WHITE) # Configurações padrão
+    page_snackbar = ft.SnackBar(content=ft.Text(""), show_close_icon=True, action_color=ft.Colors.WHITE) # Configurações padrão
     page.overlay.append(page_snackbar)
     page.data["global_snackbar"] = page_snackbar
 
@@ -435,7 +435,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         ),
         alignment=ft.alignment.center,
         expand=True,
-        bgcolor=ft.colors.with_opacity(0.5, ft.colors.BLACK),
+        bgcolor=ft.Colors.with_opacity(0.5, ft.Colors.BLACK),
         visible=False # Começa invisível
     )
     page.overlay.append(page_loading_overlay)
@@ -488,12 +488,41 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         """
         Lida com a desconexão do cliente Flet.
 
-        Limpa o contexto do logger de nuvem e sinaliza a parada da thread
-        de renovação proativa de token.
+        Limpa o contexto do logger, o cache do usuário e, crucialmente,
+        encerra completamente o processo do servidor para evitar que ele
+        continue rodando em segundo plano.
         """
+        from src.config_manager import set_final_keyring_proxy
+        from src.utils import cleanup_old_temp_files, clear_user_cache
+        from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR 
+        from src.logger.cloud_logger_handler import CloudLogHandler
+
         logger.info("Cliente desconectado ou aplicação Flet fechando...")
+
+        # --- Bloco de Limpeza Manual ---
+        try:
+            # 1. Limpeza do Keyring do Proxy
+            logger.debug("Executando limpeza manual: set_final_keyring_proxy()")
+            set_final_keyring_proxy()
+
+            # 2. Limpeza de Arquivos Temporários
+            temp_exports_full_path = os.path.join(ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR)
+            logger.debug(f"Executando limpeza manual: cleanup_old_temp_files() em '{UPLOAD_TEMP_DIR}' e '{temp_exports_full_path}'")
+            cleanup_old_temp_files(UPLOAD_TEMP_DIR)
+            cleanup_old_temp_files(temp_exports_full_path)
+
+            # 3. Flush e Encerramento SEGURO do Logger da Nuvem
+            if LoggerSetup._active_cloud_handler_instance:
+                logger.debug("Executando desligamento completo do CloudLogHandler...")
+                CloudLogHandler._force_upload_on_exit_static(LoggerSetup._active_cloud_handler_instance)
+        
+        except:
+            pass
+        ...
         LoggerSetup.set_cloud_user_context(None, None)
         logger.debug("Contexto do logger de nuvem limpo ao desconectar.")
+
+
 
         # Para a thread de renovação de token
         if _token_refresh_thread_stop_event:
@@ -505,8 +534,15 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             if _token_refresh_thread_instance.is_alive():
                 logger.warning("Thread de renovação de token não finalizou a tempo.")
         
-        from src.utils import clear_user_cache
         clear_user_cache(page)
+
+        # Pausa opcional para garantir que o flush tenha tempo de iniciar o upload
+        # Em produção, pode não ser necessário, mas ajuda em depuração.
+        time.sleep(1) 
+
+        # Encerra o processo do servidor
+        logger.info("Encerrando o processo do servidor agora.")
+        os._exit(0)  # Força a saída imediata e limpa do processo Python
 
     page.on_disconnect = on_disconnect
 

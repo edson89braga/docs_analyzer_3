@@ -119,23 +119,23 @@ class ProxySettingsContent(ft.Column):
             "\nSe este NÃO é seu computador pessoal, desmarque 'Salvar Senha' ou remova as configurações ao sair.",
             size=12,
             italic=True,
-            color=ft.colors.with_opacity(0.7, ft.colors.ON_SURFACE),
+            color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE),
             #width=550 # Para quebrar linha
         )
 
         self.save_button = ft.ElevatedButton(
             "Salvar Configurações",
-            icon=ft.icons.SAVE,
+            icon=ft.Icons.SAVE,
             on_click=self._handle_save_settings,
             width=200
         )
         self.delete_button = ft.ElevatedButton(
             "Remover Tudo",
-            icon=ft.icons.DELETE_SWEEP_OUTLINED,
+            icon=ft.Icons.DELETE_SWEEP_OUTLINED,
             on_click=self._handle_delete_settings,
             tooltip="Limpa todas as configurações de proxy salvas.",
             width=200,
-            color=ft.colors.WHITE,
+            color=ft.Colors.WHITE,
             bgcolor=theme.COLOR_ERROR
         )
 
@@ -149,21 +149,21 @@ class ProxySettingsContent(ft.Column):
                     self.proxy_port_field,
                     self.proxy_user_field,
                     ft.Row([self.proxy_password_field, self.save_password_checkbox], vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                    ft.Divider(height=5, color=ft.colors.TRANSPARENT),
+                    ft.Divider(height=5, color=ft.Colors.TRANSPARENT),
                     self.security_warning_text,
-                    ft.Divider(height=15, color=ft.colors.TRANSPARENT),
+                    ft.Divider(height=15, color=ft.Colors.TRANSPARENT),
                     ft.Row(
                         [self.delete_button, self.save_button],
                         alignment=ft.MainAxisAlignment.END,
                         spacing=10
                     ),
-                    ft.Divider(height=1, color=ft.colors.TRANSPARENT),
+                    ft.Divider(height=1, color=ft.Colors.TRANSPARENT),
                 ],
                 spacing=15,
             ),
             card_elevation=2,
             width = WIDTH_CONTAINER_CONFIGS,
-            header_bgcolor=ft.colors.with_opacity(0.1, theme.PRIMARY) # Um pouco diferente do padrão
+            header_bgcolor=ft.Colors.with_opacity(0.1, theme.PRIMARY) # Um pouco diferente do padrão
         )
 
         self.controls = [
@@ -171,7 +171,7 @@ class ProxySettingsContent(ft.Column):
             ft.Text(
                 "Se necessário, Configure as definições de proxy para acesso à internet pela aplicação. "
                 "\nAs configurações são armazenadas de forma segura no seu sistema.",
-                size=14, color=ft.colors.with_opacity(0.8, ft.colors.ON_SURFACE)
+                size=14, color=ft.Colors.with_opacity(0.8, ft.Colors.ON_SURFACE)
             ),
             ft.Divider(height=20),
             settings_card

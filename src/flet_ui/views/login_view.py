@@ -89,8 +89,8 @@ def create_login_view(page: ft.Page) -> ft.View:
 
     proxy_settings_button = ft.ElevatedButton(
         "Configurações de Proxy",
-        icon=ft.icons.NETWORK_CHECK_ROUNDED,
-        #icon=ft.icons.SETTINGS_ETHERNET_ROUNDED,
+        icon=ft.Icons.NETWORK_CHECK_ROUNDED,
+        #icon=ft.Icons.SETTINGS_ETHERNET_ROUNDED,
         on_click=lambda _: show_proxy_settings_dialog(page)
     )
 
@@ -295,7 +295,7 @@ def create_login_view(page: ft.Page) -> ft.View:
     login_button = ft.ElevatedButton(
         text="Entrar",
         on_click=handle_login_click,
-        icon=ft.icons.LOGIN,
+        icon=ft.Icons.LOGIN,
         width=200, # Largura do botão
         style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8))
     )
@@ -370,7 +370,7 @@ def create_login_view(page: ft.Page) -> ft.View:
         style=ft.TextThemeStyle.BODY_MEDIUM,
         text_align=ft.TextAlign.CENTER,
         italic=True,
-        color=ft.colors.with_opacity(0.6, ft.colors.ON_SURFACE)
+        color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)
     )
     header_section = ft.Column(
         [
@@ -436,7 +436,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                 content=login_card,
                 alignment=ft.alignment.center,
                 expand=True, # Ocupa todo o espaço disponível
-                # bgcolor=ft.colors.BLUE_GREY_50 # Um fundo suave, opcional
+                # bgcolor=ft.Colors.BLUE_GREY_50 # Um fundo suave, opcional
             )
 
     return ft.View(
@@ -446,7 +446,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                 content=login_card,
                 alignment=ft.alignment.center,
                 expand=True, # Ocupa todo o espaço disponível
-                # bgcolor=ft.colors.BLUE_GREY_50 # Um fundo suave, opcional
+                # bgcolor=ft.Colors.BLUE_GREY_50 # Um fundo suave, opcional
             )
         ],
         vertical_alignment=ft.MainAxisAlignment.CENTER,

@@ -2006,7 +2006,7 @@ def wrapper_panel_1(int_content):
         controls=[int_content],
         expand_icon_color=theme.PRIMARY,
         elevation=1,
-        divider_color=ft.colors.TRANSPARENT, # Sem divisores visíveis entre os painéis
+        divider_color=ft.Colors.TRANSPARENT, # Sem divisores visíveis entre os painéis
         expanded_header_padding=ft.padding.all(1),
         # animation_duration=300 # Opcional
     )
@@ -2116,7 +2116,7 @@ class FileListManager:
                 item_container = ft.Container(
                     content=list_tile, # O ListTile é o conteúdo visual principal
                     # padding=ft.padding.symmetric(vertical=2),
-                    # border=ft.border.all(1, ft.colors.OUTLINE_VARIANT), # Borda de depuração
+                    # border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT), # Borda de depuração
                     # border_radius=5
                 )
                 draggable_item = ft.Draggable(
@@ -2161,7 +2161,7 @@ class FileListManager:
             Uma tupla contendo as funções on_will_accept, on_accept e on_leave.
         """
         def on_drag_will_accept(e: ft.ControlEvent):
-            e.control.content.border = ft.border.all(2, ft.colors.PINK_ACCENT_200 if e.data == "true" else ft.colors.BLACK26)
+            e.control.content.border = ft.border.all(2, ft.Colors.PINK_ACCENT_200 if e.data == "true" else ft.Colors.BLACK26)
             e.control.update()
 
         def on_drag_leave(e: ft.ControlEvent): 

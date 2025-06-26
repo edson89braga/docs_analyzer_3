@@ -326,7 +326,7 @@ class AnalyzePDFViewContent(ft.Column):
                         "Atenção: Todos os campos, classificações e resumos a seguir foram gerados por inteligência artificial e devem ser tratados como uma sugestão inicial.\n"
                         "Revise e valide cuidadosamente cada informação antes de prosseguir com qualquer ato administrativo ou encaminhamento oficial.",
                         expand=True, italic=True, size=13,
-                        #color=ft.colors.with_opacity(0.9, theme.COLOR_WARNING)
+                        #color=ft.Colors.with_opacity(0.9, theme.COLOR_WARNING)
                     ),
                     ft.IconButton(
                         ft.Icons.CLOSE_ROUNDED,
@@ -341,7 +341,7 @@ class AnalyzePDFViewContent(ft.Column):
             padding=12,
             border_radius=8,
             border=ft.border.all(1, theme.COLOR_WARNING),
-            bgcolor=ft.colors.with_opacity(0.05, theme.COLOR_WARNING),
+            bgcolor=ft.Colors.with_opacity(0.05, theme.COLOR_WARNING),
             visible=False,  # Começa invisível
             #margin=ft.margin.only(right=0)
         )
@@ -489,7 +489,7 @@ class AnalyzePDFViewContent(ft.Column):
                 spacing=9, # Espaçamento menor entre os TextFields
             ),
             expand=True, padding=15, # Padding geral para o container dos prompts
-            # border=ft.border.all(1, ft.colors.TEAL_ACCENT_700) # Para debug
+            # border=ft.border.all(1, ft.Colors.TEAL_ACCENT_700) # Para debug
         )
     
     # --- setup file_picker ---
@@ -1091,7 +1091,7 @@ class AnalyzePDFViewContent(ft.Column):
                 content_area.controls.append(
                     ft.Container(
                         ft.Row([
-                            ft.Icon(ft.icons.WARNING_AMBER_ROUNDED, color=theme.COLOR_WARNING),
+                            ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=theme.COLOR_WARNING),
                             ft.Text("Páginas ininteligíveis detectadas. Considere usar OCR nelas.",
                                     color=theme.COLOR_WARNING, weight=ft.FontWeight.BOLD)
                         ], spacing=5, alignment=ft.MainAxisAlignment.START),
@@ -2446,7 +2446,7 @@ class SettingsDrawerManager:
  
         self.gui_controls_drawer[CTL_RESET_SETTINGS_BTN] = ft.ElevatedButton(
             "Resetar para Padrões",
-            icon=ft.icons.SETTINGS_BACKUP_RESTORE_ROUNDED,
+            icon=ft.Icons.SETTINGS_BACKUP_RESTORE_ROUNDED,
             on_click=self._handle_reset_settings_click,
             visible=False,
         )
@@ -2810,7 +2810,7 @@ class LLMStructuredResultDisplay(ft.Column):
             ft.IconButton: Um ft.IconButton configurado.
         """
         return ft.IconButton(
-            icon=ft.icons.INFO_OUTLINE_ROUNDED,
+            icon=ft.Icons.INFO_OUTLINE_ROUNDED,
             tooltip=justificativa if justificativa else "Justificativa não fornecida.",
             icon_size=18,
             opacity=0.7 if justificativa else 0.3,
@@ -3497,7 +3497,7 @@ class FeedbackDialog(ft.AlertDialog):
             "Revise os resultados abaixo.",
             size=14,
             italic=True,
-            color=ft.colors.ON_SURFACE # ft.colors.with_opacity(0.8, ft.colors.ON_SURFACE)
+            color=ft.Colors.ON_SURFACE # ft.Colors.with_opacity(0.8, ft.Colors.ON_SURFACE)
         )
 
         nao_editados_controls: List[ft.Control] = []
@@ -3513,9 +3513,9 @@ class FeedbackDialog(ft.AlertDialog):
                 nao_editados_controls.append(
                     ft.Row(
                         [
-                            ft.Icon(ft.icons.CHECK_CIRCLE_OUTLINE, color=theme.COLOR_SUCCESS, size=18),
+                            ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, color=theme.COLOR_SUCCESS, size=18),
                             ft.Text(label_campo, weight=ft.FontWeight.NORMAL, size=13, expand=True),
-                            #ft.Text("(Não Editado)", italic=True, color=ft.colors.with_opacity(0.7, ft.colors.ON_SURFACE), size=11)
+                            #ft.Text("(Não Editado)", italic=True, color=ft.Colors.with_opacity(0.7, ft.Colors.ON_SURFACE), size=11)
                         ],
                         spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER
                     )
@@ -3523,7 +3523,7 @@ class FeedbackDialog(ft.AlertDialog):
             else: # Foi editado
                 status_text = ""
                 status_color = ft.Colors.ORANGE_900 # Padrão para editado
-                icon_name = ft.icons.EDIT_NOTE_ROUNDED
+                icon_name = ft.Icons.EDIT_NOTE_ROUNDED
 
                 if tipo_campo in ["textfield_multiline", "textfield_lista", "textfield"]:
                     similaridade = field_data.get("similaridade_pos_edicao")
@@ -3532,18 +3532,18 @@ class FeedbackDialog(ft.AlertDialog):
                     else: # Fallback se similaridade não foi calculada/aplicável
                         status_text = "(Editado)"
                     #if similaridade > 0.85: # Exemplo de limite para "quase igual"
-                    #    icon_name = ft.icons.EDIT_ROUNDED # Um pouco menos "alerta"
-                    #    status_color = ft.colors.with_opacity(0.8, theme.COLOR_WARNING)
+                    #    icon_name = ft.Icons.EDIT_ROUNDED # Um pouco menos "alerta"
+                    #    status_color = ft.Colors.with_opacity(0.8, theme.COLOR_WARNING)
 
                 elif tipo_campo in ["dropdown", "radio_button", "textfield_valor"]: # Campos de valor único
                     status_text = "(Alterada resposta)" # Corrigido pelo Usuário
-                    icon_name = ft.icons.SWAP_HORIZ_ROUNDED
+                    icon_name = ft.Icons.SWAP_HORIZ_ROUNDED
                     status_color = ft.Colors.RED_600
                 elif tipo_campo == "checkbox": # Campos de múltipla escolha
                     # Lógica de comparação para checkboxes (ex: Jaccard ou contagem)
                     # Por agora, uma mensagem genérica: # TODO
                     status_text = "(Editado - Seleção Modificada)"
-                    icon_name = ft.icons.RULE_ROUNDED
+                    icon_name = ft.Icons.RULE_ROUNDED
                 
                 editados_controls.append(
                     ft.Row(
@@ -3816,7 +3816,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             logger.critical(f"Falha crítica ao carregar prompts para a view de análise: {e}", exc_info=True)
             # Retorna uma view de erro se os prompts são essenciais e falharam ao carregar
             return ft.Column([
-                ft.Icon(ft.icons.ERROR, color=theme.COLOR_ERROR, size=50),
+                ft.Icon(ft.Icons.ERROR, color=theme.COLOR_ERROR, size=50),
                 ft.Text("Erro Crítico", style=ft.TextThemeStyle.HEADLINE_SMALL),
                 ft.Text("Não foi possível carregar as configurações de análise necessárias. "
                         "Tente recarregar a página ou contate o suporte.",

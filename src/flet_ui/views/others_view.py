@@ -154,7 +154,7 @@ def OLD_create_knowledge_base_content(page: ft.Page) -> ft.Control:
     # Conteúdo principal (placeholder)
     main_content = ft.Column(
         [
-            ft.Icon(ft.icons.CONSTRUCTION, size=80, opacity=0.3),
+            ft.Icon(ft.Icons.CONSTRUCTION, size=80, opacity=0.3),
             ft.Text(
                 "Chat com Banco de Pareceres",
                 style=ft.TextThemeStyle.HEADLINE_MEDIUM,
@@ -197,7 +197,7 @@ def create_placeholder_content(page: ft.Page, module_name: str) -> ft.Control:
         [
             ft.Text(f"{module_name}", style=ft.TextThemeStyle.HEADLINE_MEDIUM),
             ft.Text("Esta funcionalidade será implementada em versões futuras."),
-            ft.Icon(ft.icons.CONSTRUCTION, size=50, opacity=0.5)
+            ft.Icon(ft.Icons.CONSTRUCTION, size=50, opacity=0.5)
         ],
         alignment=ft.MainAxisAlignment.CENTER,
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,

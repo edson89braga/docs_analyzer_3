@@ -638,7 +638,7 @@ def show_proxy_settings_dialog(page: ft.Page) -> None:
     # --- Criação do botão de teste ---
     test_connection_button = ft.ElevatedButton(
         "Testar Conexão",
-        icon=ft.icons.NETWORK_CHECK_ROUNDED,
+        icon=ft.Icons.NETWORK_CHECK_ROUNDED,
         on_click=handle_test_connection_click,
         width=200
     )
@@ -775,7 +775,7 @@ def show_proxy_settings_dialog(page: ft.Page) -> None:
         ft.Row([proxy_password_field, save_password_checkbox], expand=True),
         ft.Divider(height=8, color=ft.Colors.TRANSPARENT),
         security_warning_text,
-        #ft.Divider(height=8, color=ft.colors.TRANSPARENT),
+        #ft.Divider(height=8, color=ft.Colors.TRANSPARENT),
         #ft.Row([test_connection_button], alignment=ft.MainAxisAlignment.CENTER),
         ],
         tight=True, scroll=ft.ScrollMode.ADAPTIVE, width=560
