@@ -1945,6 +1945,7 @@ class InternalAnalysisController:
             pdf_paths (List[str]): Lista de caminhos para os arquivos PDF.
             batch_name (str): Nome do lote de arquivos.
         """
+        show_loading_overlay(self.page, "Iniciando processamento...")
         thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, False), daemon=True)
         thread.start()
 
@@ -1972,6 +1973,7 @@ class InternalAnalysisController:
             batch_name (str): Nome do lote de arquivos.
             is_reanalysis (bool): Indica se esta é uma reanálise.
         """
+        show_loading_overlay(self.page, "Iniciando processamento e análise...")
         thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, True, is_reanalysis), daemon=True)
         thread.start()
 
@@ -2064,7 +2066,7 @@ class InternalExportManager:
                 template_name = os.path.basename(template_path).replace(".docx","").replace(" ", "_").lower()
                 temp_server_filename = f"{default_filename_base}_{template_name}_{int(time())}.docx"
                 server_save_path = os.path.join(temp_exports_dir, temp_server_filename)
-                export_success_on_server, missing_keys_on_server = self.docx_exporter.export_from_template_docx(data_to_export, template_path, server_save_path)
+                export_success_on_server, _ = self.docx_exporter.export_from_template_docx(data_to_export, template_path, server_save_path)
             else: 
                 logger.error(f"EXPORT_MANAGER (Web): Tipo de operação desconhecido ou template_path ausente: {operation_type}")
                 hide_loading_overlay(self.page)
@@ -2074,17 +2076,18 @@ class InternalExportManager:
             hide_loading_overlay(self.page)
             if export_success_on_server and temp_server_filename:
                 download_url = f"/{WEB_TEMP_EXPORTS_SUBDIR}/{temp_server_filename}"
-                self.page.launch_url(download_url, web_window_name="_self")
+                #self.page.launch_url(download_url, web_window_name="_self")
+                self.page.launch_url(download_url, web_window_name="_blank")
                 show_snackbar(self.page, f"Download de '{temp_server_filename}' iniciado.", theme.COLOR_SUCCESS)
-                if missing_keys_on_server and operation_type == ExportOperation.TEMPLATE_DOCX:
-                    template_name_friendly = os.path.basename(template_path or "").replace(".docx","").replace("_", " ").title()
-                    missing_keys_str = "\n".join(missing_keys_on_server)
-                    threading.Timer(1.0, lambda: show_confirmation_dialog(
-                        self.page, title="Aviso de Exportação",
-                        content=ft.Column([
-                            ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados placeholders respectivos no template '{template_name_friendly}':"),
-                            ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)], tight=True),
-                        confirm_text="OK", cancel_text=None )).start()
+                #if missing_keys_on_server and operation_type == ExportOperation.TEMPLATE_DOCX:
+                #    template_name_friendly = os.path.basename(template_path or "").replace(".docx","").replace("_", " ").title()
+                #    missing_keys_str = "\n".join(missing_keys_on_server)
+                #    threading.Timer(1.0, lambda: show_confirmation_dialog(
+                #        self.page, title="Aviso de Exportação",
+                #        content=ft.Column([
+                #            ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados placeholders respectivos no template '{template_name_friendly}':"),
+                #            ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)], tight=True),
+                #        confirm_text="OK", cancel_text=None )).start()
             else: 
                 logger.error(f"ExportManager (Web): Falha ao gerar DOCX: {server_save_path}")
                 show_snackbar(self.page, "Falha ao gerar arquivo para download.", theme.COLOR_ERROR)
@@ -2100,22 +2103,64 @@ class InternalExportManager:
         diferenciando o comportamento para o modo web (upload) e desktop (cópia local).
         """
         logger.info("Botão 'Adicionar Novo Template' clicado.")
-        if not self.global_file_picker:
-            show_snackbar(self.page, "Erro: Seletor de arquivos não pronto.", theme.COLOR_ERROR)
-            return
-        if self.page.web:
-            self.global_file_picker.on_result = self.on_template_file_selected_for_web_upload
-            self.global_file_picker.on_upload = self.on_template_file_uploaded_web
-        else:
-            self.global_file_picker.on_result = self.on_new_template_picked
-            self.global_file_picker.on_upload = None
         
-        self.global_file_picker.pick_files(
-            dialog_title="Selecionar Template DOCX",
-            allowed_extensions=["docx"],
-            allow_multiple=False)
+        # Lista de placeholders que o usuário pode usar no template
+        placeholders_disponiveis = [
+            "<descricao_geral>", "<tipo_documento_origem>", "<orgao_origem>",
+            "<uf_origem>", "<municipio_origem>", "<resumo_fato>", "<uf_fato>",
+            "<municipio_fato>", "<tipo_local>", "<valor_apuracao>", "<tipificacao_penal>",
+            "<materia_especial>", "<area_atribuicao>", "<destinacao>", "<tipo_a_autuar>",
+            "<assunto_re>", "<pessoas_envolvidas>", "<linha_do_tempo>", "<observacoes>"
+        ]
+        placeholders_text = "\n".join([f"- {ph}" for ph in placeholders_disponiveis])
         
-        self.page.update()
+        dialog_content = ft.Column(
+            [
+                ft.Text("Para criar um template .docx, insira os seguintes placeholders no seu documento onde você deseja que os dados da análise sejam inseridos. \n"
+                        "A aplicação irá substituí-los pelos valores correspondentes.", selectable=True),
+                ft.Divider(),
+                ft.Text("Placeholders Disponíveis:", weight=ft.FontWeight.BOLD),
+                ft.TextField(
+                    value=placeholders_text,
+                    multiline=True,
+                    read_only=True,
+                    border=ft.InputBorder.NONE,
+                    height=250 # Ajuste a altura conforme necessário
+                )
+            ],
+            tight=True,
+            scroll=ft.ScrollMode.ALWAYS
+        )
+
+        def proceed_to_upload(e=None):
+            # Esta função é chamada quando o usuário clica em "Continuar"
+            # Ela contém a lógica original de abrir o seletor de arquivos
+            if not self.global_file_picker:
+                show_snackbar(self.page, "Erro: Seletor de arquivos não pronto.", theme.COLOR_ERROR)
+                return
+
+            if self.page.web:
+                self.global_file_picker.on_result = self.on_template_file_selected_for_web_upload
+                self.global_file_picker.on_upload = self.on_template_file_uploaded_web
+            else:
+                self.global_file_picker.on_result = self.on_new_template_picked
+                self.global_file_picker.on_upload = None
+            
+            self.global_file_picker.pick_files(
+                dialog_title="Selecionar Template DOCX",
+                allowed_extensions=["docx"],
+                allow_multiple=False)
+            # O dialog já será fechado pela função show_confirmation_dialog
+            # Não é necessário self.page.update() aqui
+            
+        show_confirmation_dialog(
+            page=self.page,
+            title="Como Adicionar um Novo Template",
+            content=dialog_content,
+            confirm_text="Continuar para Upload",
+            cancel_text="Cancelar",
+            on_confirm=proceed_to_upload
+        )
 
     def on_template_file_selected_for_web_upload(self, e: ft.FilePickerResultEvent):
         """
@@ -3932,7 +3977,8 @@ def get_prepared_feedback_data(original_snapshot: formatted_initial_analysis, cu
         else: # Campos string ou dropdowns diretos
             foi_editado = (original_value != current_value_ui)
         
-        logger.debug(f"Feedback Prep (Manager): Campo '{field_name}', Original: '{original_value}', Atual UI: '{current_value_ui}', Editado: {foi_editado}")
+        if field_name not in ['descricao_geral', 'resumo_fato', 'pessoas_envolvidas', 'linha_do_tempo', 'observacoes']:
+            logger.debug(f"Feedback Prep (Manager): Campo '{field_name}', Original: '{original_value}', Atual UI: '{current_value_ui}', Editado: {foi_editado}")
 
         # Obter o label amigável e o tipo do campo
         label_campo = field_name.replace("_", " ").title() # Default label

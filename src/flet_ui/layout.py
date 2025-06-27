@@ -174,7 +174,7 @@ def create_app_bar(page: ft.Page, app_title: str) -> ft.AppBar:
             page.update()
             page.overlay.remove(terms_dialog)
 
-        terms_text = """
+        terms_text1 = """
 ### Diretrizes de Uso e Limitações da IA
 
 Ao utilizar esta aplicação, você concorda e compreende os seguintes pontos:
@@ -185,9 +185,8 @@ Ao utilizar esta aplicação, você concorda e compreende os seguintes pontos:
 *   **Responsabilidade**: Todas as ações, decisões e documentos oficiais gerados a partir do uso desta ferramenta são de responsabilidade exclusiva do usuário que os executa e subscreve.
 *   O sistema registra métricas de uso para fins de auditoria e aprimoramento.
 *   As tipificações penais e classificações sugeridas pela IA são baseadas em padrões e não constituem parecer jurídico formal. A decisão final sobre o enquadramento legal cabe à autoridade competente.
-
----
-
+"""
+        terms_text2 = """
 ### Políticas de Provedores de IA
 
 Ao utilizar a funcionalidade de análise via LLM, o conteúdo textual (anonimizado, se a opção estiver ativa) é enviado para processamento por provedores de IA de terceiros, como a OpenAI. O uso desta funcionalidade está sujeito às políticas do provedor selecionado.
@@ -197,19 +196,22 @@ Para mais detalhes, consulte:
 *   [Termos de Uso da OpenAI](https://openai.com/pt-BR/policies/row-terms-of-use/)
 *   [Adendo de Processamento de Dados da OpenAI (DPA)](https://openai.com/policies/data-processing-addendum/)
 
-**Nota Importante:** Conforme a política da OpenAI, os dados enviados via API **não são utilizados** para treinar os modelos da OpenAI.
-
 """
         terms_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Termos de Uso e Responsabilidade"),
             content=ft.Container(
-                content=ft.Markdown(
-                    terms_text,
-                    selectable=True,
-                    extension_set=ft.MarkdownExtensionSet.COMMON_MARK,
-                    auto_follow_links=True,
-                ),
+                content=ft.Column([
+                    ft.Markdown(
+                        terms_text1, selectable=True,
+                        extension_set=ft.MarkdownExtensionSet.COMMON_MARK,),
+                    ft.Text('_______________________________________________________'),
+                    ft.Text(' '),
+                    ft.Markdown(
+                        terms_text2, selectable=True,
+                        extension_set=ft.MarkdownExtensionSet.COMMON_MARK,
+                        auto_follow_links=True),
+                ], spacing=3, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                 width=600,
             ),
             actions=[

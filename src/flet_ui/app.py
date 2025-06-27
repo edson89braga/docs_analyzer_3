@@ -401,6 +401,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
     page.title = APP_TITLE
     page.vertical_alignment = ft.MainAxisAlignment.START
     page.horizontal_alignment = ft.CrossAxisAlignment.START
+    page.window_favicon_url = f"/favicon.png?v={int(time.time())}"
 
     # --- Aplicar Temas ---
     page.theme = theme.APP_THEME

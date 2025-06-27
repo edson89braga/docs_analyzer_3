@@ -331,23 +331,24 @@ from sklearn.preprocessing import normalize as sk_normalize
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Cache para o modelo SentenceTransformer para evitar recarregamentos
-_sentence_model = None
-
+from src import app_cache
 def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
     """
-    Carrega e retorna uma instância do modelo SentenceTransformer, usando cache.
-
-    Args:
-        model_name (str): O nome do modelo SentenceTransformer a ser carregado.
-
-    Returns:
-        SentenceTransformer: A instância do modelo carregado.
+    Retorna a instância do modelo SentenceTransformer que foi pré-carregado.
+    Espera pelo carregamento se ele ainda não estiver concluído.
     """
-    from sentence_transformers import SentenceTransformer
-    global _sentence_model
-    if _sentence_model is None:
-        _sentence_model = SentenceTransformer(model_name)
-    return _sentence_model
+    # Espera que o evento seja sinalizado. Timeout para evitar bloqueio infinito.
+    is_ready = app_cache.model_loading_event.wait(timeout=120.0)
+
+    if not is_ready:
+        logger.error("Timeout! O carregamento do modelo demorou mais de 120 segundos.")
+        raise TimeoutError("O modelo de IA demorou muito para inicializar.")
+
+    if app_cache.sentence_transformer_model is None:
+        logger.critical("O processo de carregamento do modelo terminou, mas o modelo não está disponível (falhou).")
+        raise RuntimeError("O modelo de IA para vetorização não pôde ser carregado.")
+        
+    return app_cache.sentence_transformer_model
 
 #@timing_decorator()
 def get_vectors(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2') -> np_ndarray:

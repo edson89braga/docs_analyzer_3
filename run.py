@@ -209,18 +209,48 @@ def initialize_app():
 # =====================================================================================================================================
 
 import threading
+from src import app_cache
 def load_to_utils():
     # Antecipando, sob load_progressing_gui, outros imports que serão utilizados em utils.py:
     start_time_l = perf_counter()
     logger.info("[DEBUG] Start func.: load_to_utils")
+
     import unicodedata
     import pdfplumber, fitz
     from unidecode import unidecode
     from sentence_transformers import SentenceTransformer
+    from src.utils import get_resource_path
+
+    try:
+        model_name = 'all-MiniLM-L6-v2'
+        model_local_path = get_resource_path(os.path.join('assets', 'models', model_name))
+        logger.info(f"Pré-carregando modelo SentenceTransformer de: {model_local_path}")
+        app_cache.sentence_transformer_model = SentenceTransformer(model_local_path) # device='cpu'
+        logger.info("Modelo SentenceTransformer pré-carregado e disponível globalmente.")
+    except Exception as e:
+        logger.critical(f"FALHA CRÍTICA ao pré-carregar o modelo SentenceTransformer: {e}", exc_info=True)
+        # A aplicação pode continuar, mas a funcionalidade de vetorização falhará.
+    finally:
+        # CRUCIAL: Sinaliza que o processo de carregamento (com sucesso ou falha) terminou.
+        app_cache.model_loading_event.set()
+
     execution_time_l = perf_counter() - start_time_l
     logger.info(f"[DEBUG] Finish func.: load_to_utils em {execution_time_l:.4f}s")
 
 threading.Thread(target=load_to_utils, daemon=True).start()
+
+class DummyStream:
+    """Um objeto que simula um stream de arquivo para ambientes sem console."""
+    def write(self, s):
+        # Não faz nada com os dados escritos
+        pass
+    def flush(self):
+        # Não faz nada ao fazer flush
+        pass
+    def isatty(self):
+        # Informa que não é um terminal interativo
+        return False
+
 
 import flet as ft
 # Importa a função 'main' do módulo app dentro de flet_gui
@@ -233,8 +263,12 @@ if __name__ == "__main__":
     
     if getattr(sys, 'frozen', False):
         # Em modo compilado (PyInstaller), os assets estão na pasta temporária
-        base_path = sys._MEIPASS
+        base_path = os.path.dirname(sys.executable)
         final_assets_dir = os.path.join(base_path, "assets")
+        
+        if sys.stdout is None:
+            sys.stdout = DummyStream()
+            sys.stderr = DummyStream()
     else:
         # Em modo de desenvolvimento, usa o caminho absoluto
         final_assets_dir = ASSETS_DIR_ABS

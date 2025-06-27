@@ -4,6 +4,7 @@ logger = logging.getLogger(__name__)
 from time import perf_counter
 start_time = perf_counter()
 logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando utils.py")
+print(f"[DEBUG] {start_time:.4f}s - Iniciando utils.py")
 
 import os, keyring, re
 from rich import print
@@ -56,12 +57,15 @@ def get_resource_path(relative_path):
     Obtém o caminho correto para recursos/assets tanto em desenvolvimento
     quanto em ambiente frozen
     """
+    from src.settings import APP_ROOT_DIR
     if getattr(sys, 'frozen', False):
         # PyInstaller cria uma pasta temporária
-        base_path = sys._MEIPASS
+        #base_path = sys._MEIPASS
+        base_path = os.path.dirname(sys.executable)
     else:
         # Desenvolvimento
-        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        base_path = APP_ROOT_DIR
     
     return os.path.join(base_path, relative_path)
 
@@ -980,3 +984,4 @@ def check_app_version() -> None:
 
 execution_time = perf_counter() - start_time
 logger.info(f"[DEBUG] Carregado UTILS em {execution_time:.4f}s")
+print(f"[DEBUG] Carregado UTILS em {execution_time:.4f}s")

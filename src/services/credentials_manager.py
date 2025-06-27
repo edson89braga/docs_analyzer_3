@@ -19,6 +19,22 @@ logger.debug(f"Caminho esperado para chave de serviço criptografada: {ENCRYPTED
 
 # --- Funções Utilitárias de Credenciais ---
 
+def create_and_save_new_encryption_key() -> bool:
+    """
+    Gera uma nova chave de criptografia Fernet e a salva no Keyring.
+    Usado na primeira configuração do usuário.
+    Returns:
+        bool: True se a chave foi criada e salva com sucesso, False caso contrário.
+    """
+    try:
+        new_key = _generate_encryption_key()
+        _save_encryption_key(new_key)
+        logger.info("Nova chave de criptografia local criada e salva no Keyring com sucesso.")
+        return True
+    except Exception as e:
+        logger.error(f"Falha crítica ao criar e salvar a chave de criptografia local: {e}", exc_info=True)
+        return False
+    
 def get_encryption_key() -> Optional[bytes]:
     """
     Busca a chave de criptografia Fernet do Keyring do sistema.

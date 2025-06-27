@@ -196,7 +196,7 @@ class LLMConfigCard(CardWithHeader):
                     logger.error(f"Falha ao descriptografar chave API para {self.system_name} do Firestore.")
                     self.update_card_content_status(
                         "Chave API salva, mas falha ao acessar.", theme.COLOR_ERROR, # Mensagem ajustada
-                        ft.Icons.LOCK_ALERT_OUTLINED, theme.COLOR_ERROR, "Chave API salva, mas erro ao descriptografar",
+                        ft.Icons.LOCK_PERSON_OUTLINED, theme.COLOR_ERROR, "Chave API salva, mas erro ao descriptografar",
                         "Erro ao acessar a chave. Tente salvá-la novamente."
                     )
                     if self.on_key_status_change: self.on_key_status_change(self.system_name, False)
@@ -238,11 +238,16 @@ class LLMConfigCard(CardWithHeader):
         encrypted_key_bytes: Optional[bytes] = None
         try:
             if not credentials_manager.get_encryption_key():
-                logger.error("Chave de criptografia Fernet local não encontrada.")
-                show_snackbar(self.page, "Erro de configuração: Chave de criptografia principal ausente.", color=theme.COLOR_ERROR)
-                self.update_card_content_status("Erro: Chave de criptografia local ausente.", theme.COLOR_ERROR, ft.Icons.ERROR, theme.COLOR_ERROR, "Erro", "Erro")
-                return
+                logger.info("Chave de criptografia local não encontrada. Gerando uma nova para o primeiro uso.")
+                if not credentials_manager.create_and_save_new_encryption_key():
+                    show_snackbar(self.page, "Erro crítico: Não foi possível criar a chave de segurança local.", color=theme.COLOR_ERROR)
+                    self.update_card_content_status("Erro: Falha ao criar chave de segurança.", theme.COLOR_ERROR, ft.icons.ERROR, theme.COLOR_ERROR, "Erro", "Erro")
+                    return
+                
             encrypted_key_bytes = credentials_manager.encrypt(new_api_key_value)
+            if not encrypted_key_bytes:
+                raise ValueError("A criptografia retornou um valor nulo.")
+            
         except Exception as enc_ex:
             logger.error(f"Falha ao criptografar chave API: {enc_ex}", exc_info=True)
             show_snackbar(self.page, "Erro ao proteger a chave API.", color=theme.COLOR_ERROR)
