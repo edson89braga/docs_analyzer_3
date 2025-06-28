@@ -12,12 +12,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from time import sleep
 
-from src.settings import (PATH_LOGS, CLOUD_LOGGER_FOLDER, CLOUD_LOGGER_UPLOAD_INTERVAL, CLOUD_LOGGER_MAX_BUFFER_SIZE, 
+from src.settings import (PATH_LOGS_DIR, CLOUD_LOGGER_FOLDER, CLOUD_LOGGER_UPLOAD_INTERVAL, CLOUD_LOGGER_MAX_BUFFER_SIZE, 
 CLOUD_LOGGER_MAX_RETRIES, CLOUD_LOGGER_RETRY_DELAY, APP_VERSION)
 
 from src.services.firebase_client import FirebaseClientStorage
 from src.services.firebase_manager import FbManagerStorage
 from abc import ABC, abstractmethod
+
+from pathlib import Path
+PATH_LOGS_DIR = Path(PATH_LOGS_DIR)
 
 class LogUploaderStrategy(ABC):
     @abstractmethod
@@ -296,7 +299,7 @@ class CloudLogHandler(logging.Handler):
         return success  
 
     def _backup_logs_local(self, logs_batch: List[str], cloud_path_info: str):
-        backup_dir = PATH_LOGS / "logs_backup_cloud_failed"
+        backup_dir = PATH_LOGS_DIR / "logs_backup_cloud_failed"
         backup_dir.mkdir(exist_ok=True)
         backup_file = backup_dir / f"cloud_fail_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
         try:

@@ -15,13 +15,16 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any, TYPE_CHECKING
 
 from .cloud_logger_handler import CloudLogHandler, ClientLogUploader, AdminLogUploader
-from src.settings import (PATH_LOGS, CLOUD_LOGGER_FOLDER, APP_VERSION)
+from src.settings import (PATH_LOGS_DIR, CLOUD_LOGGER_FOLDER, APP_VERSION)
 
 from src.services.firebase_manager import FbManagerStorage
 from src.services.firebase_client import FirebaseClientStorage
 
 if TYPE_CHECKING:
     from .cloud_logger_handler import LogUploaderStrategy
+
+from pathlib import Path
+PATH_LOGS_DIR = Path(PATH_LOGS_DIR)
 
 modules_to_log = []
 
@@ -159,7 +162,7 @@ class LoggerSetup:
             
             # Adiciona file handler
             file_handler = cls._create_file_handler(
-                PATH_LOGS / "Root_temp.log",
+                PATH_LOGS_DIR / "Root_temp.log",
                 cls.formatter_detailed, 
                 logging.DEBUG
             )
@@ -213,12 +216,12 @@ class LoggerSetup:
         
         # Rotaciona o log antigo
         current_date = datetime.now().strftime('%Y-%m-%d')
-        base_log_file = PATH_LOGS / f"{safe_routine_name}.log"
-        dated_log_file = PATH_LOGS / f"{safe_routine_name}_{current_date}.log"
+        base_log_file = PATH_LOGS_DIR / f"{safe_routine_name}.log"
+        dated_log_file = PATH_LOGS_DIR / f"{safe_routine_name}_{current_date}.log"
         cls._rotate_log_file(base_log_file, dated_log_file)
 
         # Limpa logs mais antigos
-        cls._cleanup_old_log_files(PATH_LOGS, days_to_keep=7)
+        cls._cleanup_old_log_files(PATH_LOGS_DIR, days_to_keep=7)
 
         # --- Cria Handlers ---
         file_handler = cls._create_file_handler(

@@ -33,17 +33,31 @@ import secrets, base64, keyring
 import keyring.backends.Windows
 # Sem pyi_splash
 
+class DummyStream:
+    """Um objeto que simula um stream de arquivo para ambientes sem console."""
+    def write(self, s):
+        # Não faz nada com os dados escritos
+        pass
+    def flush(self):
+        # Não faz nada ao fazer flush
+        pass
+    def isatty(self):
+        # Informa que não é um terminal interativo
+        return False
+    
 # ===============================================================================
 # 1. CONFIGURAÇÕES INICIAIS PARA AMBIENTE FROZEN
 def setup_frozen_environment():
     """Configura o ambiente quando executado via PyInstaller"""
     if getattr(sys, 'frozen', False):
+
+        if sys.stdout is None:
+            sys.stdout = DummyStream()
+            sys.stderr = DummyStream()
+
         # Fix para keyring no Windows
         if sys.platform.startswith('win'):
             os.environ['PYTHON_KEYRING_BACKEND'] = 'keyring.backends.Windows.WinVaultKeyring'
-        
-        # Fix para paths de recursos
-        application_path = os.path.dirname(sys.executable)
         
         # Ajusta sys.path para bibliotecas
         if hasattr(sys, '_MEIPASS'):
@@ -59,26 +73,27 @@ def setup_frozen_environment():
 # 2. GERENCIAMENTO DE FLET_SECRET_KEY
 def get_or_create_secret_key():
     """
+    Para uploads no modo web, Flet precisa de FLET_SECRET_KEY e upload_dir
+
     Obtém ou cria a FLET_SECRET_KEY seguindo a hierarquia:
     1. Variável de ambiente (administrador/usuário avançado)
     2. Keyring (persistência local)
     3. Gera nova chave e salva no Keyring
     """
-    APP_NAME = "DocsAnalyzerPF_FletKey"  #
-    KEY_NAME = "flet_secret_key"
+    from src.settings import APP_NAME, KEY_NAME_FLET_SECRET_KEY
     
     try:
         # 1. Primeiro, tenta ler da variável de ambiente
         secret_key = os.getenv('FLET_SECRET_KEY')
         if secret_key:
-            logger.info("FLET_SECRET_KEY carregada da variável de ambiente")
+            logger.debug("FLET_SECRET_KEY carregada da variável de ambiente")
             return secret_key
         
         # 2. Tenta ler do Keyring
         try:
-            secret_key = keyring.get_password(APP_NAME, KEY_NAME)
+            secret_key = keyring.get_password(APP_NAME, KEY_NAME_FLET_SECRET_KEY)
             if secret_key:
-                logger.info("FLET_SECRET_KEY carregada do Keyring")
+                logger.debug("FLET_SECRET_KEY carregada do Keyring")
                 return secret_key
         except Exception as e:
             logger.warning(f"Erro ao acessar Keyring: {e}")
@@ -88,20 +103,18 @@ def get_or_create_secret_key():
         
         # Tenta salvar no Keyring para futuras sessões
         try:
-            keyring.set_password(APP_NAME, KEY_NAME, secret_key)
+            keyring.set_password(APP_NAME, KEY_NAME_FLET_SECRET_KEY, secret_key)
             logger.info("Nova FLET_SECRET_KEY gerada e salva no Keyring")
         except Exception as e:
-            logger.warning(f"Não foi possível salvar no Keyring: {e}")
+            logger.warning(f"Não foi possível salvar FLET_SECRET_KEY no Keyring: {e}")
             logger.info("Nova FLET_SECRET_KEY gerada (apenas para esta sessão)")
         
         return secret_key
-        
+    
     except Exception as e:
         logger.error(f"Erro crítico ao gerenciar FLET_SECRET_KEY: {e}")
         # Fallback: gera chave temporária
         return base64.b64encode(secrets.token_bytes(32)).decode('utf-8')
-    
-    # os.environ["FLET_SECRET_KEY"] = get_or_create_flet_secret_key()
 
 # ===============================================================================
 # 3. TRATAMENTOS PARA BIBLIOTECAS ESPECÍFICAS
@@ -202,14 +215,14 @@ def initialize_app():
     secret_key = get_or_create_secret_key()
     os.environ['FLET_SECRET_KEY'] = secret_key
     
-    logger.info("Aplicação inicializada com sucesso")
+    logger.info("Procedida função initialize_app()")
+
 
 # ===============================================================================
-# 8. PONTO DE ENTRADA
-# =====================================================================================================================================
-
 import threading
+from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR 
 from src import app_cache
+
 def load_to_utils():
     # Antecipando, sob load_progressing_gui, outros imports que serão utilizados em utils.py:
     start_time_l = perf_counter()
@@ -219,11 +232,10 @@ def load_to_utils():
     import pdfplumber, fitz
     from unidecode import unidecode
     from sentence_transformers import SentenceTransformer
-    from src.utils import get_resource_path
-
+    
     try:
         model_name = 'all-MiniLM-L6-v2'
-        model_local_path = get_resource_path(os.path.join('assets', 'models', model_name))
+        model_local_path = os.path.join(ASSETS_DIR, 'models', model_name)
         logger.info(f"Pré-carregando modelo SentenceTransformer de: {model_local_path}")
         app_cache.sentence_transformer_model = SentenceTransformer(model_local_path) # device='cpu'
         logger.info("Modelo SentenceTransformer pré-carregado e disponível globalmente.")
@@ -239,46 +251,24 @@ def load_to_utils():
 
 threading.Thread(target=load_to_utils, daemon=True).start()
 
-class DummyStream:
-    """Um objeto que simula um stream de arquivo para ambientes sem console."""
-    def write(self, s):
-        # Não faz nada com os dados escritos
-        pass
-    def flush(self):
-        # Não faz nada ao fazer flush
-        pass
-    def isatty(self):
-        # Informa que não é um terminal interativo
-        return False
 
-
+# ===============================================================================
 import flet as ft
 # Importa a função 'main' do módulo app dentro de flet_gui
 from src.flet_ui.app import main
-from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR 
-from src.utils import register_temp_files_cleanup
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
+    initialize_app()
+
+    # Cleanups movido para função on_disconnect:
+    # register_temp_files_cleanup(UPLOAD_TEMP_DIR)
+    # from src.utils import get_resource_path
+    # assets_dir_for_cleanup = get_resource_path('assets')
+    # temp_exports_full_path = os.path.join(assets_dir_for_cleanup, WEB_TEMP_EXPORTS_SUBDIR)
+    # os.makedirs(temp_exports_full_path, exist_ok=True) 
+    # register_temp_files_cleanup(temp_exports_full_path)
     
-    if getattr(sys, 'frozen', False):
-        # Em modo compilado (PyInstaller), os assets estão na pasta temporária
-        base_path = os.path.dirname(sys.executable)
-        final_assets_dir = os.path.join(base_path, "assets")
-        
-        if sys.stdout is None:
-            sys.stdout = DummyStream()
-            sys.stderr = DummyStream()
-    else:
-        # Em modo de desenvolvimento, usa o caminho absoluto
-        final_assets_dir = ASSETS_DIR_ABS
-
-    register_temp_files_cleanup(UPLOAD_TEMP_DIR)
-
-    temp_exports_full_path = os.path.join(ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR)
-    os.makedirs(temp_exports_full_path, exist_ok=True) 
-    register_temp_files_cleanup(temp_exports_full_path)
-
     execution_time = perf_counter() - start_time
     logger.info(f"[DEBUG] Carregado RUN em {execution_time:.4f}s")
 
@@ -287,7 +277,7 @@ if __name__ == "__main__":
         target=main,                 # Função principal a ser executada
         view=ft.AppView.WEB_BROWSER, # Executa como uma aplicação web no navegador padrão
         port=8550,                   # Porta em que a aplicação será servida (ex: http://localhost:8550)
-        assets_dir=final_assets_dir, # Descomente se você tiver uma pasta 'assets' na raiz
+        assets_dir=ASSETS_DIR, 
         upload_dir=UPLOAD_TEMP_DIR
     )
 

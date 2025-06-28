@@ -23,7 +23,7 @@ from src.flet_ui.components import (
 )
 from src.flet_ui import theme
 
-from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR, cotacao_dolar_to_real,
+from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR, TEMPLATES_DOCX_SUBDIR, cotacao_dolar_to_real,
                           KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, 
                           FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_LOADED_LLM_PROVIDERS,
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST,
@@ -37,7 +37,7 @@ from src.settings import (KEY_SESSION_CURRENT_BATCH_NAME, KEY_SESSION_PDF_FILES_
 from src.services.firebase_client import FirebaseClientFirestore, _from_firestore_value
 
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
-                        get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l, get_resource_path)
+                        get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l)
 
 # Outros imports pesados aqui:
 from src.core.prompts import (formatted_initial_analysis, get_prompts_for_initial_analysis)
@@ -47,7 +47,7 @@ _initialize_heavy_utils()
 
 from src.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
 import src.core.ai_orchestrator as ai_orchestrator 
-from src.core.doc_generator import DocxExporter, TEMPLATES_SUBDIR as DOCX_TEMPLATES_SUBDIR
+from src.core.doc_generator import DocxExporter
 
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
 municipios_list = get_municipios_por_uf_cached()
@@ -104,8 +104,7 @@ def load_prompts_from_firestore(page: ft.Page):
     user_id = page.session.get("auth_user_id")
     user_cache = get_user_cache(page)
 
-    prompts_path = get_resource_path('assets\\dict_prompts.json')
-    os.makedirs(os.path.dirname(prompts_path), exist_ok=True)
+    prompts_path = os.path.join(ASSETS_DIR, 'dict_prompts.json')
 
     loaded_components = None
 
@@ -2049,23 +2048,23 @@ class InternalExportManager:
             missing_keys_on_server: List[str] = []
             server_save_path = ""
             
-            temp_exports_dir = os.path.join(ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR)
-            try: 
-                os.makedirs(temp_exports_dir, exist_ok=True)
+            try:
+                temp_exports_path = os.path.join(ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR)
+                os.makedirs(temp_exports_path, exist_ok=True)
             except OSError as e:
-                logger.error(f"EXPORT_MANAGER (Web): Falha ao criar diretório de exportações temporárias '{temp_exports_dir}': {e}")
+                logger.error(f"EXPORT_MANAGER (Web): Falha ao criar diretório de exportações temporárias '{temp_exports_path}': {e}")
                 hide_loading_overlay(self.page)
                 show_snackbar(self.page, "Erro ao preparar diretório para download.", theme.COLOR_ERROR)
                 return
             
             if operation_type == ExportOperation.SIMPLE_DOCX:
                 temp_server_filename = f"{default_filename_base}_simples_{int(time())}.docx"
-                server_save_path = os.path.join(temp_exports_dir, temp_server_filename)
+                server_save_path = os.path.join(temp_exports_path, temp_server_filename)
                 export_success_on_server = self.docx_exporter.export_simple_docx(data_to_export, server_save_path)
             elif operation_type == ExportOperation.TEMPLATE_DOCX and template_path:
                 template_name = os.path.basename(template_path).replace(".docx","").replace(" ", "_").lower()
                 temp_server_filename = f"{default_filename_base}_{template_name}_{int(time())}.docx"
-                server_save_path = os.path.join(temp_exports_dir, temp_server_filename)
+                server_save_path = os.path.join(temp_exports_path, temp_server_filename)
                 export_success_on_server, _ = self.docx_exporter.export_from_template_docx(data_to_export, template_path, server_save_path)
             else: 
                 logger.error(f"EXPORT_MANAGER (Web): Tipo de operação desconhecido ou template_path ausente: {operation_type}")
@@ -2076,18 +2075,8 @@ class InternalExportManager:
             hide_loading_overlay(self.page)
             if export_success_on_server and temp_server_filename:
                 download_url = f"/{WEB_TEMP_EXPORTS_SUBDIR}/{temp_server_filename}"
-                #self.page.launch_url(download_url, web_window_name="_self")
-                self.page.launch_url(download_url, web_window_name="_blank")
+                self.page.launch_url(download_url, web_window_name="_blank") # or web_window_name="_self"
                 show_snackbar(self.page, f"Download de '{temp_server_filename}' iniciado.", theme.COLOR_SUCCESS)
-                #if missing_keys_on_server and operation_type == ExportOperation.TEMPLATE_DOCX:
-                #    template_name_friendly = os.path.basename(template_path or "").replace(".docx","").replace("_", " ").title()
-                #    missing_keys_str = "\n".join(missing_keys_on_server)
-                #    threading.Timer(1.0, lambda: show_confirmation_dialog(
-                #        self.page, title="Aviso de Exportação",
-                #        content=ft.Column([
-                #            ft.Text(f"Os seguintes campos possuem valores, mas não foram encontrados placeholders respectivos no template '{template_name_friendly}':"),
-                #            ft.Text(missing_keys_str, weight=ft.FontWeight.BOLD, selectable=True)], tight=True),
-                #        confirm_text="OK", cancel_text=None )).start()
             else: 
                 logger.error(f"ExportManager (Web): Falha ao gerar DOCX: {server_save_path}")
                 show_snackbar(self.page, "Falha ao gerar arquivo para download.", theme.COLOR_ERROR)
@@ -2261,7 +2250,7 @@ class InternalExportManager:
             original_filename (str): O nome original do arquivo.
             is_web_upload_temp (bool): Indica se o arquivo de origem é um temporário de upload web.
         """
-        templates_dir = os.path.join(ASSETS_DIR_ABS, DOCX_TEMPLATES_SUBDIR)
+        templates_dir = os.path.join(ASSETS_DIR, TEMPLATES_DOCX_SUBDIR)
         os.makedirs(templates_dir, exist_ok=True)
         destination_path = os.path.join(templates_dir, original_filename)
         try:

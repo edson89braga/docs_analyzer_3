@@ -13,7 +13,7 @@ import flet as ft
 import time, os, threading, jwt
 from typing import Optional
 
-from ..settings import (APP_TITLE, APP_VERSION, FLET_SECRET_KEY,
+from ..settings import (APP_TITLE, APP_VERSION,
                         APP_DEFAULT_SETTINGS_COLLECTION, ANALYZE_PDF_DEFAULTS_DOC_ID,
                         KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS,
                         FALLBACK_ANALYSIS_SETTINGS,
@@ -389,10 +389,6 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
 
     global _token_refresh_thread_stop_event, _token_refresh_thread_instance
 
-    # Para uploads no modo web, Flet precisa de FLET_SECRET_KEY e upload_dir
-    if not os.getenv("FLET_SECRET_KEY"):
-        os.environ["FLET_SECRET_KEY"] = FLET_SECRET_KEY
-
     if dev_mode:
         logger.info(f"Aplicação Flet '{APP_TITLE}' v{APP_VERSION} iniciando em MODO DE DESENVOLVIMENTO (UI Test).")
     else:
@@ -495,7 +491,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         """
         from src.config_manager import set_final_keyring_proxy
         from src.utils import cleanup_old_temp_files, clear_user_cache
-        from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR 
+        from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR 
         from src.logger.cloud_logger_handler import CloudLogHandler
 
         logger.info("Cliente desconectado ou aplicação Flet fechando...")
@@ -507,11 +503,10 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             set_final_keyring_proxy()
 
             # 2. Limpeza de Arquivos Temporários
-            temp_exports_full_path = os.path.join(ASSETS_DIR_ABS, WEB_TEMP_EXPORTS_SUBDIR)
-            logger.debug(f"Executando limpeza manual: cleanup_old_temp_files() em '{UPLOAD_TEMP_DIR}' e '{temp_exports_full_path}'")
+            temp_exports_path = os.path.join(ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR)
+            cleanup_old_temp_files(temp_exports_path)
             cleanup_old_temp_files(UPLOAD_TEMP_DIR)
-            cleanup_old_temp_files(temp_exports_full_path)
-
+            
             # 3. Flush e Encerramento SEGURO do Logger da Nuvem
             if LoggerSetup._active_cloud_handler_instance:
                 logger.debug("Executando desligamento completo do CloudLogHandler...")

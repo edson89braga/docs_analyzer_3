@@ -78,13 +78,13 @@ exe = EXE(
     a.scripts,
     [],
     [],
-    name='IAnalista',           # Nome distinto para o executável de debug
-    debug=False,                  # Habilita saídas de debug do bootloader
+    name='IAnalista_debug',  # Nome distinto para o executável de debug
+    debug=True,                  # Habilita saídas de debug do bootloader
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,                   # Desabilitado para compilação mais rápida
+    upx=False,                   # Desabilitado para compilação mais rápida
     runtime_tmpdir=None,
-    console=False,                # ESSENCIAL: Mostra a janela do console
+    console=True,                # ESSENCIAL: Mostra a janela do console
     icon='assets/icon1.ico',
 )
 
@@ -94,13 +94,13 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
-    name='IAnalista'
+    upx=False,
+    name='IAnalista_debug'
 )
 
 # --- Bloco 4: Script Pós-Build ---
 # Move a pasta 'assets' da subpasta '_internal' para o diretório raiz da aplicação.
-dist_path = os.path.join(DISTPATH, 'IAnalista')
+dist_path = os.path.join(DISTPATH, 'IAnalista_debug')
 internal_assets_path = os.path.join(dist_path, '_internal', 'assets')
 root_assets_path = os.path.join(dist_path, 'assets')
 

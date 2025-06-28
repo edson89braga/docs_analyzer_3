@@ -3,48 +3,61 @@ logger = logging.getLogger(__name__)
 
 from time import perf_counter
 start_time = perf_counter()
-# O logger é inicializado logo abaixo, então esta mensagem será logada após a inicialização.
-# Para garantir que seja logado, o logger precisa ser configurado antes.
-# Por enquanto, manteremos o print e o converteremos para logger.debug após a inicialização do logger.
-# logger.debug(f"{start_time:.4f}s - Iniciando settings.py")
+logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando settings.py")
+print(f"[DEBUG] {start_time:.4f}s - Iniciando settings.py")
 
-import os
-import sys
-from pathlib import Path
-
-# --- Configuração Básica ---
-logger.debug(f"{start_time:.4f}s - Iniciando settings.py") # Agora o logger está disponível
-
-# --- Variáveis de Teste/Exemplo (Remover em produção) ---
+# --- Variáveis de Teste/Exemplo (Remover em produção) -----------------------------------------------------------------------
 # TODO: DELETE:
 api_key_test = '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'
+
+# --- Outras Variáveis globais temporárias (Remover em produção?)--------------------------------------------------------------
 cotacao_dolar_to_real = 6
 
-# --- Configurações Gerais da Aplicação ---
+import os, sys
+
+# --- Configurações de Diretórios e Arquivos -------------------------------------------------------------------------------
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def get_resource_path(relative_path=''):
+    """
+    Obtém o caminho correto para recursos/assets tanto em desenvolvimento
+    quanto em ambiente frozen
+    """
+    if getattr(sys, 'frozen', False):
+        # PyInstaller cria uma pasta temporária
+        base_path = os.path.dirname(sys.executable)
+    else:
+        # Desenvolvimento
+        base_path = os.path.dirname(SRC_DIR)
+    
+    return os.path.join(base_path, relative_path)
+
+APP_ROOT_DIR = get_resource_path()
+
+ASSETS_DIR = os.path.join(APP_ROOT_DIR, "assets")
+UPLOAD_TEMP_DIR = os.path.join(APP_ROOT_DIR, "uploads_temp")
+PATH_LOGS_DIR = os.path.join(APP_ROOT_DIR, "logs")
+
+for pth in [UPLOAD_TEMP_DIR, ASSETS_DIR, PATH_LOGS_DIR]:
+    if not os.path.exists(pth):
+        os.makedirs(pth)
+
+# --- Paths relativos à pasta Assets (flet):
+PATH_IMAGE_LOGO_DEPARTAMENTO = "logo_pf_orgao.png" 
+TEMPLATES_DOCX_SUBDIR = "templates_docx"
+WEB_TEMP_EXPORTS_SUBDIR = "temp_docx_exports"
+
+# --- Configurações Gerais da Aplicação -------------------------------------------------------------------------------
 APP_NAME = "DocsAnalyzerPF"
 APP_VERSION = "0.2" # Versão inicial do MVP
 APP_TITLE = "IA Assistente - COR/SR/PF/SP" # Análise de Documentos
-FLET_SECRET_KEY = "minha_chave_secreta_de_teste_temporaria_123"
-PATH_IMAGE_LOGO_DEPARTAMENTO = "logo_pf_orgao.png" # Caminho para a imagem (ajuste conforme necessário, pode estar em 'assets')
 ALLOWED_EMAIL_DOMAINS = ["pf.gov.br", "dpf.gov.br"]
+KEY_NAME_FLET_SECRET_KEY = "flet_secret_key"
 
-# --- Configurações de Diretórios e Arquivos ---
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-APP_ROOT_DIR = os.path.dirname(SRC_DIR)
-UPLOAD_TEMP_DIR = os.path.join(APP_ROOT_DIR, "uploads_temp")
-ASSETS_DIR_ABS = os.path.join(APP_ROOT_DIR, "assets")
-WEB_TEMP_EXPORTS_SUBDIR = "temp_exports"
-PATH_LOGS = Path("logs") # Pastas locais
-PATH_LOGS.mkdir(exist_ok=True)
-
-# Calcula o diretório de dados da aplicação
+# Calcula o diretório de dados da aplicação:
 try:
-    if os.name == 'nt': # Windows
-        APP_DATA_DIR = os.path.join(os.getenv('APPDATA', ''), APP_NAME)
-    elif sys.platform == 'darwin': # macOS
-        APP_DATA_DIR = os.path.join(os.path.expanduser('~/Library/Application Support'), APP_NAME)
-    else: # Linux e outros
-        APP_DATA_DIR = os.path.join(os.path.expanduser('~/.config'), APP_NAME)
+    assert os.name == 'nt' # Windows
+    APP_DATA_DIR = os.path.join(os.getenv('APPDATA', ''), APP_NAME)
     os.makedirs(APP_DATA_DIR, exist_ok=True) # Garante que exista
 except Exception as e:
     logger.critical(f"Erro crítico ao determinar/criar o diretório de dados da aplicação: {e}", exc_info=True)
@@ -56,11 +69,7 @@ except Exception as e:
 ENCRYPTED_SERVICE_KEY_FILENAME = "firebase_service_key.enc"
 ENCRYPTED_SERVICE_KEY_PATH = os.path.join(APP_DATA_DIR, ENCRYPTED_SERVICE_KEY_FILENAME)
 
-# --- Configurações do Firebase ---
-# ATENÇÃO: Obtenha esta chave no Console do Firebase -> Configurações do Projeto -> Geral -> Seus apps -> Configuração do SDK
-# Esta chave é considerada pública e segura para ser incluída no código do cliente (como este app desktop).
-# Ela identifica seu projeto Firebase para os serviços de Autenticação, Firestore (com regras de segurança), etc.
-# NÃO confunda com a Chave de Serviço (Admin SDK JSON), que é secreta.
+# --- Configurações do Firebase -------------------------------------------------------------------------------
 FIREBASE_WEB_API_KEY = os.getenv("FIREBASE_WEB_API_KEY", "AIzaSyDuRGIubM32TMjAQEvpl55tf4sGIWULKpk")
 
 if FIREBASE_WEB_API_KEY == "SUA_FIREBASE_WEB_API_KEY_AQUI":
@@ -74,7 +83,7 @@ PROJECT_ID = "docs-analyzer-a7430"
 FB_STORAGE_BUCKET = "docs-analyzer-a7430.firebasestorage.app"
 #FIREBASE_DB_URL = 'https://app-scripts-sec-default-rtdb.firebaseio.com/'
 
-# Caminhos de configuração do Firebase
+# Caminhos de configuração do FIRESTORE -----------------------------------
 APP_DEFAULT_SETTINGS_COLLECTION = "app_default_settings"
 ANALYZE_PDF_DEFAULTS_DOC_ID = "analyze_pdf_defaults"
 LLM_PROVIDERS_CONFIG_COLLECTION = "llm_providers_config" # Já existe como PROVIDERS_COLLECTION em llm_settings_view
@@ -86,7 +95,7 @@ LLM_EMBEDDINGS_DEFAULT_DOC_ID = "model_embeddings_list" # Documento com a lista 
 PROMPTS_COLLECTION = "prompt_templates"
 PROMPTS_DOCUMENT_ID = "initial_analysis_v1"
 
-# Chaves de sessão relacionadas ao Firebase
+# Chaves de sessão relacionadas ao Firebase ---------------------------------
 KEYRING_SERVICE_FIREBASE = f"{APP_NAME}_Firebase"
 KEYRING_USER_ENCRYPTION_KEY = "encryption_key" # Chave Fernet
 KEY_SESSION_LOADED_LLM_PROVIDERS = "app_loaded_llm_providers" # Lista de dicts dos provedores
@@ -96,7 +105,15 @@ KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS = "app_cloud_analysis_defaults" # Padrões c
 KEY_SESSION_TOKENS_EMBEDDINGS = "app_tokens_embeddings"
 KEY_SESSION_MODEL_EMBEDDINGS_LIST = "app_model_embeddings_list"
 
-# --- Configurações de LLM ---
+# --- Configurações de Cloud Logger ---------------------------------------------
+CLOUD_LOGGER_FOLDER = "logs/"        # Pasta no CloudStorage
+CLOUD_LOGGER_UPLOAD_INTERVAL = 120   # Tempo de intervalo entre uploads (segundos)
+CLOUD_LOGGER_MAX_BUFFER_SIZE = 1000  # Tamanho máximo do buffer (número de linhas)
+CLOUD_LOGGER_MAX_RETRIES = 3         # Número máximo de tentativas de upload
+CLOUD_LOGGER_RETRY_DELAY = 12        # Tempo de espera entre as tentativas (segundos)
+
+
+# --- Configurações de PDF_PROCESSOR e LLM -------------------------------------------------
 DEFAULT_LLM_SERVICE = "openai" # Exemplo
 DEFAULT_LLM_PROVIDER = "openai"
 DEFAULT_LLM_MODEL = "gpt-4.1-mini" # Modelo inicial padrão
@@ -120,7 +137,7 @@ FALLBACK_ANALYSIS_SETTINGS = {
 }
 
 
-# --- Configurações de Proxy ---
+# --- Configurações de Proxy -------------------------------------------------------------------------
 # Constantes Keyring Proxy -> rótulos fixos para uso no keyring e também no Dict_resultado config_proxy
 PROXY_URL_DEFAULT = 'proxy.dpf.gov.br'
 PROXY_PORT_DEFAULT = '8080'
@@ -132,27 +149,18 @@ K_PROXY_PORT = "port_proxy"
 K_PROXY_USERNAME = "username_proxy"
 K_PROXY_PASSWORD = "password_proxy"
 
-def show_data_k():
+def show_data_k(keyring):
     """
     Função de depuração para exibir dados de proxy armazenados no Keyring.
     ATENÇÃO: Esta função é apenas para fins de depuração e não deve ser usada em produção.
     """
-    keyring = None
     logger.debug(f"Proxy Enabled: {keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_ENABLED)}")
     logger.debug(f"Proxy IP URL: {keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_IP_URL)}")
     logger.debug(f"Proxy Username: {keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_USERNAME)}")
     logger.debug(f"Proxy Password: *** ") # {keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD)}
 
 
-# --- Configurações de Cloud Logger ---
-CLOUD_LOGGER_FOLDER = "logs/"        # Pasta no CloudStorage
-CLOUD_LOGGER_UPLOAD_INTERVAL = 120   # Tempo de intervalo entre uploads (segundos)
-CLOUD_LOGGER_MAX_BUFFER_SIZE = 1000  # Tamanho máximo do buffer (número de linhas)
-CLOUD_LOGGER_MAX_RETRIES = 3         # Número máximo de tentativas de upload
-CLOUD_LOGGER_RETRY_DELAY = 12        # Tempo de espera entre as tentativas (segundos)
-
-
-# --- Configurações de NC_ANALYZE_VIEW ---
+# --- Configurações de NC_ANALYZE_VIEW --------------------------------------------------------------------------
 # Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
 KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
 KEY_SESSION_PDF_FILES_ORDERED = "apv_pdf_files_ordered"
@@ -171,5 +179,8 @@ KEY_SESSION_PROMPTS_FINAL = "app_prompts_from_firestore_1"
 KEY_SESSION_PROMPTS_DICT = "app_prompts_from_firestore_2"
 KEY_SESSION_LIST_TO_PROMPTS = "app_list_to_prompts_from_firestore"
 
+# -----------------------------------------------------------------------------------------------------------------
+
 execution_time = perf_counter() - start_time
-logger.debug(f"Carregado em {execution_time:.4f}s")
+logger.info(f"[DEBUG] Carregado SETTINGS em {execution_time:.4f}s")
+print(f"[DEBUG] Carregado SETTINGS em {execution_time:.4f}s")

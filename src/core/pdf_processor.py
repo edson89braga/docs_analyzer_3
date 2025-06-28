@@ -1,4 +1,4 @@
-import logging
+import logging, os
 logger = logging.getLogger(__name__)
 
 from time import perf_counter
@@ -8,7 +8,7 @@ logger.debug(f"{start_time:.4f}s - Iniciando pdf_processor.py")
 DEBUG_MODE = False
 
 ### nltk_initializer:
-import nltk
+import nltk, sys
 import warnings
 
 def initialize_nltk_data():
@@ -16,6 +16,17 @@ def initialize_nltk_data():
     Verifica e baixa os recursos NLTK necessários ('punkt', 'stopwords')
     se eles ainda não estiverem presentes.
     """
+    # Em ambiente compilado, adiciona o caminho dos dados empacotados.
+    if getattr(sys, 'frozen', False):
+        # O caminho base em um app 'frozen' é o diretório do executável.
+        base_path = os.path.dirname(sys.executable)
+        nltk_data_path = os.path.join(base_path, 'nltk_data')
+        
+        # Adiciona o caminho ao NLTK se ele ainda não estiver lá.
+        if nltk_data_path not in nltk.data.path:
+            nltk.data.path.insert(0, nltk_data_path)
+            logger.debug(f"Ambiente 'frozen' detectado. Caminho nltk_data adicionado: {nltk_data_path}")
+
     resources = ["punkt", "stopwords"]
     for resource in resources:
         try:
@@ -23,15 +34,30 @@ def initialize_nltk_data():
                 nltk.data.find(f'tokenizers/{resource}')
             elif resource == "stopwords":
                 nltk.data.find(f'corpora/{resource}')
+        except LookupError: # Erro mais específico que DownloadError para dados ausentes
+            warnings.warn(f"Recurso NLTK '{resource}' não encontrado. Tentando download (apenas em modo de desenvolvimento).")
+            logger.warning(f"Recurso NLTK '{resource}' não encontrado. Tentando download (apenas em modo de desenvolvimento).")
+            # O download só deve ocorrer em ambiente de desenvolvimento.
+            if not getattr(sys, 'frozen', False):
+                try:
+                    nltk.download(resource, quiet=True)
+                except Exception as download_exc:
+                    warnings.warn(f"Falha ao baixar recurso NLTK '{resource}': {download_exc}")
+                    logger.warning(f"Falha ao baixar recurso NLTK '{resource}': {download_exc}")
+            else:
+                warnings.warn(f"Download pulado para '{resource}' em ambiente compilado. Certifique-se de que os dados foram incluídos pelo PyInstaller.")
+                logger.warning(f"Download pulado para '{resource}' em ambiente compilado. Certifique-se de que os dados foram incluídos pelo PyInstaller.")
         except nltk.downloader.DownloadError:
             nltk.download(resource, quiet=True)
         except Exception as e:
             # Captura outras exceções, como problemas de rede durante a busca
             warnings.warn(f"Could not verify NLTK resource {resource} due to: {e}. Download will be attempted.")
+            logger.warning(f"Could not verify NLTK resource {resource} due to: {e}. Download will be attempted.")
             try:
                 nltk.download(resource, quiet=True)
             except Exception as download_exc:
                 warnings.warn(f"Failed to download NLTK resource {resource}: {download_exc}")
+                logger.warning(f"Failed to download NLTK resource {resource}: {download_exc}")
 
 # Executa a inicialização quando este módulo é importado
 initialize_nltk_data()
@@ -406,11 +432,13 @@ def get_tfidf_scores(pages_texts: List[str], language: str = 'portuguese') -> np
         current_stopwords = list(set(stopwords.words(language)))
     except OSError: # Pode ocorrer se o corpus 'stopwords' para o idioma não existir
         warnings.warn(f"Stopwords para '{language}' não encontradas. Tentando baixar...")
+        logger.warning(f"Stopwords para '{language}' não encontradas. Tentando baixar...")
         try:
             nltk.download('stopwords', quiet=True)
             current_stopwords = list(set(stopwords.words(language)))
         except Exception as e:
             warnings.warn(f"Falha ao baixar stopwords para '{language}': {e}. Usando lista vazia de stopwords.")
+            logger.warning(f"Falha ao baixar stopwords para '{language}': {e}. Usando lista vazia de stopwords.")
             current_stopwords = []
             
     vectorizer = TfidfVectorizer(stop_words=current_stopwords)
