@@ -402,7 +402,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
     # --- Aplicar Temas ---
     page.theme = theme.APP_THEME
     page.dark_theme = theme.APP_DARK_THEME
-    page.theme_mode = ft.ThemeMode.LIGHT # .SYSTEM
+    page.theme_mode = ft.ThemeMode.SYSTEM # .LIGHT
 
     if page.data is None:
         page.data = {}

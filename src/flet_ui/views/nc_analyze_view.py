@@ -1330,7 +1330,7 @@ class AnalyzePDFViewContent(ft.Column):
         else:
             self.settings_drawer_manager._load_settings_into_drawer_controls(FALLBACK_ANALYSIS_SETTINGS)
 
-        # Chama o método central que lê a sessão e atualiza TODOS os componentes da UI
+        # Chama o método central que lê a sessão e atualiza All componentes da UI
         self._update_gui_from_state()
 
     def _clear_all_data_and_gui(self):
@@ -3394,7 +3394,8 @@ class LLMStructuredResultDisplay(ft.Column):
             is_dropdown = isinstance(control, ft.Dropdown)
             if isinstance(control, (ft.TextField, ft.Dropdown)):
                 value = control.value
-                logger.debug(f"Coletando para '{field_name}': '{value}' (Tipo: {type(value)}, É Dropdown: {is_dropdown})")
+                if field_name not in ['descricao_geral', 'resumo_fato', 'pessoas_envolvidas', 'linha_do_tempo', 'observacoes']:
+                    logger.debug(f"Coletando para '{field_name}': '{value}' (Tipo: {type(value)}, É Dropdown: {is_dropdown})")
             
             # Validação para exportação
             if validate_for_export and field_name in required_fields_for_export:
@@ -3638,9 +3639,7 @@ class FeedbackDialog(ft.AlertDialog):
                 f"Ignorar avaliação", width=160, bgcolor=ft.Colors.DEEP_ORANGE_100, color=ft.Colors.BLACK,
                 on_click=lambda _: self._handle_action_click(FeedbackDialogAction.SKIP_AND_CONTINUE)
             )
-        )
-        # TODO: Adicionar registro de solicitação de re-análise, quando é compreensível ignorar a avaliação
-        
+        )       
         self.actions = actions
 
     def _handle_action_click(self, action: FeedbackDialogAction):

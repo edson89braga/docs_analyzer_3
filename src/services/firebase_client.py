@@ -769,7 +769,7 @@ class FbManagerAuth:
                     self._public_keys_expiry = 0  # Força refresh do cache
                 return None
             
-            # 4. CORREÇÃO: Extrair a chave pública do certificado X.509
+            # 4. Extrair a chave pública do certificado X.509
             try:
                 # Parse do certificado X.509
                 cert = x509.load_pem_x509_certificate(certificate_pem.encode('utf-8'))
@@ -791,6 +791,8 @@ class FbManagerAuth:
                 algorithms=["RS256"],
                 audience=self.project_id,
                 issuer=f"https://securetoken.google.com/{self.project_id}",
+                # Adiciona uma tolerância de 10 segundos para 'nbf' (not before) e 'iat' (issued at)
+                leeway=60,
                 # Verificações adicionais recomendadas
                 options={
                     "verify_signature": True,
@@ -818,15 +820,16 @@ class FbManagerAuth:
             return decoded_token
 
         except jwt.ExpiredSignatureError:
-            logger.error("Falha na verificação do token: Token expirado.")
+            logger.error("Falha na verificação do token: Token expirado (exp).")
+        except jwt.InvalidIssuedAtError:
+            logger.error("Falha na verificação do token: Token emitido no futuro (iat), verifique o relógio da máquina.")
         except jwt.InvalidAudienceError:
             logger.error(f"Falha na verificação do token: 'audience' inválida. Esperado: {self.project_id}")
         except jwt.InvalidIssuerError:
             logger.error(f"Falha na verificação do token: 'issuer' inválido. Esperado: https://securetoken.google.com/{self.project_id}")
         except jwt.InvalidTokenError as e:
+            # Captura outros erros genéricos de token
             logger.error(f"Token JWT inválido: {e}")
-        except requests.RequestException as e:
-            logger.error(f"Erro ao buscar chaves públicas do Firebase: {e}")
         except Exception as e:
             logger.error(f"Falha inesperada na verificação do token JWT: {e}", exc_info=True)
 

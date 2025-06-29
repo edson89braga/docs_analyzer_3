@@ -57,6 +57,11 @@ a = Analysis(
         *s_t_hiddenimports,
         *torch_hiddenimports,
 
+        # Imports para garantir a robustez da validação JWT
+        #'cryptography',
+        #'cryptography.hazmat.backends.openssl',
+        #'cryptography.hazmat.primitives.asymmetric.rsa'
+
     ],
     hookspath=[],
     hooksconfig={},
@@ -78,13 +83,13 @@ exe = EXE(
     a.scripts,
     [],
     [],
-    name='IAnalista',           # Nome distinto para o executável de debug
-    debug=False,                  # Habilita saídas de debug do bootloader
+    name='IAnalista',         # Nome distinto para o executável de debug
+    debug=False,              # Habilita saídas de debug do bootloader
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,                   # Desabilitado para compilação mais rápida
+    upx=False,   # Causa travamentos silenciosos no PyTorch e bibliotecas SSL. Substituir por compressor externo (7-Zip)
     runtime_tmpdir=None,
-    console=False,                # ESSENCIAL: Mostra a janela do console
+    console=False,            # Mostra a janela do console
     icon='assets/icon1.ico',
 )
 
@@ -94,21 +99,31 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,   
     name='IAnalista'
 )
 
 # --- Bloco 4: Script Pós-Build ---
 # Move a pasta 'assets' da subpasta '_internal' para o diretório raiz da aplicação.
 dist_path = os.path.join(DISTPATH, 'IAnalista')
+
 internal_assets_path = os.path.join(dist_path, '_internal', 'assets')
 root_assets_path = os.path.join(dist_path, 'assets')
 
+internal_nltk_path = os.path.join(dist_path, '_internal', 'nltk_data')
+root_nltk_path = os.path.join(dist_path, 'nltk_data')
+
 if os.path.exists(internal_assets_path):
     print(f"Movendo assets de '{internal_assets_path}' para '{root_assets_path}'...")
+    
     if os.path.exists(root_assets_path):
         shutil.rmtree(root_assets_path)
     shutil.move(internal_assets_path, root_assets_path)
+    
+    if os.path.exists(root_nltk_path):
+        shutil.rmtree(root_nltk_path)
+    shutil.move(internal_nltk_path, root_nltk_path)
+    
     print("Assets movidos com sucesso.")
 else:
     print(f"AVISO: Pasta 'assets' não encontrada em '{internal_assets_path}'. O script pós-build não fez nada.")

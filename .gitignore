@@ -20,6 +20,7 @@ sdist/
 var/
 wheels/
 upx-5.0.1-win64/
+tests_in_dev/
 pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/

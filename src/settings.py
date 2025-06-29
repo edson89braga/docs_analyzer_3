@@ -7,8 +7,7 @@ logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando settings.py")
 print(f"[DEBUG] {start_time:.4f}s - Iniciando settings.py")
 
 # --- Variáveis de Teste/Exemplo (Remover em produção) -----------------------------------------------------------------------
-# TODO: DELETE:
-api_key_test = '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'
+api_key_test = '...'
 
 # --- Outras Variáveis globais temporárias (Remover em produção?)--------------------------------------------------------------
 cotacao_dolar_to_real = 6

@@ -455,6 +455,7 @@ prompt_F0 = {
         
         "**UF/MUNICÍPIO DO FATO:**\n"
         "- Quando não houver indicação clara da localização do fato, pode-se utilizar como referência a localização ou residência do requerente, se disponível no texto.\n"
+        "- Nos casos de apreensão de mercadorias enviadas por remessa (via postal ou comércio eletrônico), priorize sempre o domicílio da pessoa física ou jurídica investigada (remetente) em vez do local físico da apreensão.\n"
         "- Atente-se a casos de objetos apreendidos fora do estado, mas cuja remessa ilegal tenha origem em São Paulo, sendo este o local de competência do crime e considerado Local do Fato.\n\n"
         
         "**VALOR DE APURAÇÃO:**\n"
@@ -532,6 +533,7 @@ prompt_F2 = {
                
         "**UF/MUNICÍPIO DO FATO:**\n"
         "- Quando não houver indicação clara da localização do fato, pode-se utilizar como referência a localização ou residência do requerente, se disponível no texto.\n"
+        "- Nos casos de apreensão de mercadorias enviadas por remessa (via postal ou comércio eletrônico), priorize sempre o domicílio da pessoa física ou jurídica investigada (remetente) em vez do local físico da apreensão.\n"
         "- Atente-se a casos de objetos apreendidos fora do estado, mas cuja remessa ilegal tenha origem em São Paulo, sendo este o local de competência do crime e considerado Local do Fato.\n\n"
                
         "**TIPO DE LOCAL:**\n"

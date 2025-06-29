@@ -336,7 +336,7 @@ def is_text_intelligible(text: str, cid_threshold: float = 0.7) -> bool:
             return False
             
         lang = detect(text_for_langdetect)
-        logger.debug(f"Idioma detectado para o texto (sem cids): '{lang}'")
+        #logger.debug(f"Idioma detectado para o texto (sem cids): '{lang}'")
         return lang in allowed_langs if lang else False
     except LangDetectException:
         logger.debug("LangDetectException, texto considerado ininteligível.")
@@ -390,7 +390,19 @@ def get_vectors(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2
     """
     logger.debug(f'Modelo embeddings in get_vectors: {model_embedding}')
     model = get_sentence_transformer_model(model_embedding)
-    vectors_combined = model.encode(pages_texts)
+
+    # Verifica se a aplicação está rodando em modo 'frozen' (compilado)
+    if getattr(sys, 'frozen', False):
+        logger.warning("Ambiente 'frozen' detectado. Multiprocessamento será desativado para a vetorização.")
+        vectors_combined = model.encode(
+            pages_texts,
+            batch_size=1,         # Processa um texto por vez, desativa o paralelismo interno do batch.
+            show_progress_bar=False,
+            convert_to_numpy=True # Evita manipulação de tensores PyTorch após a codificação.
+        )
+    else:
+        logger.debug("Ambiente de desenvolvimento. Multiprocessamento ativado (padrão).")
+        vectors_combined = model.encode(pages_texts)
 
     if not isinstance(vectors_combined, np_ndarray):
         vectors_combined = np_array(vectors_combined)
@@ -462,7 +474,7 @@ def get_similar_items_indices(item_index: int, similarity_matrix: np_array, simi
         if similarity_matrix[item_index, j] > similarity_threshold:
             similar_indices.append(j)
 
-    logger.debug("Procedido: get_similar_items_indices")
+    #logger.debug("Procedido: get_similar_items_indices")
     return similar_indices
 
 from scipy.sparse import vstack

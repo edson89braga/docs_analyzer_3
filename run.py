@@ -6,9 +6,35 @@ from time import perf_counter
 start_time = perf_counter()
 logger.info(f"{start_time:.4f}s - Iniciando run.py")
 
+# ===============================================================================
+# --- Bloco de Configuração para Compilação (ESSENCIAL) ---
+import os, sys
+
+if getattr(sys, 'frozen', False):
+    import multiprocessing, torch
+
+    # Define variáveis de ambiente para desativar paralelismo interno do PyTorch e Tokenizers
+    # Deve ser feito ANTES de qualquer outro import que possa usar PyTorch/Transformers.
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+    # Configura o PyTorch para usar 1 thread, o que é mais seguro em ambientes 'frozen'
+    torch.set_num_threads(1)
+
+    # Proteção para multiprocessamento em ambientes 'frozen' (Windows)
+    # Deve ser chamado no escopo principal do script de entrada.
+    if __name__ == '__main__':
+        multiprocessing.freeze_support()
+        # Força o método 'spawn' para criar novos processos, que é mais seguro no Windows para aplicações compiladas;
+        if sys.platform.startswith('win'):
+            multiprocessing.set_start_method('spawn', force=True)
+
+# ===============================================================================
+
 DEBUG_LEVEL = False # Constam outras constantes de inicialização em app.py e pdf_processor.py
 
-import logging, os, sys
 from src.logger.logger import LoggerSetup
 
 try:
@@ -50,7 +76,7 @@ class DummyStream:
 def setup_frozen_environment():
     """Configura o ambiente quando executado via PyInstaller"""
     if getattr(sys, 'frozen', False):
-
+                
         if sys.stdout is None:
             sys.stdout = DummyStream()
             sys.stderr = DummyStream()
@@ -65,9 +91,10 @@ def setup_frozen_environment():
             bundle_dir = sys._MEIPASS
         else:
             bundle_dir = os.path.dirname(os.path.abspath(__file__))
-        
-        # Adiciona o diretório do bundle ao path
+        # Adiciona o diretório do bundle ao path:
         sys.path.insert(0, bundle_dir)
+        
+        os.environ["TOKENIZERS_PARALLELISM"] = "false"
         
 # ===============================================================================
 # 2. GERENCIAMENTO DE FLET_SECRET_KEY
@@ -268,7 +295,7 @@ if __name__ == "__main__":
     # temp_exports_full_path = os.path.join(assets_dir_for_cleanup, WEB_TEMP_EXPORTS_SUBDIR)
     # os.makedirs(temp_exports_full_path, exist_ok=True) 
     # register_temp_files_cleanup(temp_exports_full_path)
-    
+
     execution_time = perf_counter() - start_time
     logger.info(f"[DEBUG] Carregado RUN em {execution_time:.4f}s")
 
