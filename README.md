@@ -2,11 +2,6 @@
 
 > Uma plataforma de software inteligente, desenvolvida em Python e Flet, para servir como um hub de agentes de IA e assistentes especializados, otimizando rotinas de análise e processos investigativos da Polícia Federal.
 
-![Build Status](https://img.shields.io/badge/build-passing-brightgreen)
-![Python Version](https://img.shields.io/badge/python-3.13-blue.svg)
-![License](https://img.shields.io/badge/license-Proprietário%20/%20Restrito-red)
-![App Version](https://img.shields.io/badge/version-0.2.0-informational)
-
 ## 📖 Visão Geral
 
 O **IA Assistente - PF/SP** é uma ferramenta de suporte à decisão projetada para acelerar o fluxo de trabalho de analistas e agentes. A plataforma centraliza múltiplos agentes de IA, cada um especializado em uma tarefa, começando com o módulo de **Análise de Documentos**, que automatiza a extração e estruturação de dados de Notícias-Crime e outros documentos jurídicos.
