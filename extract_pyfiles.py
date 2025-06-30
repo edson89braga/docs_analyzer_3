@@ -24,14 +24,11 @@ def scan_and_consolidate_python_files(output_file='python_files_consolidated.txt
         
         for root, dirs, files in os.walk(repo_root):
             # Skip virtual environments and other common directories to ignore
-            if 'venv' in root or 'env' in root or '.git' in root or '__pycache__' in root or 'tests' in root or 'legacy' in root:
+            if '\src' not in root or ('env' in root or '.git' in root or '__pycache__' in root or 'build' in root or 'dist' in root):
                 continue
                 
             for file in files:
-                if file in ('extract_pyfiles.py', 'run_dev.py', 'admin_llm_providers.py',
-                            'cleanup_cloud_logs.py', 'teste_int.py', 'set_admin.py',
-                            'test_layout_app.py', 'teste_interativo.py', '__init__.py', 'OLD_prompts.py',
-                            'testes_pdf_processor_and_ocr.py', 'upload_prompts.py'):
+                if file == '__init__.py':
                     continue
                 if file.endswith('.py'):
                     file_path = os.path.join(root, file)
