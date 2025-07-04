@@ -525,9 +525,16 @@ def analyze_text_with_llm(
     try:
         if provider == "openai":
             os.environ["OPENAI_API_KEY"] = api_key
+            
+            # Reinstancia o cliente se ele não existir ou se a chave API mudou.
+            if client_openai is None or client_openai.api_key != api_key:
+                logger.info(f"Instanciando ou atualizando cliente OpenAI com a nova chave API para o provedor '{provider}'.")
+                client_openai = OpenAI(api_key=api_key)
+            
             # Chamada à API de ChatCompletion
             if not client_openai:
                 client_openai = OpenAI()
+            
             if prompt_name == "PROMPT_UNICO_for_INITIAL_ANALYSIS":
                 prompt_list_dicts = prompts[prompt_name]
                 modified_prompt_list = []
