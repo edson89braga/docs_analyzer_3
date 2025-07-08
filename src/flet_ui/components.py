@@ -1030,7 +1030,7 @@ class CardWithHeader(ft.Card):
         title: str,
         content: ft.Control,
         header_actions: Optional[List[ft.Control]] = None,
-        header_bgcolor: Optional[str] = theme.SURFACE_VARIANT, # Cor de fundo do cabeçalho
+        header_bgcolor: Optional[str] = ft.Colors.with_opacity(0.08, ft.Colors.OUTLINE), # theme.SURFACE_VARIANT, # Cor de fundo do cabeçalho
         header_title_weight: ft.FontWeight = ft.FontWeight.BOLD,
         header_padding: Union[None, ft.PaddingValue] = ft.padding.symmetric(horizontal=16, vertical=8),
         card_elevation: Optional[float] = 2,

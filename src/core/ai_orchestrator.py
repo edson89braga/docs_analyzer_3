@@ -4,6 +4,7 @@ Módulo responsável por orquestrar a interação com os modelos de linguagem (L
 usando LangChain.
 """
 # Configuração do Logger
+import datetime
 import logging
 logger = logging.getLogger(__name__)
 
@@ -492,6 +493,7 @@ def analyze_text_with_llm(
         temperature: float = DEFAULT_TEMPERATURE,
         api_key: str = None,
         loaded_llm_providers: Dict = {},
+        normalizing_and_review_response: bool = True
     ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
     """
     Envia texto processado para um LLM através do LangChain para análise,
@@ -677,16 +679,182 @@ def analyze_text_with_llm(
 
     #pr-int('\n\n', f'final_response: {type(final_response)}\n', final_response, '\n\n')
 
-    # Normalizações e revisões devem ser feitas aqui
-    final_response = normalizing_function(final_response)
-    
-    final_response = review_function(final_response)
+    if normalizing_and_review_response:
+        # Normalizações e revisões devem ser feitas aqui
+        final_response = normalizing_function(final_response)
+        
+        final_response = review_function(final_response)
 
     logger.info(f"Token_usage_info: {token_usage_info}")
 
     processing_time = perf_counter() - start_time
     return final_response, token_usage_info, processing_time
 
+### ================================================================================================
+# FUNÇÕES UTILITÁRIAS:
+
+def get_text_from_pdf(pdf_path: str) -> Optional[str]:
+    if not os.path.exists(pdf_path):
+        logger.error(f"Arquivo PDF não encontrado em: {pdf_path}")
+        return None
+ 
+    from src.core.pdf_processor import PDFDocumentAnalyzer
+    analyzer = PDFDocumentAnalyzer()
+    # Extrai o texto de todas as páginas
+    combined_processed_page_data, all_global_page_keys_ordered, \
+    embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = analyzer.analyze_pdf_documents([pdf_path])
+    
+    final_selected_ordered_indices, _, _ = analyzer.filter_and_classify_pages(
+        combined_processed_page_data, all_global_page_keys_ordered,embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined)
+    
+    _, full_text, _, final_aggregated_tokens = analyzer.group_texts_by_relevance_and_token_limit(combined_processed_page_data, final_selected_ordered_indices, 180000)
+
+    logger.info(f"Total tokens from accumulated text: {final_aggregated_tokens}")
+    logger.info(f"Texto extraído de {len(final_selected_ordered_indices)} páginas e concatenado.")
+    
+    return full_text
+
+def get_prompt_template():
+    import json
+    from src.core.prompts import get_prompts_for_initial_analysis
+    from src.settings import ASSETS_DIR
+
+    prompts_path = os.path.join(ASSETS_DIR, 'dict_prompts.json')
+    if not os.path.exists(prompts_path):
+        logger.error(f"Arquivo de prompts não encontrado em: {prompts_path}")
+        return None
+
+    with open(prompts_path, 'r', encoding='utf-8') as f:
+        loaded_components = json.load(f)
+
+    # Constrói os pipelines de prompts usando a lógica existente
+    final_prompts, _ = get_prompts_for_initial_analysis(
+        loaded_components["ALL_lists"],
+        loaded_components["ALL_prompts"]
+    )
+
+    prompt_unico_structure = final_prompts.get('PROMPT_UNICO_for_INITIAL_ANALYSIS')
+    if not prompt_unico_structure:
+        logger.error("A estrutura 'PROMPT_UNICO_for_INITIAL_ANALYSIS' não foi encontrada nos prompts construídos.")
+        return None
+    
+    logger.info("Estrutura de prompt carregada e construída com sucesso.")
+    return final_prompts
+
+def generate_full_prompt_from_pdf(pdf_path: str) -> Optional[str]:
+    """
+    Gera um arquivo de texto (.txt) contendo o prompt completo que seria enviado à IA,
+    a partir de um único arquivo PDF e do template de prompt "PROMPT_UNICO".
+
+    Este método realiza as seguintes etapas:
+    1. Extrai o conteúdo de texto completo de todas as páginas do PDF fornecido.
+    2. Carrega a estrutura de prompts a partir do arquivo JSON local ('dict_prompts.json').
+    3. Constrói o pipeline de "PROMPT_UNICO_for_INITIAL_ANALYSIS".
+    4. Mescla o texto do PDF no placeholder {input_text} do prompt.
+    5. Salva o resultado final em um arquivo .txt legível.
+
+    Args:
+        pdf_path (str): O caminho para o arquivo PDF de entrada.
+        output_dir (str): O diretório onde o arquivo .txt de saída será salvo.
+
+    Returns:
+        Optional[str]: O caminho para o arquivo .txt gerado em caso de sucesso,
+                       ou None se ocorrer um erro.
+    """
+    # from run import load_to_utils
+    # load_to_utils()
+    # from src.core.pdf_processor import *
+    # from src.core.ai_orchestrator import *
+    # 
+    # pdf_path = input("Digite o caminho do PDF para composição do prompt_mesclado: ")
+    # generate_full_prompt_from_pdf(pdf_path) 
+    import json
+    from pathlib import Path
+    logger.info(f"Iniciando geração de prompt completo para o arquivo: {pdf_path}")
+
+    # --- 1. Extrair e Processar o Conteúdo do PDF ---
+    try:
+        full_text = get_text_from_pdf(pdf_path)
+        assert full_text
+
+    except Exception as e:
+        logger.error(f"Erro ao processar o PDF '{pdf_path}': {e}", exc_info=True)
+        return None
+
+    # --- 2. Carregar e Construir o Prompt Estruturado ---
+    try:
+        final_prompts = get_prompt_template()
+        assert final_prompts
+
+    except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
+        logger.error(f"Erro ao carregar ou construir os prompts: {e}", exc_info=True)
+        return None
+
+    # --- 3. Mesclar Conteúdo do PDF no Prompt e Formatar Saída ---
+    final_prompt_content_str = ""
+    placeholder = "{input_text}"
+
+    prompt_unico_structure = final_prompts.get('PROMPT_UNICO_for_INITIAL_ANALYSIS')
+    for i, prompt_part in enumerate(prompt_unico_structure):
+        role = prompt_part.get("role", "unknown_role").upper()
+        content = prompt_part.get("content", "")
+
+        # Substitui o placeholder pelo texto completo do PDF
+        if placeholder in content:
+            content = content.replace(placeholder, full_text)
+
+        final_prompt_content_str += f"--- PARTE {i+1}: ROLE = {role} ---\n\n"
+        final_prompt_content_str += content
+        final_prompt_content_str += "\n\n"
+    
+    # --- 4. Salvar o Prompt Completo em Arquivo .txt ---
+    output_dir = os.getcwd()
+    try:
+        # Cria o diretório de saída se não existir
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Gera um nome de arquivo de saída baseado no nome do PDF
+        pdf_filename_stem = Path(pdf_path).stem
+        output_filename = f"{pdf_filename_stem}_full_prompt.txt"
+        output_path = os.path.join(output_dir, output_filename)
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(final_prompt_content_str)
+
+        logger.info(f"Prompt completo salvo com sucesso em: {output_path}")
+        return output_path
+
+    except IOError as e:
+        logger.error(f"Erro de I/O ao salvar o arquivo de prompt: {e}", exc_info=True)
+        return None
+    except Exception as e:
+        logger.error(f"Erro inesperado ao salvar o arquivo de prompt: {e}", exc_info=True)
+        return None
+
+api_key = '...'
+def get_response_llm_from_pdf(pdf_path):
+    from pathlib import Path
+
+    aggregated_text = get_text_from_pdf(pdf_path)
+    loaded_prompts = get_prompt_template()
+    
+    final_response, token_usage_info, processing_time_llm = analyze_text_with_llm("PROMPT_UNICO_for_INITIAL_ANALYSIS", loaded_prompts, aggregated_text,
+                                                                                                        api_key=api_key, normalizing_and_review_response=False)
+    logger.info(f"Uso de Tokens da LLM: {token_usage_info}")
+    logger.info(f"Tempo de processamento da LLM: {processing_time_llm:.4f}s")
+
+    # Salvar a resposta final em um arquivo .txt local
+    output_dir = os.getcwd()
+    try:
+        pdf_filename_stem = Path(pdf_path).stem 
+        output_filename = f"{pdf_filename_stem}_final_response.txt"
+        output_path = os.path.join(output_dir, output_filename)
+        with open(output_path, 'w', encoding='utf-8') as f: f.write(final_response)
+        print(f"Resposta final salva com sucesso em: {output_path}")
+    except IOError as e:
+        print(f"Erro de I/O ao salvar o arquivo de resposta: {e}", exc_info=True)
+
+### ================================================================================================
 
 execution_time = perf_counter() - start_time
 logger.info(f"[DEBUG] Carregado AI_ORCHESTRATOR em {execution_time:.4f}s")

@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-def scan_and_consolidate_python_files(output_file='python_files_consolidated.txt'):
+def scan_and_consolidate_python_files(output_file=r'admin_python_files_consolidated.txt'):
     """
     Scans the current repository for all Python files and consolidates their content into a single TXT file.
     
@@ -23,12 +23,11 @@ def scan_and_consolidate_python_files(output_file='python_files_consolidated.txt
         total_size = 0
         
         for root, dirs, files in os.walk(repo_root):
-            # Skip virtual environments and other common directories to ignore # and r'\admin_py' not in root
-            if ((r'\src' not in root) and ('run.py' not in files and 'run_admin.py' not in files)) or ('env' in root or '.git' in root or '__pycache__' in root or 'build' in root or 'dist' in root):
+            if r'\admin_py' not in root:
                 continue
-                
+            
             for file in files:
-                if file in ['__init__.py', 'extract_pyfiles.py', 'repo_prompts.py']:
+                if file in ['extract_pyfiles2.py', 'repo_prompts.py']:
                     continue
                 if file.endswith('.py'):
                     file_path = os.path.join(root, file)

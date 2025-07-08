@@ -14,7 +14,7 @@ from pathlib import Path
 from src.settings import UPLOAD_TEMP_DIR 
 
 from .theme import COLOR_WARNING, COLOR_ERROR, PADDING_L 
-from .layout import create_app_bar, _find_nav_index_for_route, icones_navegacao
+from .layout import create_app_bar, _find_nav_index_for_route, route_to_base_nav_index, icones_navegacao
 
 #from .views.login_view import create_login_view
 #from .views.signup_view import create_signup_view 
@@ -313,7 +313,12 @@ def route_change_content_only(
     app_bar: ft.AppBar,
     navigation_rail: ft.NavigationRail,
     content_container_for_main_layout: ft.Container,
-    route: str
+    route: str,
+    admin_routes: bool = False,
+    route_to_base_nav_index = route_to_base_nav_index,
+    content_creators = _content_creators,
+    view_module_map = _view_module_map,
+    initial_route = '/home'
 ):
     """
     Gerencia a navegação com carregamento assíncrono de conteúdo.
@@ -342,15 +347,16 @@ def route_change_content_only(
         logger.debug(f"Rota de arquivo '{route}'. Deixando Flet servir o arquivo.")
         return
 
-    authenticated = is_user_authenticated(page)
-    if not authenticated and route not in PUBLIC_ROUTES:
-        logger.warning(f"Usuário não autenticado tentando acessar '{route}'. Redirecionando para /login.")
-        page.go("/login")
-        return
-    if authenticated and route in PUBLIC_ROUTES:
-        logger.info(f"Usuário já autenticado na página '{route}'. Redirecionando para /home.")
-        page.go("/home")
-        return
+    if not admin_routes:
+        authenticated = is_user_authenticated(page)
+        if not authenticated and route not in PUBLIC_ROUTES:
+            logger.warning(f"Usuário não autenticado tentando acessar '{route}'. Redirecionando para /login.")
+            page.go("/login")
+            return
+        if authenticated and route in PUBLIC_ROUTES:
+            logger.info(f"Usuário já autenticado na página '{route}'. Redirecionando para /home.")
+            page.go("/home")
+            return
 
     # Obtém o lock global. Se não existir, a operação não será protegida.
     update_lock = page.data.get("global_update_lock")
@@ -393,7 +399,7 @@ def route_change_content_only(
             page.appbar = app_bar
             page.appbar.visible = True
             navigation_rail.visible = True
-            current_nav_index = _find_nav_index_for_route(route)
+            current_nav_index = _find_nav_index_for_route(route, route_to_base_nav_index=route_to_base_nav_index)
             if navigation_rail.selected_index != current_nav_index:
                 navigation_rail.selected_index = current_nav_index
             
@@ -427,25 +433,29 @@ def route_change_content_only(
         final_content: Optional[ft.Control] = None
 
         try:
-            # --- LÓGICA DE IMPORTAÇÃO DINÂMICA ---
-            if target_route in _view_module_map:
-                import importlib
-                module_path, function_name = _view_module_map[target_route]
-                
-                # O import pesado acontece aqui!
-                view_module = importlib.import_module(module_path)
-                creator_func = getattr(view_module, function_name)
-                
-                final_content = creator_func(page_ref)
-            else:
-                raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
+            if content_creators:
+                creator_func = content_creators.get(target_route)
+                if creator_func:
+                    final_content = creator_func(page_ref)
+                else:
+                    raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
             
-            logger.debug("Procedido: _load_and_set_view")
-            #creator_func = _content_creators.get(target_route)
-            #if creator_func:
-            #    final_content = creator_func(page_ref)
-            #else:
-            #    raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
+            elif view_module_map:
+                # --- LÓGICA DE IMPORTAÇÃO DINÂMICA ---
+                if target_route in view_module_map:
+                    import importlib
+                    module_path, function_name = view_module_map[target_route]
+                    
+                    # O import pesado acontece aqui!
+                    view_module = importlib.import_module(module_path)
+                    creator_func = getattr(view_module, function_name)
+                    
+                    final_content = creator_func(page_ref)
+                else:
+                    raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
+                
+                logger.debug("Procedido: _load_and_set_view")
+            
 
         except Exception as e:
             # ... (código de tratamento de erro para final_content) ...
@@ -456,7 +466,7 @@ def route_change_content_only(
                     ft.Text(f"Erro ao carregar a página: {target_route}", size=20, weight=ft.FontWeight.BOLD),
                     ft.Text(f"Detalhes: {e}", selectable=True, font_family="monospace"),
                     ft.Container(height=20),
-                    ft.ElevatedButton("Voltar para o Início", on_click=lambda _: page_ref.go("/home"))
+                    ft.ElevatedButton("Voltar para o Início", on_click=lambda _: page_ref.go(initial_route))
                 ],
                 alignment=ft.MainAxisAlignment.CENTER,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,

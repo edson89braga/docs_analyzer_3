@@ -223,6 +223,8 @@ class LoggerSetup:
         # Limpa logs mais antigos
         cls._cleanup_old_log_files(PATH_LOGS_DIR, days_to_keep=7)
 
+        logger = logging.getLogger() # Pega o logger raiz
+        
         # --- Cria Handlers ---
         file_handler = cls._create_file_handler(
             base_log_file,
@@ -254,7 +256,6 @@ class LoggerSetup:
         logging.getLogger("keyring.backend").setLevel(logging.INFO)
 
         # --- Configura o Logger Raiz ---
-        logger = logging.getLogger() # Pega o logger raiz
         logger.setLevel(logging.DEBUG) # O logger raiz deve ter o nível mais baixo
         logger.handlers.clear() # Limpa handlers pré-existentes do raiz
 
@@ -430,7 +431,7 @@ class LoggerSetup:
         else:
             cloud_log_prefix = CLOUD_LOGGER_FOLDER
 
-        logger.debug(f"Iniciando verificação de logs antigos na nuvem (prefixo: '{cloud_log_prefix}', retenção: {days_to_keep} dias)...")
+        logger.info(f"Iniciando verificação de logs antigos na nuvem (prefixo: '{cloud_log_prefix}', retenção: {days_to_keep} dias)...")
         
         try:
             # list_blobs com um prefixo já itera por todos os objetos que começam com esse prefixo,
@@ -452,7 +453,7 @@ class LoggerSetup:
                     files_to_remove.append(blob)
             
             if not files_to_remove:
-                logger.debug("Nenhum log antigo encontrado para remover na nuvem.")
+                logger.info("Nenhum log antigo encontrado para remover na nuvem.")
                 return
 
             logger.warning(f"Encontrados {len(files_to_remove)} logs antigos para remover:")
@@ -465,7 +466,7 @@ class LoggerSetup:
                 logger.info("DRY RUN concluído. Nenhuma ação de deleção foi executada.")
                 return
 
-            logger.debug("Prosseguindo com a deleção real dos arquivos na nuvem...")
+            logger.info("Prosseguindo com a deleção real dos arquivos na nuvem...")
             files_removed_count = 0
             for blob in files_to_remove:
                 try:

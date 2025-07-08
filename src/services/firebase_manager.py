@@ -342,6 +342,24 @@ class FbManagerAdminAuth:
         """
         inicializar_firebase()
 
+    def list_users(self):
+        """
+        Lista todos os usuários do projeto Firebase.
+
+        Retorna:
+            Um iterador de página (ListUsersPage) que pode ser percorrido com `.iterate_all()`.
+        """
+        if not firebase_admin._apps:
+            logger.error("Admin SDK não inicializado. Não é possível listar usuários.")
+            # Retorna um objeto que não falhará em .iterate_all() mas será vazio
+            return type('empty_iterator', (object,), {'iterate_all': lambda: []})()
+        
+        try:
+            return firebase_auth.list_users()
+        except Exception as e:
+            logger.error(f"Erro ao listar usuários via Admin SDK: {e}", exc_info=True)
+            return type('empty_iterator', (object,), {'iterate_all': lambda: []})()
+        
     def set_admin_claim(self, user_email: str, is_admin: bool) -> bool:
         """
         Define ou remove o custom claim de 'admin' para um usuário.

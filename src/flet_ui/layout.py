@@ -79,7 +79,7 @@ route_to_base_nav_index: Dict[str, int] = {
     "/roteiro_investigacoes": 6,
 }
 
-def _find_nav_index_for_route(route: str) -> int:
+def _find_nav_index_for_route(route: str, route_to_base_nav_index=route_to_base_nav_index) -> int:
     """
     Encontra o índice da NavigationRail correspondente a uma dada rota.
 
@@ -126,19 +126,30 @@ def _find_nav_index_for_route(route: str) -> int:
 
     return selected_index
 
-def create_app_bar(page: ft.Page, app_title: str) -> ft.AppBar:
-    """
-    Cria a AppBar padrão para a aplicação, incluindo funcionalidades como
-    alternar o tema, exibir termos de uso e acesso a configurações do usuário.
+def get_actions_appbar(page: ft.Page) -> List[ft.Control]:
+    user_display_name = page.session.get("auth_display_name") or \
+                        (page.client_storage.get("auth_display_name") if page.client_storage else None)
 
-    Args:
-        page (ft.Page): A instância da página Flet atual.
-        app_title (str): O título a ser exibido na AppBar.
+    user_greeting_or_empty = []
+    if user_display_name:
+        user_greeting_or_empty.append(
+            ft.Text(f"Olá, {user_display_name.split(' ')[0]}",
+                    size=14,
+                    font_family="Roboto",
+                    weight=ft.FontWeight.NORMAL,
+                    opacity=0.8,
+                    italic=True)
+        )
+        user_greeting_or_empty.append(ft.Container(width=10))
 
-    Returns:
-        ft.AppBar: O componente AppBar configurado.
-    """
-
+    home_button = ft.IconButton(
+        ft.Icons.HOME_OUTLINED,
+        tooltip="Ir para Início",
+        on_click=lambda _: page.go("/home"),
+        padding=ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
+        icon_size=40
+    )
+    
     def toggle_theme_mode(e: ft.ControlEvent) -> None:
         """
         Alterna entre os modos de tema CLARO e ESCURO da aplicação.
@@ -264,29 +275,6 @@ Para mais detalhes, consulte:
             else:
                 page.update()
 
-    user_display_name = page.session.get("auth_display_name") or \
-                        (page.client_storage.get("auth_display_name") if page.client_storage else None)
-
-    user_greeting_or_empty = []
-    if user_display_name:
-        user_greeting_or_empty.append(
-            ft.Text(f"Olá, {user_display_name.split(' ')[0]}",
-                    size=14,
-                    font_family="Roboto",
-                    weight=ft.FontWeight.NORMAL,
-                    opacity=0.8,
-                    italic=True)
-        )
-        user_greeting_or_empty.append(ft.Container(width=10))
-
-    home_button = ft.IconButton(
-        ft.Icons.HOME_OUTLINED,
-        tooltip="Ir para Início",
-        on_click=lambda _: page.go("/home"),
-        padding=ft.padding.only(left=theme.PADDING_XL, right=theme.PADDING_XL),
-        icon_size=40
-    )
-
     app_bar_actions = [
         ft.PopupMenuButton(
             tooltip="Configurações do Usuário",
@@ -312,6 +300,23 @@ Para mais detalhes, consulte:
             icon_size=26
         ),
     ]
+    
+    return app_bar_actions
+
+def create_app_bar(page: ft.Page, app_title: str, get_actions_appbar=get_actions_appbar) -> ft.AppBar:
+    """
+    Cria a AppBar padrão para a aplicação, incluindo funcionalidades como
+    alternar o tema, exibir termos de uso e acesso a configurações do usuário.
+
+    Args:
+        page (ft.Page): A instância da página Flet atual.
+        app_title (str): O título a ser exibido na AppBar.
+
+    Returns:
+        ft.AppBar: O componente AppBar configurado.
+    """
+
+    app_bar_actions = get_actions_appbar(page)
 
     return ft.AppBar(
         title=ft.Text(app_title),
@@ -319,7 +324,9 @@ Para mais detalhes, consulte:
         actions=app_bar_actions,
     )
 
-def create_navigation_rail(page: ft.Page, selected_route: str) -> ft.NavigationRail:
+def create_navigation_rail(page: ft.Page, selected_route: str, 
+                           route_to_base_nav_index=route_to_base_nav_index,
+                           icones_navegacao=icones_navegacao) -> ft.NavigationRail:
     """
     Cria o componente NavigationRail, que serve como o painel de navegação lateral
     principal da aplicação. O item selecionado é determinado com base na rota atual.
@@ -331,7 +338,7 @@ def create_navigation_rail(page: ft.Page, selected_route: str) -> ft.NavigationR
     Returns:
         ft.NavigationRail: O componente NavigationRail configurado.
     """
-    selected_index = _find_nav_index_for_route(selected_route)
+    selected_index = _find_nav_index_for_route(selected_route, route_to_base_nav_index=route_to_base_nav_index)
 
     def navigate(e: ft.ControlEvent) -> None:
         """
