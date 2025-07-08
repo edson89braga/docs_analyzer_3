@@ -33,7 +33,7 @@ from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR
 from admin_py.app_admin import main as admin_main
 
 execution_time = perf_counter() - start_time
-logger.info(f"[DEBUG] Carregado RUN_ADMIN em {execution_time:.4f}s")
+logger.info(f"[DEBUG] Carregado RUN_ADMIN em {execution_time:.4f}s ")
 
 if __name__ == "__main__":
     ft.app(
