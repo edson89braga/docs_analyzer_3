@@ -1153,7 +1153,7 @@ def review_function(resposta_formatada: formatted_initial_analysis) -> formatted
     return resposta_formatada
 
 '''
-Grupos de prompt:
+Grupos do prompt:
 
 # quanto à origem:
 2. TIPO DE DOCUMENTO DE ORIGEM
