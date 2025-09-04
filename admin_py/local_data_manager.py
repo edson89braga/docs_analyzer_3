@@ -3,8 +3,12 @@ import os
 import json
 import logging
 import re
-from datetime import date, datetime
-from typing import List, Dict, Any, Set, Tuple
+from datetime import date, datetime, timezone
+from typing import List, Dict, Any, Set, Tuple, Optional
+
+from src.services.firebase_manager import (
+    inicializar_firebase, FbManagerFirestore, FbManagerStorage, FbManagerAdminAuth
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +18,34 @@ ADMIN_METRICS_DIR = os.path.join(ADMIN_DATA_DIR, "metrics")
 
 os.makedirs(ADMIN_LOGS_DIR, exist_ok=True)
 os.makedirs(ADMIN_METRICS_DIR, exist_ok=True)
+
+SYNC_METADATA_FILE = os.path.join(ADMIN_DATA_DIR, "sync_metadata.json")
+
+def save_last_sync_timestamp():
+    """Salva o timestamp da sincronização bem-sucedida em um arquivo local."""
+    try:
+        with open(SYNC_METADATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump({"last_sync_utc": datetime.now(timezone.utc).isoformat()}, f)
+        logger.info(f"Timestamp da última sincronização salvo em {SYNC_METADATA_FILE}")
+    except IOError as e:
+        logger.error(f"Erro ao salvar o timestamp da sincronização: {e}")
+
+def load_last_sync_timestamp() -> Optional[str]:
+    """
+    Carrega o timestamp da última sincronização do arquivo local.
+    Retorna uma string formatada ou None.
+    """
+    if not os.path.exists(SYNC_METADATA_FILE):
+        return None
+    try:
+        with open(SYNC_METADATA_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            ts_iso = data.get("last_sync_utc")
+            if ts_iso:
+                return datetime.fromisoformat(ts_iso).strftime('%d/%m/%Y às %H:%M:%S (UTC)')
+    except (IOError, json.JSONDecodeError, KeyError) as e:
+        logger.error(f"Erro ao carregar o timestamp da sincronização: {e}")
+    return None
 
 def get_available_users(user_id_to_name_map: Dict[str, str]) -> List[Tuple[str, str]]:
     """
@@ -43,6 +75,79 @@ def get_available_users(user_id_to_name_map: Dict[str, str]) -> List[Tuple[str, 
         
     return sorted(users_with_names, key=lambda x: x[0]) # Ordena pelo nome amigável
 
+def get_user_id_to_name_map() -> Dict[str, str]:
+    """Busca usuários do Firebase Auth e cria um mapa UID -> nome amigável."""
+    user_map = {}
+    try:
+        inicializar_firebase()
+        auth_manager = FbManagerAdminAuth()
+        for user in auth_manager.list_users().iterate_all():
+            if user.email:
+                user_map[user.uid] = user.email.split('@')[0]
+            else:
+                user_map[user.uid] = user.uid # Fallback para o UID
+    except Exception as e:
+        logger.error(f"Erro ao popular mapa de usuários: {e}", exc_info=True)
+    return user_map
+
+def sync_cloud_data_to_local() -> Tuple[bool, str]:
+    """
+    Worker para baixar logs do Storage e métricas do Firestore.
+    Otimizado para baixar apenas arquivos que ainda não existem localmente.
+    Retorna um status e uma mensagem.
+    """
+    try:
+        logger.info("Iniciando a sincronização de dados da nuvem...")
+        inicializar_firebase()
+        fs_manager = FbManagerFirestore()
+        storage_manager = FbManagerStorage()
+        auth_manager = FbManagerAdminAuth()
+        
+        # Sincronizar Logs do Storage
+        from src.settings import CLOUD_LOGGER_FOLDER
+        logger.info("Verificando logs no Firebase Storage...")
+        all_logs_blobs = storage_manager.bucket.list_blobs(prefix=CLOUD_LOGGER_FOLDER)
+        for blob in all_logs_blobs:
+            if blob.name.endswith('/'):
+                continue
+
+            local_path = os.path.join(ADMIN_DATA_DIR, blob.name.replace('/', os.sep))
+            
+            if not os.path.exists(local_path):
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                logger.debug(f"Baixando log: {blob.name} para {local_path}")
+                blob.download_to_filename(local_path)
+
+        # Sincronizar Métricas do Firestore
+        logger.info("Verificando métricas no Firestore...")
+        all_user_ids = {user.uid for user in auth_manager.list_users().iterate_all()}
+        for user_id in all_user_ids:
+            metrics_collection_path = f'user_metrics/{user_id}/metrics'
+            metrics_ref = fs_manager.db.collection(metrics_collection_path).stream()
+
+            for metric_doc in metrics_ref:
+                local_user_metric_dir = os.path.join(ADMIN_METRICS_DIR, user_id)
+                os.makedirs(local_user_metric_dir, exist_ok=True)
+                local_metric_path = os.path.join(local_user_metric_dir, f"{metric_doc.id}.json")
+                
+                if not os.path.exists(local_metric_path):
+                    logger.debug(f"Baixando métrica para usuário '{user_id}': {metric_doc.id}")
+                    try:
+                        with open(local_metric_path, 'w', encoding='utf-8') as f:
+                            json.dump(metric_doc.to_dict(), f, indent=2, ensure_ascii=False)
+                    except Exception as write_err:
+                        logger.error(f"Erro ao salvar arquivo de métrica local '{local_metric_path}': {write_err}")
+
+        save_last_sync_timestamp()
+        msg = "Sincronização de dados concluída!"
+        logger.info(msg)
+        return True, msg
+
+    except Exception as e:
+        msg = f"Erro durante a sincronização de dados: {e}"
+        logger.error(msg, exc_info=True)
+        return False, msg
+
 def get_filtered_logs(selected_user: str, selected_level: str, selected_date: date, selected_type: str, user_id_to_name_map: Dict[str, str]) -> List[Dict[str, Any]]:
     """
     Lê e filtra os arquivos de log e métricas locais com base nos filtros selecionados.
@@ -60,7 +165,7 @@ def get_filtered_logs(selected_user: str, selected_level: str, selected_date: da
     filtered_entries: List[Dict[str, Any]] = []
     
     # 1. Filtra Logs
-    if selected_type in ["ALL", "log"]:
+    if selected_type.lower() in ["all", "todos", "log", "logs"]:
         date_path_segment = selected_date.strftime('%Y/%m/%d').replace('/', os.sep)
         log_dir_for_date = os.path.join(ADMIN_LOGS_DIR, date_path_segment)
         
@@ -85,7 +190,7 @@ def get_filtered_logs(selected_user: str, selected_level: str, selected_date: da
                         logger.warning(f"Erro ao ler arquivo de log '{filepath}': {e}")
 
     # 2. Filtra Métricas
-    if selected_type in ["ALL", "metric"]:
+    if selected_type.lower() in ["all", "todos", "metric", "métricas"]:
         users_to_scan = list(user_id_to_name_map.keys()) if selected_user == "ALL" else [selected_user]
         
         for user_id in users_to_scan:
