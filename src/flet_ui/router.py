@@ -52,7 +52,7 @@ _view_module_map = {
     #"/settings/proxy": ("src.flet_ui.views.proxy_settings_view", "create_proxy_settings_content"),
     "/settings/llm": ("src.flet_ui.views.llm_settings_view", "create_llm_settings_view"),
     "/analyze_pdf": ("src.flet_ui.views.nc_analyze_view", "create_analyze_pdf_content"),
-    "/chat_pdf": ("src.flet_ui.views.others_view", "create_chat_pdf_content"),
+    "/chat_docs": ("src.flet_ui.views.chat_view", "create_chat_view_content"),
     "/knowledge_base": ("src.flet_ui.views.others_view", "create_knowledge_base_content"),
     "/wiki_rotinas": ("src.flet_ui.views.others_view", "create_wiki_rotinas_content"),
     "/correicao_processos": ("src.flet_ui.views.others_view", "create_correicao_processos_content"),

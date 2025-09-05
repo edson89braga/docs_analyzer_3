@@ -265,3 +265,6 @@ elif page == "Configurações":
             else:
                 st.error("Operação de limpeza falhou.")
 
+
+# streamlit run run_admin_streamlit.py --logger.level INFO
+
