@@ -19,8 +19,10 @@ from enum import Enum
 from src.flet_ui.components import (
     show_snackbar, show_loading_overlay, hide_loading_overlay,
     ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable,
-    CardWithHeader, show_confirmation_dialog, ReadOnlySelectableTextField
+    CardWithHeader, show_confirmation_dialog, ReadOnlySelectableTextField,
 )
+from src.flet_ui.settings_drawer import SettingsDrawerManager
+
 from src.flet_ui import theme
 
 from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR, TEMPLATES_DOCX_SUBDIR, cotacao_dolar_to_real,
@@ -178,10 +180,11 @@ class AnalyzePDFViewContent(ft.Column):
         super().__init__(expand=True, spacing=10)
         self.page = page
         self.gui_controls: Dict[str, ft.Control] = {}
-        self.gui_controls_drawer: Dict[str, ft.Control] = {}
         self.file_list_manager: Optional[InternalFileListManager] = None
         self.analysis_controller: Optional[InternalAnalysisController] = None
-        self.settings_drawer_manager: Optional[SettingsDrawerManager] = None
+        # self.gui_controls_drawer: Dict[str, ft.Control] = {}
+        # self.settings_drawer_manager: Optional[SettingsDrawerManager] = None
+        
         self.export_manager: Optional[InternalExportManager] = None
         self.managed_file_picker: Optional[ManagedFilePicker] = None
         self.global_file_picker_instance: Optional[ft.FilePicker] = None
@@ -416,9 +419,9 @@ class AnalyzePDFViewContent(ft.Column):
         )
 
         # --- Drawer de Configurações (Placeholder) ---
-        self.settings_drawer_manager = SettingsDrawerManager(self)
-        drawer_content = self.settings_drawer_manager.build_content() # Obtém o conteúdo do drawer
-        self.settings_drawer_container = ft.Container(content=drawer_content, padding=10, width=0)
+        self.settings_drawer_component = SettingsDrawerManager(self.page)
+        self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0)
+        # self.settings_drawer_manager não é mais necessário
 
         self._original_main_layout_container = ft.Row(
             [ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=8)),
@@ -439,9 +442,6 @@ class AnalyzePDFViewContent(ft.Column):
 
         # Adaptação do AnalysisController (será uma classe interna ou métodos diretos)
         self.analysis_controller = InternalAnalysisController(self.page, self.gui_controls, self)
-
-        # self.export_manager é inicializado em _initialize_pickers após global_file_picker estar pronto
-
     def _create_prompt_display_layout(self) -> ft.Container:
         """
         Cria e retorna o layout para exibir os prompts estruturados utilizados na análise LLM.
@@ -1323,12 +1323,9 @@ class AnalyzePDFViewContent(ft.Column):
         """
         logger.info("Restaurando estado da view Análise PDF da sessão.")
         
-        # Carrega as configurações para o drawer (isso não afeta o estado principal da análise)
-        analysis_settings_from_session = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
-        if analysis_settings_from_session:
-            self.settings_drawer_manager._load_settings_into_drawer_controls(analysis_settings_from_session)
-        else:
-            self.settings_drawer_manager._load_settings_into_drawer_controls(FALLBACK_ANALYSIS_SETTINGS)
+        # A instância do SettingsDrawerManager já carrega as configurações da sessão em seu __init__
+        if self.settings_drawer_component:
+            self.settings_drawer_component._load_settings_into_controls()
 
         # Chama o método central que lê a sessão e atualiza All componentes da UI
         self._update_gui_from_state()
@@ -2369,435 +2366,6 @@ class InternalExportManager:
         # Se a validação em _trigger_feedback_and_export falhar (get_current_form_data retornar lista de erros),
         # a exportação não prosseguirá.
         self._trigger_feedback_and_export(operation, template_p) # Passa template_p
-
-class SettingsDrawerManager:
-    """
-    Gerencia o conteúdo e a lógica do drawer de configurações da view de Análise de PDF.
-
-    Responsável por construir os controles do drawer, carregar/salvar configurações
-    na sessão e lidar com a interação do usuário com as configurações.
-    """
-    def __init__(self, parent_view: 'AnalyzePDFViewContent'):
-        """
-        Inicializa o gerenciador do drawer de configurações.
-
-        Args:
-            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
-        """
-        self.parent_view = parent_view
-        self.page = parent_view.page
-        self.gui_controls_drawer = parent_view.gui_controls_drawer # Usa o dict da view principal
-
-    def build_content(self) -> ft.Column:
-        """
-        Constrói e retorna o conteúdo visual do drawer de configurações.
-
-        Este método cria os controles de UI para as diversas configurações de processamento
-        de documentos e modelos de linguagem (LLM), incluindo sliders, dropdowns e campos de texto.
-
-        Returns:
-            ft.Column: Um ft.Column contendo todos os controles de configuração.
-        """
-        logger.debug("SettingsDrawerManager: Construindo conteúdo do drawer.")
-        default_width = 260
-        current_analysis_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
-        loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
-
-        # Seção Processamento
-        # self.gui_controls_drawer["proc_extractor_dd"] = ft.Dropdown(label="Extrator de Texto PDF", options=[
-        #     ft.dropdown.Option("PyMuPdf-fitz", "PyMuPdf-fitz"),
-        #     ft.dropdown.Option("PdfPlumber", "PdfPlumber"),
-        # ], value=current_analysis_settings.get("pdf_extractor"), width=default_width)
-        
-        self.gui_controls_drawer["proc_vectorization_dd"]  = ft.Dropdown(label="Modelo de Vetorização", options=[
-            ft.dropdown.Option("tfidf_vectorizer", "Tf-Idf Vectorizer"),
-            ft.dropdown.Option("all-MiniLM-L6-v2", "all-MiniLM-L6-v2"),
-            ft.dropdown.Option("text-embedding-3-small", "OpenAI text-embedding-3-small"),
-        ], value=current_analysis_settings.get("vectorization_model"), width=default_width)
-
-        # Slider similarity_threshold
-        initial_temp = current_analysis_settings.get("similarity_threshold", 0.87)
-        self.gui_controls_drawer["similarity_threshold_value_label"] = ft.Text(f"{initial_temp:.2f}", weight=ft.FontWeight.BOLD)
-        self.gui_controls_drawer["similarity_threshold_slider"] = ft.Slider(
-            min=0, max=100, value=initial_temp * 100,
-            divisions=100, expand=True, label="{value}",
-        )
-        
-        # self.gui_controls_drawer["lang_detector_dd"] = ft.Dropdown(
-        #     label="Detector de Idioma", options=[ft.dropdown.Option("langdetect", "langdetect")],
-        #     value=current_analysis_settings.get("language_detector"), width=default_width
-        # )
-        # self.gui_controls_drawer["token_counter_dd"] = ft.Dropdown(
-        #     label="Contador de Tokens", options=[ft.dropdown.Option("tiktoken", "tiktoken")],
-        #     value=current_analysis_settings.get("token_counter"), width=default_width
-        # )
-        # self.gui_controls_drawer["tfidf_analyzer_dd"] = ft.Dropdown(
-        #     label="Analisador TF-IDF", options=[ft.dropdown.Option("sklearn", "sklearn")],
-        #     value=current_analysis_settings.get("tfidf_analyzer"), width=default_width
-        # )
- 
-        # Seção LLM
-        provider_options_drawer = [
-            ft.dropdown.Option(key=p['system_name'], text=p.get('name_display', p['system_name']))
-            for p in loaded_llm_providers if p.get('system_name')
-        ]
-        self.gui_controls_drawer["llm_provider_dd"] = ft.Dropdown(label="Provedor LLM", options=provider_options_drawer ,
-                                                                  value=current_analysis_settings.get("llm_provider"), width=default_width)
-        self.gui_controls_drawer["llm_model_dd"] = ft.Dropdown(label="Modelo LLM", options=[],
-                                                               value=current_analysis_settings.get("llm_model"), width=default_width)
-        self._populate_models_for_selected_provider(current_analysis_settings.get("llm_provider"), current_analysis_settings.get("llm_model"))
- 
-        self.gui_controls_drawer["llm_token_limit_tf"] = ft.TextField(
-            label="Limite Tokens Input", value=str(current_analysis_settings.get("llm_input_token_limit")),
-            input_filter=ft.InputFilter(r"[0-9]"), width=default_width
-        )
-        # self.gui_controls_drawer["llm_output_format_dd"] = ft.Dropdown(
-        #     label="Formato de Saída", options=[ft.dropdown.Option("Padrão", "Padrão")],
-        #     value=current_analysis_settings.get("llm_output_format"), width=default_width
-        # )
-        self.gui_controls_drawer["llm_max_output_length_tf"] = ft.TextField(
-            label="Comprimento Max. Saída", value=str(current_analysis_settings.get("llm_max_output_length")),
-            input_filter=ft.InputFilter(r"[0-9]*"),
-            hint_text="Deixe 'Padrão' ou vazio para usar o default do modelo",
-            width=default_width, read_only=True
-        )
- 
-        # Slider de Temperatura
-        initial_temp = current_analysis_settings.get("llm_temperature", 0.2)
-        self.gui_controls_drawer["temperature_value_label"] = ft.Text(f"{initial_temp:.1f}", weight=ft.FontWeight.BOLD)
-        self.gui_controls_drawer["temperature_slider"] = ft.Slider(
-            min=0.0, max=20.0, value=initial_temp * 10,
-            divisions=20, expand=True, label="{value}",
-        )
- 
-        # Seção Prompt
-        self.gui_controls_drawer["prompt_structure_rg"] = ft.RadioGroup(
-            content=ft.Column([
-                ft.Radio(value="prompt_unico", label="Prompt Único"),
-                ft.Radio(value="sequential_prompts", label="Prompt Agrupado", disabled=False),
-            ], spacing=1), value=current_analysis_settings.get("prompt_structure")
-        )
- 
-        self.gui_controls_drawer[CTL_RESET_SETTINGS_BTN] = ft.ElevatedButton(
-            "Resetar para Padrões",
-            icon=ft.Icons.SETTINGS_BACKUP_RESTORE_ROUNDED,
-            on_click=self._handle_reset_settings_click,
-            visible=False,
-        )
- 
-        drawer_layout = ft.Column(
-            [
-                ft.Text("Configurações específicas", style=ft.TextThemeStyle.TITLE_LARGE),
-                ft.Divider(),
-                ft.Text("Processamento de Documento", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                #self.gui_controls_drawer["proc_extractor_dd"],
-                self.gui_controls_drawer["proc_vectorization_dd"],
-                ft.Column([
-                    ft.Text("Limiar de similaridade", style=ft.TextThemeStyle.LABEL_MEDIUM),
-                    ft.Row([self.gui_controls_drawer["similarity_threshold_slider"],self.gui_controls_drawer["similarity_threshold_value_label"]],
-                           alignment=ft.MainAxisAlignment.SPACE_BETWEEN)],
-                    width=default_width, spacing=1),
-                #self.gui_controls_drawer["lang_detector_dd"],
-                #self.gui_controls_drawer["token_counter_dd"],
-                #self.gui_controls_drawer["tfidf_analyzer_dd"],
-                ft.Divider(),
-                ft.Text("Modelo de Linguagem (LLM)", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                self.gui_controls_drawer["llm_provider_dd"],
-                self.gui_controls_drawer["llm_model_dd"],
-                self.gui_controls_drawer["llm_token_limit_tf"],
-                self.gui_controls_drawer["llm_max_output_length_tf"],
-                ft.Column([
-                    ft.Text("Temperatura de resposta", style=ft.TextThemeStyle.LABEL_MEDIUM),
-                    ft.Row([self.gui_controls_drawer["temperature_slider"],self.gui_controls_drawer["temperature_value_label"]],
-                           alignment=ft.MainAxisAlignment.SPACE_BETWEEN)],
-                    width=default_width, spacing=1),
-                #self.gui_controls_drawer["llm_output_format_dd"],
-                # ft.Dropdown(label="Configurações Avançadas", options=[ft.dropdown.Option("indisponivel", "Indisponível")],
-                #             value="indisponivel", disabled=True, width=default_width),
-                ft.Divider(),
-                ft.Text("Estrutura do Prompt", style=ft.TextThemeStyle.TITLE_MEDIUM),
-                self.gui_controls_drawer["prompt_structure_rg"],
-                ft.Container(expand=True),
-                ft.Row([self.gui_controls_drawer[CTL_RESET_SETTINGS_BTN]],
-                       expand=True, alignment=ft.MainAxisAlignment.CENTER),
-                ft.Container(height=1)
-            ],
-            scroll=ft.ScrollMode.ADAPTIVE, expand=True
-        )
-        self.setup_event_handlers() # Configura os handlers após criar os controles
-        return drawer_layout
-
-    def setup_event_handlers(self):
-        """
-        Configura os handlers de eventos para os controles dentro do drawer.
-
-        Associa as funções de tratamento de eventos aos controles de configuração
-        para que as alterações do usuário sejam capturadas e as configurações sejam atualizadas.
-        """
-        logger.debug("SettingsDrawerManager: Configurando handlers de eventos.")
-        controls_to_watch = [
-            "proc_vectorization_dd", "llm_provider_dd", "llm_model_dd", "llm_token_limit_tf", "temperature_slider",
-            "prompt_structure_rg", "similarity_threshold_slider"
-            # "llm_output_format_dd", "llm_max_output_length_tf", "proc_extractor_dd"
-        ]
-        for key in controls_to_watch:
-            if key in self.gui_controls_drawer:
-                control = self.gui_controls_drawer[key]
-                if key == "llm_provider_dd":
-                    control.on_change = self._handle_provider_change_drawer
-                elif key in ["temperature_slider", "similarity_threshold_slider"]: # Adicionado para o slider
-                    control.on_change = self._handle_setting_change_drawer
-                elif hasattr(control, 'on_change'):
-                     control.on_change = self._handle_setting_change_drawer
-                # Para RadioGroup, o evento é on_change, já coberto acima
- 
-    def _handle_setting_change_drawer(self, e: Optional[ft.ControlEvent] = None):
-        """
-        Chamado quando qualquer configuração no drawer é alterada pelo usuário.
-
-        Atualiza as configurações na sessão e a visibilidade do botão de reset.
-        Se o usuário não for administrador, reverte a alteração e exibe um aviso.
-
-        Args:
-            e (Optional[ft.ControlEvent]): O evento de controle que disparou a alteração (opcional).
-        """
-        if not self.page.session.get("is_admin"):
-            show_snackbar(self.page, "Alteração de configurações restrita à usuários administradores.", color=theme.COLOR_WARNING)
-            # Recarrega os valores da sessão para reverter a alteração na UI
-            current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
-            self._load_settings_into_drawer_controls(current_settings)
-            return
-        
-        if e:
-             logger.debug(f"SettingsDrawerManager: Configuração alterada - Controle: {type(e.control).__name__}, Valor: {e.control.value}")
- 
-        if e and isinstance(e.control, ft.Slider) and e.control == self.gui_controls_drawer.get("temperature_slider"):
-            slider_val = float(e.control.value) / 10.0 # Converte de 0-20 para 0.0-2.0
-            temp_label = self.gui_controls_drawer.get("temperature_value_label")
-            if isinstance(temp_label, ft.Text):
-                temp_label.value = f"{slider_val:.1f}"
-                if temp_label.page: temp_label.update()
-        elif e and isinstance(e.control, ft.Slider) and e.control == self.gui_controls_drawer.get("similarity_threshold_slider"):
-            slider_val = float(e.control.value) / 100.0 # Converte de 87 para 0.87
-            temp_label = self.gui_controls_drawer.get("similarity_threshold_value_label")
-            if isinstance(temp_label, ft.Text):
-                temp_label.value = f"{slider_val:.2f}"
-                if temp_label.page: temp_label.update()
- 
-        new_settings = self._get_settings_from_drawer_controls()
-        self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, new_settings)
-        logger.debug(f"SettingsDrawerManager: Configurações da sessão atualizadas: {new_settings}")
-        self._update_reset_button_visibility()
- 
-    def _handle_provider_change_drawer(self, e: ft.ControlEvent):
-        """
-        Handler para a mudança de provedor LLM no dropdown do drawer.
-
-        Atualiza as opções de modelo LLM disponíveis com base no provedor selecionado
-        e chama o handler de alteração de configuração geral.
-
-        Args:
-            e (ft.ControlEvent): O evento de alteração do dropdown.
-        """
-        if not self.page.session.get("is_admin"):
-            show_snackbar(self.page, "Alteração de configurações restrita à usuários administradores.", color=theme.COLOR_WARNING)
-            # Recarrega os valores da sessão para reverter a alteração na UI
-            current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
-            self._load_settings_into_drawer_controls(current_settings)
-            return
-        selected_provider_system_name = e.control.value
-        self._populate_models_for_selected_provider(selected_provider_system_name, new_provider_selected=True)
-        self._handle_setting_change_drawer(e)
- 
-    def _populate_models_for_selected_provider(self, provider_system_name: Optional[str], current_model_value: Optional[str] = None, new_provider_selected:bool=False):
-        """
-        Popula o dropdown de modelos LLM com base no provedor selecionado.
- 
-        Args:
-            provider_system_name (Optional[str]): O nome do sistema do provedor selecionado.
-            current_model_value (Optional[str]): O valor do modelo atualmente selecionado (para restaurar estado).
-            new_provider_selected (bool): Indica se um novo provedor foi selecionado (para resetar o modelo para o primeiro disponível).
-        """
-        model_dropdown_drawer = self.gui_controls_drawer.get("llm_model_dd")
-        if not model_dropdown_drawer or not isinstance(model_dropdown_drawer, ft.Dropdown):
-            return
- 
-        model_dropdown_drawer.options = []
-        model_dropdown_drawer.disabled = True
-        loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
- 
-        if provider_system_name and loaded_llm_providers:
-            provider_config = next((p for p in loaded_llm_providers if p.get("system_name") == provider_system_name), None)
-            if provider_config and provider_config.get("models"):
-                model_options = [
-                    ft.dropdown.Option(key=m['id'], text=m.get('name', m['id']))
-                    for m in provider_config["models"] if m.get("id")
-                ]
-                model_dropdown_drawer.options = model_options
-                model_dropdown_drawer.disabled = False
- 
-                if new_provider_selected and model_options:
-                    model_dropdown_drawer.value = model_options[0].key
-                elif current_model_value and any(opt.key == current_model_value for opt in model_options):
-                    model_dropdown_drawer.value = current_model_value
-                elif model_options:
-                    model_dropdown_drawer.value = model_options[0].key
-                else:
-                    model_dropdown_drawer.value = None
- 
-        if model_dropdown_drawer.page: model_dropdown_drawer.update()
- 
-    def _get_settings_from_drawer_controls(self) -> Dict[str, Any]:
-        """
-        Coleta os valores atuais dos controles do drawer e os retorna como um dicionário de configurações.
- 
-        Realiza a conversão de tipos quando necessário (ex: string para int/float).
- 
-        Returns:
-            Dict[str, Any]: Um dicionário contendo as configurações atuais do drawer.
-        """
-        settings = {}
-        key_map = {
-            #"proc_extractor_dd": "pdf_extractor",
-            "proc_vectorization_dd": "vectorization_model",
-            #"lang_detector_dd": "language_detector",
-            #"token_counter_dd": "token_counter",
-            #"tfidf_analyzer_dd": "tfidf_analyzer",
-            "llm_provider_dd": "llm_provider",
-            "llm_model_dd": "llm_model",
-            "llm_token_limit_tf": "llm_input_token_limit",
-            #"llm_output_format_dd": "llm_output_format",
-            "llm_max_output_length_tf": "llm_max_output_length",
-            "temperature_slider": "llm_temperature", # O valor do slider será convertido
-            "similarity_threshold_slider": "similarity_threshold", #
-            "prompt_structure_rg": "prompt_structure",
-        }
-        for ctrl_key, setting_key in key_map.items():
-            if ctrl_key in self.gui_controls_drawer:
-                control = self.gui_controls_drawer[ctrl_key]
-                value = control.value
-                if setting_key == "llm_input_token_limit":
-                    try: value = int(value) if value else FALLBACK_ANALYSIS_SETTINGS[setting_key]
-                    except ValueError: value = FALLBACK_ANALYSIS_SETTINGS[setting_key]
-                elif setting_key == "llm_max_output_length":
-                    value = value if value and value.lower() != "padrão" else FALLBACK_ANALYSIS_SETTINGS[setting_key]
-                    if value != "Padrão":
-                        try: value = int(value)
-                        except ValueError: value = FALLBACK_ANALYSIS_SETTINGS[setting_key]
-                elif setting_key == "llm_temperature" and isinstance(control, ft.Slider):
-                    value = float(control.value) / 10.0
-                elif setting_key == "similarity_threshold" and isinstance(control, ft.Slider):
-                    value = float(control.value) / 100.0
-                settings[setting_key] = value
-        return settings
- 
-    def _load_settings_into_drawer_controls(self, settings_to_load: Dict[str, Any]):
-        """
-        Carrega um dicionário de configurações para os controles do drawer.
- 
-        Args:
-            settings_to_load (Dict[str, Any]): O dicionário de configurações a ser carregado.
-        """
-        logger.debug("SettingsDrawerManager: Carregando configurações para o drawer.")
-        loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or []
-        provider_options_drawer = [
-            ft.dropdown.Option(key=p['system_name'], text=p.get('name_display', p['system_name']))
-            for p in loaded_llm_providers if p.get('system_name')
-        ]
-        drawer_provider_dd = self.gui_controls_drawer.get("llm_provider_dd")
-        if isinstance(drawer_provider_dd, ft.Dropdown):
-            drawer_provider_dd.options = provider_options_drawer
-            drawer_provider_dd.value = settings_to_load.get("llm_provider")
-            if drawer_provider_dd.page: drawer_provider_dd.update()
- 
-        self._populate_models_for_selected_provider(
-            settings_to_load.get("llm_provider"),
-            settings_to_load.get("llm_model")
-        )
-        control_map = {
-            #"pdf_extractor": self.gui_controls_drawer.get("proc_extractor_dd"),
-            "vectorization_model": self.gui_controls_drawer.get("proc_vectorization_dd"),
-            #"language_detector": self.gui_controls_drawer.get("lang_detector_dd"),
-            #"token_counter": self.gui_controls_drawer.get("token_counter_dd"),
-            #"tfidf_analyzer": self.gui_controls_drawer.get("tfidf_analyzer_dd"),
-            "llm_input_token_limit": self.gui_controls_drawer.get("llm_token_limit_tf"),
-            #"llm_output_format": self.gui_controls_drawer.get("llm_output_format_dd"),
-            "llm_max_output_length": self.gui_controls_drawer.get("llm_max_output_length_tf"),
-            "llm_temperature": self.gui_controls_drawer.get("temperature_slider"),
-            "similarity_threshold": self.gui_controls_drawer.get("similarity_threshold_slider"),
-            "prompt_structure": self.gui_controls_drawer.get("prompt_structure_rg"),
-        }
-        for setting_key, control in control_map.items():
-            if control and setting_key in settings_to_load:
-                value = settings_to_load[setting_key]
-                if isinstance(control, (ft.Dropdown, ft.RadioGroup)): control.value = value
-                elif isinstance(control, ft.TextField): control.value = str(value)
-                elif isinstance(control, ft.Slider) and setting_key == "llm_temperature":
-                    control.value = float(value) * 10.0
-                    temp_label = self.gui_controls_drawer.get("temperature_value_label")
-                    if isinstance(temp_label, ft.Text):
-                        temp_label.value = f"{float(value):.1f}"
-                        if temp_label.page : temp_label.update()
-                elif isinstance(control, ft.Slider) and setting_key == "similarity_threshold":
-                    control.value = float(value) * 100.0
-                    temp_label = self.gui_controls_drawer.get("similarity_threshold_value_label")
-                    if isinstance(temp_label, ft.Text):
-                        temp_label.value = f"{float(value):.2f}"
-                        if temp_label.page : temp_label.update()
-                if control.page : control.update()
-        self._update_reset_button_visibility()
- 
-    def _handle_reset_settings_click(self, e: ft.ControlEvent):
-        """
-        Handler para o clique no botão 'Resetar para Padrões'.
-
-        Reseta as configurações de análise para os valores padrão da nuvem,
-        atualiza a sessão e a UI.
-
-        Args:
-            e (ft.ControlEvent): O evento de clique do botão.
-        """
-        logger.info("SettingsDrawerManager: Botão 'Resetar Configurações' clicado.")
-        cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
-        if cloud_defaults:
-            self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, cloud_defaults.copy())
-            self._load_settings_into_drawer_controls(cloud_defaults) # Usa o método da classe
-            show_snackbar(self.page, "Configurações resetadas para os padrões da nuvem.", theme.COLOR_INFO)
-        else:
-            show_snackbar(self.page, "Não foi possível carregar os padrões em nuvem.", theme.COLOR_ERROR)
-        self._update_reset_button_visibility()
- 
-    def _update_reset_button_visibility(self):
-        """
-        Atualiza a visibilidade do botão 'Resetar para Padrões'.
- 
-        O botão fica visível se as configurações atuais na sessão forem diferentes
-        das configurações padrão da nuvem.
-        """
-        current_session_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
-        cloud_default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
-        reset_button = self.gui_controls_drawer.get(CTL_RESET_SETTINGS_BTN)
- 
-        if not current_session_settings or not cloud_default_settings or not reset_button:
-            if reset_button : reset_button.visible = False
-            if reset_button and reset_button.page: reset_button.update()
-            return
- 
-        are_different = False
-        for key in cloud_default_settings.keys():
-            val_session = current_session_settings.get(key)
-            val_cloud = cloud_default_settings.get(key)
-            if isinstance(val_cloud, (int, float)) and isinstance(val_session, str):
-                try:
-                    if isinstance(val_cloud, int): val_session = int(val_session)
-                    elif isinstance(val_cloud, float): val_session = float(val_session)
-                except ValueError: pass
-            if val_session != val_cloud:
-                logger.debug(f"Diferença para reset (Drawer): Chave='{key}', Sessão='{val_session}', Nuvem='{val_cloud}'")
-                are_different = True
-                break
-        reset_button.visible = are_different
-        if reset_button.page: reset_button.update()
 
 class LLMStructuredResultDisplay(ft.Column):
     """
