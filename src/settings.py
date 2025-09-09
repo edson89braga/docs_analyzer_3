@@ -115,7 +115,7 @@ CLOUD_LOGGER_RETRY_DELAY = 12        # Tempo de espera entre as tentativas (segu
 # --- Configurações de PDF_PROCESSOR e LLM -------------------------------------------------
 DEFAULT_LLM_SERVICE = "openai" # Exemplo
 DEFAULT_LLM_PROVIDER = "openai"
-DEFAULT_LLM_MODEL = "gpt-4.1-mini" # Modelo inicial padrão
+DEFAULT_LLM_MODEL = "gpt-5-mini" # Modelo inicial padrão
 DEFAULT_TEMPERATURE = 0.3 # Baixa temperatura para respostas mais factuais/consistentes
 
 # Fallback Default Analysis Settings (se Firestore falhar)
@@ -127,7 +127,7 @@ FALLBACK_ANALYSIS_SETTINGS = {
     "token_counter": "tiktoken",
     "tfidf_analyzer": "sklearn",
     "llm_provider": "openai",
-    "llm_model": "gpt-4.1-mini",
+    "llm_model": "gpt-5-mini",
     "llm_input_token_limit": 180000,
     "llm_output_format": "Padrão",
     "llm_max_output_length": "Padrão",
