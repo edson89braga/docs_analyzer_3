@@ -180,7 +180,7 @@ class ChatViewContent(ft.Column):
     def _show_initial_greeting(self):
         """Adiciona uma mensagem inicial de boas-vindas ao chat."""
         initial_message = { "id": time.time(), "author": "IA", 
-                           "text": "Olá! Após o carregamento dos documentos que você deseja analisar, poderemos interagir sobre o conteúdo correspondente." }
+                           "text": "Olá! Após o carregamento de documento(s), poderemos interagir sobre o respectivo conteúdo." }
         self.messages.append(initial_message)
         self._update_chat_display()
 
@@ -371,10 +371,10 @@ class ChatViewContent(ft.Column):
 
         except Exception as e:
             logger.error(f"Erro ao pré-processar documentos para o chat: {e}", exc_info=True)
-            def update_ui_on_error():
+            def update_ui_on_error(e: Exception):
                 hide_loading_overlay(self.page)
                 show_snackbar(self.page, f"Erro ao processar documentos: {e}", color=theme.COLOR_ERROR)
-            self.page.run_thread(update_ui_on_error)
+            self.page.run_thread(update_ui_on_error(e))
 
     def _get_raw_document_context(self) -> str:
         """

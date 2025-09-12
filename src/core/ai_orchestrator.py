@@ -544,12 +544,16 @@ def analyze_text_with_llm(
                     modified_msg_dict = {key: value.replace("{input_text}", processed_text) for key, value in msg_dict.items()}
                     modified_prompt_list.append(modified_msg_dict)
 
-                response = client_openai.responses.parse(
-                    model=model_name,
-                    input=modified_prompt_list, # Lista única
-                    temperature=temperature,
-                    text_format = output_formats[prompt_name]
-                )
+                data_to_api = {
+                    "model": model_name,
+                    "input": modified_prompt_list, # Lista única
+                    "text_format": output_formats[prompt_name]
+                }
+                if model_name.startswith("gpt-4"):
+                    data_to_api.update({"temperature": temperature})
+
+                response = client_openai.responses.parse(**data_to_api)
+
                 final_response = response.output_text
 
                 # Obter informações sobre o uso de tokens
