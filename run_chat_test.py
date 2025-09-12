@@ -2,7 +2,7 @@
 import flet as ft
 import sys, os
 
-# Adiciona o diretório raiz ao path para encontrar o pacote 'src'
+# Adiciona o diretório raiz ao path para encontrar o pacote 'src' ...
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
 from src.flet_ui.views.chat_view import create_chat_view_content
