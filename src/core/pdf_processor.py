@@ -336,7 +336,7 @@ def is_text_intelligible(text: str, cid_threshold: float = 0.7) -> bool:
             return False
             
         lang = detect(text_for_langdetect)
-        #logger.debug(f"Idioma detectado para o texto (sem cids): '{lang}'")
+        logger.debug(f"Idioma detectado para o texto (sem cids): '{lang}'")
         return lang in allowed_langs if lang else False
     except LangDetectException:
         logger.debug("LangDetectException, texto considerado ininteligível.")
@@ -537,9 +537,9 @@ def print_text_intelligibility(texts_normalized: list[tuple[int, str]]):
         if not is_intelligible:
             try:
                 lang = detect(text)
-                logger.debug(f'Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
+                logger.info(f'Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
             except LangDetectException:
-                logger.debug(f'Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
+                logger.info(f'Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
 
 import networkx as nx
 

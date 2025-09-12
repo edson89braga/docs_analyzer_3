@@ -73,8 +73,6 @@ logs/
 *.db
 *.tmp
 
-*.ipynb
-
 docs/
 *.docx
 
@@ -90,4 +88,5 @@ Notes.md
 extract_pyfiles.py
 extract_pyfiles2.py
 teste_int.py
+teste_int.ipynb
 
