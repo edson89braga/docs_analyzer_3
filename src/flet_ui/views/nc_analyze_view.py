@@ -474,7 +474,8 @@ class AnalyzePDFViewContent(ft.Column):
                     label=name_str,
                     value=content_value_cleaned,
                     multiline=True, # read_only=False,
-                    min_lines=2, max_lines=10, 
+                    # min_lines=2, max_lines=10, 
+                    expand=True,
                     border=ft.InputBorder.OUTLINE,
                     text_size=12, # Tamanho de texto menor para acomodar mais
                     # dense=True  # Torna o campo um pouco mais compacto

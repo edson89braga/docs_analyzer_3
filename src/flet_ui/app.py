@@ -29,10 +29,12 @@ from .router import route_change_content_only
 from . import theme
 error_color = theme.COLOR_ERROR if hasattr(theme, 'COLOR_ERROR') else ft.Colors.RED
 
+from src.services import credentials_manager
 from src.services.firebase_client import FbManagerAuth, FirebaseClientFirestore, _from_firestore_value
 from src.logger.logger import LoggerSetup
 
 auth_manager = FbManagerAuth()
+firestore_client = FirebaseClientFirestore()
 
 def load_default_analysis_settings(page: ft.Page):
     """
@@ -44,7 +46,6 @@ def load_default_analysis_settings(page: ft.Page):
         page: A instância da página Flet.
     """
     logger.info("Carregando configurações de LLM (provedores, defaults e preferências do usuário)...")
-    firestore_client = FirebaseClientFirestore()
     user_token = page.session.get("auth_id_token")
     user_id = page.session.get("auth_user_id")
 
@@ -358,6 +359,9 @@ def load_auth_state_from_storage(page: ft.Page):
         final_user_id = page.session.get("auth_user_id")
         
         logger.info(f"Sessão restaurada e validada com sucesso para o usuário {final_user_id}.")
+
+        # Carrega proativamente as chaves de API para a sessão restaurada.
+        credentials_manager.load_and_cache_all_api_keys(page, firestore_client)
 
         # Passo 3: Configurações pós-restauração
         LoggerSetup.set_cloud_user_context(final_id_token, final_user_id)

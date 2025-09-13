@@ -515,7 +515,7 @@ def analyze_text_with_llm(
     """
     global client_openai
 
-    logger.info(f"Iniciando análise de texto com LLM. Provider: {provider}, Prompt: {prompt_name}")
+    logger.info(f"Iniciando análise de texto com LLM. Provider: {provider}, Model: {model_name}; Prompt: {prompt_name}")
        
     start_time = perf_counter()
 

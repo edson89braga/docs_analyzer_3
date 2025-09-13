@@ -178,6 +178,14 @@ KEY_SESSION_PROMPTS_FINAL = "app_prompts_from_firestore_1"
 KEY_SESSION_PROMPTS_DICT = "app_prompts_from_firestore_2"
 KEY_SESSION_LIST_TO_PROMPTS = "app_list_to_prompts_from_firestore"
 
+# --- Configurações de CHAT_VIEW --------------------------------------------------------------------------
+
+KEY_SESSION_CHAT_FILES = "chat_view_loaded_files"
+KEY_SESSION_CHAT_RAW_PAGES_TEXT = "chat_view_raw_pages_text"
+KEY_SESSION_CHAT_DOCUMENT_CONTEXT = "chat_view_document_context"
+KEY_SESSION_CHAT_MESSAGES = "chat_view_messages"
+KEY_SESSION_CHAT_METRICS = "chat_view_metrics"
+
 # -----------------------------------------------------------------------------------------------------------------
 
 execution_time = perf_counter() - start_time

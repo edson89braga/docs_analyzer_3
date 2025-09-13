@@ -10,6 +10,7 @@ logger.debug(f"{start_time:.4f}s - Iniciando credentials_manager.py")
 import keyring, json, os
 from cryptography.fernet import Fernet, InvalidToken
 from typing import Optional
+from flet import Page as ft_Page
 
 from src.settings import (APP_NAME, APP_DATA_DIR, KEYRING_SERVICE_FIREBASE, KEYRING_USER_ENCRYPTION_KEY, 
 ENCRYPTED_SERVICE_KEY_FILENAME, ENCRYPTED_SERVICE_KEY_PATH)
@@ -351,6 +352,43 @@ def decrypt(encrypted_bytes: bytes) -> Optional[str]:
     except Exception as e:
         logger.error(f"Falha durante a descriptografia pública: {e}", exc_info=True)
         return None
+
+def load_and_cache_all_api_keys(page: ft_Page, firestore_client) -> bool:
+    """
+    Carrega todas as chaves de API de um usuário do Firestore, as descriptografa
+    e as armazena em cache na sessão Flet.
+    """
+    user_token = page.session.get("auth_id_token")
+    user_id = page.session.get("auth_user_id")
+
+    if not user_token or not user_id:
+        logger.warning("load_and_cache_all_api_keys: Contexto de usuário ausente.")
+        return False
+
+    try:
+        encrypted_keys_map = firestore_client.get_all_user_api_keys_client(user_token, user_id)
+        if not encrypted_keys_map:
+            logger.info(f"Nenhuma chave de API encontrada no Firestore para o usuário {user_id}.")
+            return True # Não é um erro, apenas não há chaves.
+
+        keys_loaded_count = 0
+        for service_name, encrypted_key_bytes in encrypted_keys_map.items():
+            decrypted_key = decrypt(encrypted_key_bytes)
+            if decrypted_key:
+                session_key = f"decrypted_api_key_{service_name}"
+                page.session.set(session_key, decrypted_key)
+                keys_loaded_count += 1
+            else:
+                logger.warning(f"Falha ao descriptografar a chave para o serviço '{service_name}'.")
+        
+        if keys_loaded_count > 0:
+            logger.info(f"{keys_loaded_count} chave(s) de API foram carregadas e cacheadas na sessão.")
+        
+        return True
+
+    except Exception as e:
+        logger.error(f"Erro ao carregar e cachear chaves de API: {e}", exc_info=True)
+        return False
 
 
 execution_time = perf_counter() - start_time

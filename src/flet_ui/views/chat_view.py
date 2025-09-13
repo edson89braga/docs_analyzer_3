@@ -1,4 +1,5 @@
 # src/flet_ui/views/chat_view.py
+from math import e
 import flet as ft
 import time, threading, os
 from typing import List, Dict, Any, Optional
@@ -18,14 +19,13 @@ from src.flet_ui.settings_drawer import SettingsDrawerManager
 from src.core.chat_llm_orchestrator import ChatLLMOrchestrator
 from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS, 
                           KEY_SESSION_LOADED_LLM_PROVIDERS, DEFAULT_LLM_PROVIDER,
-                          DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE)
+                          DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE,
+                          KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_DOCUMENT_CONTEXT,
+                          KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS,
+                          KEY_SESSION_CHAT_RAW_PAGES_TEXT)
 
 import logging
 logger = logging.getLogger(__name__)
-
-# Chave de sessão para os arquivos carregados no chat
-KEY_SESSION_CHAT_FILES = "chat_view_loaded_files"
-KEY_SESSION_CHAT_DOCUMENT_CONTEXT = "chat_view_document_context"
 
 system_prompt_estrito = '''
 Você é um assistente especializado em análise de documentos para a Polícia Federal.  
@@ -58,7 +58,6 @@ class ChatViewContent(ft.Column):
         self.orchestrator = ChatLLMOrchestrator()
         
         # Estado da UI
-        self.messages: List[Dict[str, Any]] = []
         self.is_processing_response = False
         self.editing_message_id: Optional[float] = None
         self._is_drawer_open = False
@@ -95,7 +94,9 @@ class ChatViewContent(ft.Column):
         self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0, animate=ft.Animation(300, ft.AnimationCurve.EASE_OUT_QUART))
         
         self._build_layout()
-        self._show_initial_greeting()
+        
+        # self.messages: List[Dict[str, Any]] = []
+        self._restore_state_from_session()
 
     def _initialize_file_picker(self) -> ManagedFilePicker:
         """Inicializa e retorna uma instância do ManagedFilePicker."""
@@ -111,6 +112,13 @@ class ChatViewContent(ft.Column):
             upload_dir=UPLOAD_TEMP_DIR,
             allowed_extensions=["pdf"] # , "txt", "docx", "csv", "xlsx"]
         )
+
+    def _update_file_list_display(self, files: List[Dict[str, Any]]):
+        self.file_list_view.controls.clear()
+        for f in files:
+            self.file_list_view.controls.append(ft.ListTile(title=ft.Text(f["name"]), leading=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED), dense=True))
+        self.file_list_panel.visible = True
+        self.file_list_panel.update()
 
     def _create_panel(self, title: str, content: ft.Control, visible: bool = False) -> ft.ExpansionPanelList:
         """Cria um painel expansível padronizado, igual ao da nc_analyze_view."""
@@ -171,40 +179,109 @@ class ChatViewContent(ft.Column):
             main_layout_with_drawer, # Substitui a coluna de conteúdo direto
             ft.Divider(height=1),
             ft.Row([
-                ft.Container(expand=1),
-                ft.Container(content=input_bar, padding=ft.padding.symmetric(vertical=5, horizontal=10), expand=8),
-                ft.Container(expand=1),
+                ft.Container(expand=3),
+                ft.Container(content=input_bar, padding=ft.padding.symmetric(vertical=5, horizontal=10), expand=94),
+                ft.Container(expand=3),
             ])
         ]
 
+    def _save_state_to_session(self):
+        """Salva o estado atual do chat (mensagens, métricas) na sessão."""
+        messages = self.chat_history_view.controls
+        if messages:
+            # Extrai os dados relevantes dos controles para serialização
+            message_data = [c.data for c in self.chat_history_view.controls if hasattr(c, 'data')]
+            self.page.session.set(KEY_SESSION_CHAT_MESSAGES, message_data)
+
+        metrics_data = [c.data for c in self.metrics_content.controls if hasattr(c, 'data')]
+        if metrics_data:
+            self.page.session.set(KEY_SESSION_CHAT_METRICS, metrics_data)
+
+    def _restore_state_from_session(self):
+        """Restaura o estado do chat a partir da sessão ao carregar a view."""
+        # Restaura arquivos
+        files = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
+        if files:
+            self._update_file_list_display(files)
+            self.optimize_button.disabled = False
+            self.anonymize_button.disabled = False
+            self.user_input_field.disabled = False
+            self.send_button.disabled = False
+
+        # Restaura mensagens
+        messages = self.page.session.get(KEY_SESSION_CHAT_MESSAGES) or []
+        if messages:
+            
+            for msg_data in messages:
+                # Realiza o append diretamente em vez de chamar _add_message_to_view, para aproveitar um único _save_state_to_session ao final do loop
+                self._add_message_to_view(msg_data)
+                bubble = self._create_message_bubble(msg_data)
+                bubble.data = msg_data # Armazena os dados no controle
+                self.chat_history_view.controls.append(bubble)
+            
+            if self.page and self.chat_history_view.page:
+                self.chat_history_view.update()
+            self._save_state_to_session()  
+
+        else:
+            self._show_initial_greeting()
+
+        # Restaura métricas
+        metrics = self.page.session.get(KEY_SESSION_CHAT_METRICS) or []
+        if metrics:
+            self._update_metrics_display(metrics[0], append=False) # Assumindo que métricas são um dict único
+
+        self.update()
+
     def _show_initial_greeting(self):
         """Adiciona uma mensagem inicial de boas-vindas ao chat."""
-        initial_message = { "id": time.time(), "author": "IA", 
-                           "text": "Olá! Após o carregamento de documento(s), poderemos interagir sobre o respectivo conteúdo." }
-        self.messages.append(initial_message)
-        self._update_chat_display()
+        if not self.chat_history_view.controls:
+            initial_message = { "id": time.time(), "author": "IA", 
+                                "text": "Olá! Carregue um ou mais documentos para iniciar a conversa." }
+            self._add_message_to_view(initial_message)
 
-    def _update_chat_display(self):
-        """Limpa e recria a lista de mensagens na UI."""
-        self.chat_history_view.controls.clear()
-        is_last_message_from_ia = self.messages and self.messages[-1]["author"] == "IA"
-        
-        for i, msg in enumerate(self.messages):
-            # print(f"[DEBUG] _create_message_bubble nº {i+1}/{len(self.messages)}")
-            is_last_message_in_list = (i == len(self.messages) - 1)
-            is_rerun_visible = (not msg["author"] == "User" and is_last_message_from_ia and is_last_message_in_list)
-            bubble = self._create_message_bubble(msg, is_rerun_visible)
-            self.chat_history_view.controls.append(bubble)
-            # if is_last_message_in_list: print(f'[DEBUG] última msg: {msg["text"][:160]}...')
-        
+    def _add_message_to_view(self, message_data: Dict[str, Any]):
+        """Adiciona uma bolha de mensagem à lista de visualização e salva o estado."""
+        bubble = self._create_message_bubble(message_data)
+        bubble.data = message_data # Armazena os dados no controle
+        self.chat_history_view.controls.append(bubble)
         if self.page and self.chat_history_view.page:
             self.chat_history_view.update()
+        self._save_state_to_session()
 
-    def _create_message_bubble(self, message: Dict[str, Any], is_rerun_visible: bool) -> ft.Row:
+    def _update_last_message_text(self, text_chunk: str, append: bool = True):
+        """Atualiza o texto da última mensagem na view."""
+        if not self.chat_history_view.controls: 
+            return
+        last_bubble = self.chat_history_view.controls[-1]
+        if append:
+            last_bubble.data["text"] += text_chunk
+        else:
+            last_bubble.data["text"] = text_chunk
+
+        # Re-renderiza apenas o conteúdo do último balão para eficiência
+        content_placeholder = last_bubble.controls[0].content.controls[0]
+        self._render_message_content(content_placeholder, last_bubble.data)
+        content_placeholder.update()
+        self._save_state_to_session()
+
+    def _rebuild_chat_display(self):
+        """Limpa e recria toda a lista de mensagens a partir dos dados nos controles."""
+        all_message_data = [c.data for c in self.chat_history_view.controls]
+        self.chat_history_view.controls.clear()
+        for data in all_message_data:
+            bubble = self._create_message_bubble(data, is_rerun_visible=False)
+            bubble.data = data
+            self.chat_history_view.controls.append(bubble)
+        self.chat_history_view.update()
+
+    def _create_message_bubble(self, message: Dict[str, Any]) -> ft.Row:
         """Cria um componente visual para uma única mensagem no chat."""
-        is_user = message["author"] == "User"
-        msg_id = message["id"]
-        is_last_message_in_list = self.messages and self.messages[-1]["id"] == msg_id
+        is_user = message.get("author") == "User"
+        msg_id = message.get("id")
+        is_last_message_in_list = self.chat_history_view.controls and self.chat_history_view.controls[-1].data.get("id") == msg_id
+
+        is_rerun_visible = True if not is_user  and is_last_message_in_list else False
         
         avatar = ft.CircleAvatar(content=ft.Icon(ft.Icons.PERSON_OUTLINE if is_user else ft.Icons.ASSISTANT_OUTLINED))
         content_placeholder = ft.Container(expand=True)
@@ -222,6 +299,7 @@ class ChatViewContent(ft.Column):
 
         if not is_last_message_in_list:
             actions_popup.items.append(ft.PopupMenuItem(text="Retomar daqui", icon=ft.Icons.RESTART_ALT, data="resume", on_click=lambda e: self._handle_message_action(e, msg_id)))
+        
         if is_rerun_visible:
             actions_popup.items.append(ft.PopupMenuItem(text="Regenerar resposta", icon=ft.Icons.REPLAY, data="rerun", on_click=lambda e: self._handle_message_action(e, msg_id)))
 
@@ -241,16 +319,16 @@ class ChatViewContent(ft.Column):
         
         message_row = ft.Row(
             controls=[
-                ft.Container(expand=1),  # 10% esquerda
+                ft.Container(expand=3),  # 5% esquerda
                 ft.Row(
                     controls=[
                         avatar if not is_user else ft.Container(),
                         bubble_container,
                         avatar if is_user else ft.Container()
                     ],
-                    expand=8  # 80% centro
+                    expand=94  # 90% centro
                 ),
-                ft.Container(expand=1)  # 10% direita
+                ft.Container(expand=3)  # 5% direita
             ]
         )
         return message_row
@@ -290,53 +368,56 @@ class ChatViewContent(ft.Column):
         hide_loading_overlay(self.page)
         successful_files = [f for f in batch_results if f.get("success")]
         if not successful_files:
+            logger.info("Nenhum arquivo carregado.")
             show_snackbar(self.page, "Nenhum arquivo válido foi carregado.", color=theme.COLOR_WARNING)
             return
 
         self.page.session.set(KEY_SESSION_CHAT_FILES, successful_files)
-        logger.debug(f"Carregados {len(successful_files)} arquivos: {successful_files}")
-        self.file_list_view.controls.clear()
-        for f in successful_files:
-            self.file_list_view.controls.append(ft.ListTile(title=ft.Text(f["name"]), leading=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED), dense=True))
+        self._save_state_to_session()
+        self._update_file_list_display(successful_files)
         
-        self.file_list_panel.visible = True
+        logger.info(f"Carregados {len(successful_files)} arquivos: {successful_files}")
+        
         self.optimize_button.disabled = False
         self.anonymize_button.disabled = False
-        self.user_input_field.disabled = False
-        self.send_button.disabled = False
         
         show_snackbar(self.page, f"{len(successful_files)} documento(s) carregado(s). Otimização de páginas recomendada.", color=theme.COLOR_SUCCESS)
-        self.file_list_panel.update()
         self.optimize_button.update()
         self.anonymize_button.update()
-        self.user_input_field.update()
-        self.send_button.update()
+
+        # Extração automática em background
+        show_loading_overlay(self.page, "Extraindo texto dos documentos...")
+        threading.Thread(target=self._extract_raw_context_from_files, args=(successful_files,), daemon=True).start()
 
     def _handle_optimize_click(self, e: ft.ControlEvent):
         """Inicia o pré-processamento opcional dos documentos."""
-        successful_files = self.page.session.get(KEY_SESSION_CHAT_FILES)
-        if not successful_files:
-            show_snackbar(self.page, "Nenhum arquivo carregado para otimizar.", color=theme.COLOR_WARNING)
+        raw_pages_text = self.page.session.get(KEY_SESSION_CHAT_RAW_PAGES_TEXT) or {}
+        if not raw_pages_text:
+            show_snackbar(self.page, "Aguarde a extração inicial do texto antes de otimizar.", color=theme.COLOR_WARNING)
             return
 
-        show_loading_overlay(self.page, "Otimizando documentos...")
-        pdf_paths = [f["path_or_message"] for f in successful_files]
-        self.optimize_button.disabled = True
-        self.optimize_button.update()
-        threading.Thread(target=self._preprocess_documents, args=(pdf_paths, successful_files), daemon=True).start()
+        show_loading_overlay(self.page, "Otimizando páginas relevantes...")
+        threading.Thread(target=self._preprocess_documents, args=(raw_pages_text,), daemon=True).start()
 
-    def _preprocess_documents(self, pdf_paths: list[str], successful_files: list[dict]):
+    def _preprocess_documents(self, pre_extracted_texts):
         """
         Usa o PDFDocumentAnalyzer para extrair e consolidar o texto dos arquivos.
         Este é o processo de OTIMIZAÇÃO. Executado em uma thread separada.
         """
         try:
+
+            # Usa os textos pré-extraídos
+            files_info = self.page.session.get(KEY_SESSION_CHAT_FILES, [])
+            pdf_paths_ordered = [f['path_or_message'] for f in files_info]
+
             # Reutiliza a lógica de pré-processamento do nc_analyzer
             from src.core.pdf_processor import PDFDocumentAnalyzer
             analyzer = PDFDocumentAnalyzer()
 
             # Pipeline de análise de PDF
-            processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores = analyzer.analyze_pdf_documents(pdf_paths)
+            # processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores = analyzer.analyze_pdf_documents(pdf_paths)
+            processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores = analyzer.analyze_pre_extracted_texts(pre_extracted_texts, pdf_paths_ordered)
+
             relevant_indices, _, _ = analyzer.filter_and_classify_pages(
                 processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores
             )
@@ -352,20 +433,17 @@ class ChatViewContent(ft.Column):
 
             # Salva o contexto na sessão
             self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, aggregated_text)
+            self._save_state_to_session()
 
             # Atualiza a UI na thread principal
             def update_ui_after_processing():
-                hide_loading_overlay(self.page)
-                self.file_list_view.controls.clear()
-                for f in successful_files:
-                    self.file_list_view.controls.append(ft.ListTile(title=ft.Text(f["name"]), leading=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED), dense=True))
-                self.file_list_panel.visible = True
-                self.file_list_panel.update()
-                show_snackbar(self.page, f"{len(successful_files)} documento(s) processado(s) e pronto(s) para o chat.", color=theme.COLOR_SUCCESS)
+                hide_loading_overlay(self.page)                
+                show_snackbar(self.page, f"{len(pdf_paths_ordered)} documento(s) processado(s) e pronto(s) para o chat.", color=theme.COLOR_SUCCESS)
                 self.optimize_button.icon = ft.Icons.CHECK_CIRCLE
                 self.optimize_button.text = "Páginas Otimizadas"
+                self.optimize_button.disabled = True
                 self.optimize_button.update()
-                show_snackbar(self.page, f"Documentos otimizados. O chat usará o conteúdo filtrado.", color=theme.COLOR_SUCCESS)
+                show_snackbar(self.page, f"Documentos otimizados. O chat usará o conteúdo filtrado.", color=theme.COLOR_SUCCESS)                
 
             self.page.run_thread(update_ui_after_processing)
 
@@ -376,26 +454,41 @@ class ChatViewContent(ft.Column):
                 show_snackbar(self.page, f"Erro ao processar documentos: {e}", color=theme.COLOR_ERROR)
             self.page.run_thread(update_ui_on_error(e))
 
-    def _get_raw_document_context(self) -> str:
+    def _extract_raw_context_from_files(self, files: List[Dict[str, Any]]):
         """
         Extrai e concatena o texto bruto de todas as páginas de todos os arquivos carregados.
         Este é o fallback para quando a otimização não é executada.
         """
-        from src.core.pdf_processor import PDFDocumentAnalyzer
-        analyzer = PDFDocumentAnalyzer()
-        all_texts = []
-        files_to_process = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
-        pdf_paths = [f["path_or_message"] for f in files_to_process]
+        try:
+            from src.core.pdf_processor import PDFDocumentAnalyzer
+            analyzer = PDFDocumentAnalyzer()
+            raw_pages_text_map = {}
+            all_texts_concatenated = []
 
-        for pdf_path in pdf_paths:
-            try:
-                # Extrai texto de todas as páginas, sem filtro
+            for file_info in files:
+                pdf_path = file_info["path_or_message"]
                 pages = analyzer.extractor.extract_texts_from_pages(pdf_path)
-                all_texts.extend([page_text for _, page_text in pages])
-            except Exception as e:
-                logger.error(f"Erro ao extrair texto bruto de '{pdf_path}': {e}")
-        
-        return "\n\n".join(all_texts)
+                raw_pages_text_map[pdf_path] = pages
+                all_texts_concatenated.extend([text for _, text in pages])
+
+            self.page.session.set(KEY_SESSION_CHAT_RAW_PAGES_TEXT, raw_pages_text_map)
+            self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, "\n\n".join(all_texts_concatenated))
+            self._save_state_to_session()
+
+            def update_ui():
+                hide_loading_overlay(self.page)
+                self.user_input_field.disabled = False
+                self.send_button.disabled = False
+                self.user_input_field.update()
+                self.send_button.update()
+                show_snackbar(self.page, "Extração de texto concluída. Você já pode interagir com o chat.", color=theme.COLOR_SUCCESS)
+            self.page.run_thread(update_ui)
+
+        except Exception as e:
+            def update_ui_on_error():
+                hide_loading_overlay(self.page)
+                show_snackbar(self.page, f"Erro ao extrair texto: {e}", color=theme.COLOR_ERROR)
+            self.page.run_thread(update_ui_on_error)
 
     def _handle_anonymize_click(self, e: ft.ControlEvent):
         """Handler para o botão de anonimização (ainda não implementado)."""
@@ -404,7 +497,6 @@ class ChatViewContent(ft.Column):
             "A funcionalidade de anonimização de dados ainda não está disponível.",
             color=theme.COLOR_WARNING
         )
-        self._update_chat_display()
 
     def _handle_send_message(self, e: ft.ControlEvent):
         if self.is_processing_response: 
@@ -413,17 +505,11 @@ class ChatViewContent(ft.Column):
         user_text = self.user_input_field.value # .strip()
         if not user_text:
             return
-
-        # A verificação correta é se existem arquivos para processar.
-        # A lógica de obter/criar o contexto foi movida para _get_context_and_call_ai
-        if not self.page.session.get(KEY_SESSION_CHAT_FILES):
-            show_snackbar(self.page, "Carregue um documento antes da interação inicial.", color=theme.COLOR_WARNING)
-            return
-
+        
         self._set_processing_state(True, clear_input=True)
-        self.messages.append({"id": time.time(), "author": "User", "text": user_text})
+        user_message = {"id": time.time(), "author": "User", "text": user_text}
+        self._add_message_to_view(user_message)
         logger.info('[DEBUG] Enviando mensagem do usuário ao Chat...')
-        self._update_chat_display()
         self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT)
         
         # Inicia a geração da resposta da IA em uma thread
@@ -436,20 +522,9 @@ class ChatViewContent(ft.Column):
         document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
 
         if not document_context:
-            logger.info("Contexto otimizado não encontrado. Extraindo texto bruto de todos os arquivos.")
-            self.page.run_thread(lambda: show_loading_overlay(self.page, "Extraindo texto completo..."))
-            try:
-                document_context = self._get_raw_document_context()
-                # Salva o contexto bruto na sessão para não reprocessar na mesma conversa
-                self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, document_context)
-            except Exception as e:
-                logger.error(f"Falha ao extrair contexto bruto: {e}", exc_info=True)
-                self.page.run_thread(lambda: hide_loading_overlay(self.page))
-                self.page.run_thread(lambda: show_snackbar(self.page, f"Erro ao ler documentos: {e}", color=theme.COLOR_ERROR))
-                self.page.run_thread(lambda: self._set_processing_state(False))
-                return
-            finally:
-                self.page.run_thread(lambda: hide_loading_overlay(self.page))
+            self.page.run_thread(lambda: show_snackbar(self.page, "Aguarde a extração de texto ser concluída ou carregue um arquivo.", color=theme.COLOR_WARNING))
+            self.page.run_thread(lambda: self._set_processing_state(False))
+            return
 
         self._handle_ai_response(document_context, user_question)
 
@@ -463,28 +538,30 @@ class ChatViewContent(ft.Column):
         
         if not api_key:
             error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
-            self.messages[-1]["text"] = error_msg
-            self.page.run_thread(self._update_chat_display)
+            logger.error(error_msg)
+            thinking_message_data = {"id": time.time(), "author": "IA", "text": error_msg}
+        else:
+            thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
+
+        self.page.run_thread(lambda: self._add_message_to_view(thinking_message_data))        
+        self.page.run_thread(self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT))
+
+        if not api_key:
             self.page.run_thread(lambda: self._set_processing_state(False))
             return
+        
+        messages = [m.data for m in self.chat_history_view.controls]
 
         # O orquestrador agora insere o contexto. Passamos apenas o histórico da conversa.
         history_for_api = [
             {"role": "assistant" if msg["author"] == "IA" else "user", 
              "content": msg["text"]}
-            # Passa as mensagens anteriores, excluindo a pergunta atual do usuário e a mensagem "pensando"
-            for msg in self.messages[:-2] if msg["author"] in ["User", "IA"]
+            # Passa as mensagens anteriores, excluindo a pergunta atual do usuário e a thinking_message
+            for msg in messages[:-2] if msg["author"] in ["User", "IA"]
         ]
 
-        # Mensagem de "pensando..."
-        # thinking_message = {"id": time.time(), "author": "IA", "text": "▍..."}
-        thinking_message = {"id": time.time(), "author": "IA", "text": ""}
-        self.messages.append(thinking_message)
-        self.page.run_thread(self._update_chat_display)
-        self.page.run_thread(self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT))
-
         try:
-            model_name = "gpt-5-mini" # settings.get('llm_model', DEFAULT_LLM_MODEL)
+            model_name = settings.get('llm_model', DEFAULT_LLM_MODEL) 
             response_generator = self.orchestrator.generate_response(
                 api_key=api_key,
                 model_name=model_name,
@@ -494,19 +571,18 @@ class ChatViewContent(ft.Column):
                 user_question=user_question,
                 loaded_llm_providers=self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or [],
                 temperature=settings.get('llm_temperature', DEFAULT_TEMPERATURE) 
-                # TODO:  incluir parâmetros de reasoning e vebosity
+                # TODO:  incluir parâmetros de reasoning e verbosity
             )
 
             for response_part in response_generator:
                 if response_part["type"] == "chunk":
-                    self.messages[-1]["text"] += response_part["content"]
+                    self.page.run_thread(lambda chunk=response_part["content"]: self._update_last_message_text(chunk, append=True))
                     logger.info(f"[DEBUG] Chunk Msg LLM by model {model_name}: {response_part['content'][:160]}...")
-                    self.page.run_thread(self._update_chat_display)
                 elif response_part["type"] == "final_metrics":
-                    self.page.run_thread(lambda data=response_part["data"]: self._update_metrics_display(data))
+                    self.page.run_thread(lambda data=response_part["data"]: self._update_metrics_display(data, append=True))
                 elif response_part["type"] == "error":
-                    self.messages[-1]["text"] = f"**Erro:** {response_part['content']}"
-                    self.page.run_thread(self._update_chat_display)
+                    error_text = f"**Erro:** {response_part['content']}"
+                    self.page.run_thread(lambda: self._update_last_message_text(error_text, append=False))
                     break
         finally:
             self.page.run_thread(lambda: self._set_processing_state(False))
@@ -525,22 +601,27 @@ class ChatViewContent(ft.Column):
         if not is_processing:
             self.user_input_field.focus()
 
-    def _update_metrics_display(self, metrics_data: dict):
+    def _update_metrics_display(self, metrics_data: dict, append: bool = True):
         """Atualiza o painel de métricas com os dados da última resposta."""
-        # TODO: O display de métricas deve exibir os tokens acumulados da sessão, em vez de somente da última requisição.
-        self.metrics_content.controls = [
-            ft.Row([ft.Text("Custo da Resposta:", weight=ft.FontWeight.BOLD), ft.Text(f"U$ {metrics_data.get('total_cost_usd', 0):.4f}")]),
+        if not append:
+            self.metrics_content.controls.clear()
+
+        new_metric_rows = [
+            ft.Row([ft.Text("Custo da Resposta:", weight=ft.FontWeight.BOLD), ft.Text(f"U$ {metrics_data.get('total_cost_usd', 0):.4f}")], data=metrics_data),
             ft.Row([ft.Text("Tokens de Entrada:", weight=ft.FontWeight.BOLD), ft.Text(f"{metrics_data.get('input_tokens', 0)}")]),
             ft.Row([ft.Text("Tokens de Cache:", weight=ft.FontWeight.BOLD), ft.Text(f"{metrics_data.get('cached_tokens', 0)}")]),
             ft.Row([ft.Text("Tokens de Saída:", weight=ft.FontWeight.BOLD), ft.Text(f"{metrics_data.get('output_tokens', 0)}")]),
         ]
+        self.metrics_content.controls.extend(new_metric_rows)
         self.metrics_panel.visible = True
+        self._save_state_to_session()
         self.metrics_panel.update()
 
     def _handle_message_action(self, e: ft.ControlEvent, message_id: float):
         """Handler central para ações do PopupMenuButton da mensagem."""
         action = e.control.data
-        message_text = next((msg["text"] for msg in self.messages if msg["id"] == message_id), "")
+        all_messages_data = [c.data for c in self.chat_history_view.controls]
+        message_text = next((msg["text"] for msg in reversed(all_messages_data) if msg.get('if') == message_id), "")
 
         if action == "copy": self.page.set_clipboard(message_text)
         elif action == "edit": self._handle_edit_message(message_id)
@@ -549,54 +630,59 @@ class ChatViewContent(ft.Column):
         elif action == "rerun": self._handle_rerun(message_id)
 
     def _handle_delete_message(self, message_id: float):
-        self.messages = [msg for msg in self.messages if msg["id"] != message_id]
-        self._update_chat_display()
+        self.chat_history_view.controls = [c for c in self.chat_history_view.controls if c.data["id"] != message_id]
+        self._rebuild_chat_display()
+        self._save_state_to_session()
 
     def _handle_edit_message(self, message_id: float):
         self.editing_message_id = message_id
-        self._update_chat_display()
+        self._rebuild_chat_display()
 
     def _handle_save_edit(self, message_id: float, new_text: str):
-        for msg in self.messages:
-            if msg["id"] == message_id:
-                msg["text"] = new_text
+        for control in self.chat_history_view.controls:
+            if control.data["id"] == message_id:
+                control.data["text"] = new_text
                 break
         self.editing_message_id = None
-        self._update_chat_display()
+        self._rebuild_chat_display()
+        self._save_state_to_session()
 
     def _handle_cancel_edit(self, message_id: float):
         self.editing_message_id = None
-        self._update_chat_display()
+        self._rebuild_chat_display()
 
     def _handle_resume_from(self, message_id: float):
-        try:
-            index = next(i for i, msg in enumerate(self.messages) if msg["id"] == message_id)
-            self.messages = self.messages[:index + 1]
-            self._update_chat_display()
-            self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT)
-        except StopIteration:
-            logger.error(f"Não foi possível encontrar a mensagem com ID {message_id} para retomar.")
+        index = next((i for i, c in enumerate(self.chat_history_view.controls) if c.data["id"] == message_id), -1)
+        if index != -1:
+            self.chat_history_view.controls = self.chat_history_view.controls[:index + 1]
+            self._rebuild_chat_display()
+            self._save_state_to_session()
+            self.chat_history_view.scroll_to(offset=-1, duration=300)
             
     def _handle_rerun(self, message_id: float):
-        last_user_message = next((msg for msg in reversed(self.messages) if msg['author'] == 'User'), None)
+        all_messages_data = [c.data for c in self.chat_history_view.controls]
+        last_user_message = next((msg for msg in reversed(all_messages_data) if msg.get('author') == 'User'), None)
         if last_user_message:
             user_question = last_user_message['text']
-            self.messages = [msg for msg in self.messages if msg["id"] != message_id]
-            self._update_chat_display()
+            self.chat_history_view.controls = [c for c in self.chat_history_view.controls if c.data.get("id") != message_id]
             self._set_processing_state(True)
+            self._rebuild_chat_display()
             threading.Thread(target=self._get_context_and_call_ai, args=(user_question,), daemon=True).start()
         else:
             logger.warning("Nenhuma mensagem de usuário encontrada para refazer a pergunta.")
 
     def _handle_clear_chat(self, e: ft.ControlEvent):
         def confirm_action():
-            self.messages.clear()
+            self.chat_history_view.controls.clear()
             self.file_list_panel.visible = False
             self.metrics_panel.visible = False
             self.file_list_panel.update()
             self.metrics_panel.update()
-            if self.page.session.contains_key(KEY_SESSION_CHAT_FILES):
-                self.page.session.remove(KEY_SESSION_CHAT_FILES)
+            # Limpa todas as chaves de sessão relacionadas ao chat
+            for key in [KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS,
+                        KEY_SESSION_CHAT_DOCUMENT_CONTEXT, KEY_SESSION_CHAT_RAW_PAGES_TEXT]:
+                if self.page.session.contains_key(key):
+                    self.page.session.remove(key)
             self._show_initial_greeting()
         
         show_confirmation_dialog(

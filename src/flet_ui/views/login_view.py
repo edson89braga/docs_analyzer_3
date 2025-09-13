@@ -230,6 +230,11 @@ def create_login_view(page: ft.Page) -> ft.View:
                 page.session.set("auth_user_email", user_email_from_auth)
                 page.session.set("auth_display_name", display_name)
 
+                # Carrega proativamente todas as chaves de API para a sessão
+                from src.services import credentials_manager
+                from src.services.firebase_client import FirebaseClientFirestore
+                credentials_manager.load_and_cache_all_api_keys(page, FirebaseClientFirestore())
+
                 # Se "Lembrar de mim" estiver marcado e client_storage disponível,
                 # também armazena no client_storage.
                 if remember_me_checkbox.value and page.client_storage:

@@ -9,6 +9,25 @@ from src.flet_ui.views.chat_view import create_chat_view_content
 from src.flet_ui import theme
 from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR
 
+import logging
+logger = logging.getLogger(__name__)
+
+try:
+    LoggerSetup.initialize(
+        routine_name="DocsAnalyzer3",
+        dev_mode = True, 
+        #firebase_client_storage=_client_storage_for_logger,
+        #fb_manager_storage_admin=_admin_storage_for_logger
+    )
+    # Logger para o próprio run.py
+    logger = LoggerSetup.get_logger(__name__)
+    logger.info("Logger inicializado a partir de run.py.")
+except Exception as e:
+    logger.critical(f"Falha CRÍTICA ao inicializar o logger em run.py: {e}", exc_info=True)
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.error("Logger principal falhou ao inicializar. Usando fallback básico.")
+    # Não levantar exceção aqui para permitir que a app Flet tente iniciar mesmo assim.
+
 def main(page: ft.Page):
     """
     Função principal para executar a view de chat de forma isolada para testes.

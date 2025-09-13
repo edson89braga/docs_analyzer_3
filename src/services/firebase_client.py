@@ -480,6 +480,46 @@ class FirebaseClientFirestore:
             logger.error(f"Falha ao obter chave API (cliente) do Firestore: {e}")
             return None
 
+    def get_all_user_api_keys_client(self, user_token: str, user_id: str) -> Optional[Dict[str, bytes]]:
+        """
+        Recupera TODAS as chaves de API salvas para um usuário.
+
+        Returns:
+            Dict[str, bytes]: Um dicionário mapeando service_name para a chave criptografada em bytes.
+                              Retorna None em caso de erro ou um dicionário vazio se não houver chaves.
+        """
+        if not user_token or not user_id:
+            return None
+
+        document_path = f"user_api_keys/{user_id}"
+        try:
+            response = self._make_firestore_request(method="GET", user_token=user_token, document_path=document_path)
+            
+            if response.status_code == 404:
+                logger.info(f"Documento de chaves API não existe para o usuário {user_id}.")
+                return {}
+
+            data = response.json()
+            fields = data.get("fields", {})
+            
+            decrypted_map = {}
+            for service_name, fs_value in fields.items():
+                encrypted_bytes = _from_firestore_value(fs_value)
+                if isinstance(encrypted_bytes, bytes):
+                    decrypted_map[service_name] = encrypted_bytes
+                else:
+                    logger.warning(f"Valor para a chave '{service_name}' não é bytes. Ignorando.")
+            
+            logger.debug(f"Recuperadas {len(decrypted_map)} chaves de API do Firestore para o usuário {user_id}.")
+            return decrypted_map
+
+        except requests.exceptions.HTTPError as http_err:
+            logger.error(f"Erro HTTP ao obter todas as chaves de API: {http_err}")
+            return None
+        except Exception as e:
+            logger.error(f"Erro ao obter todas as chaves de API: {e}", exc_info=True)
+            return None
+
     def save_metrics_client(self, user_token: str, user_id: str, metric_data: Dict[str, Any]) -> bool:
         """
         Salva dados de métricas no Firestore sob o caminho do usuário, usando um ID de documento cronológico.

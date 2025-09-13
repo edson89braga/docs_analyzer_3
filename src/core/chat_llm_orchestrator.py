@@ -118,9 +118,10 @@ class ChatLLMOrchestrator:
             "input": input_items,
             "instructions": instructions,
             "temperature": temperature if model_name.startswith("gpt-4") else None,
-            # decidir se usamos streaming por convenção de modelos (ajuste se necessário)
+            # Stream desabilitado propositalmente devido restrição da conta OpenAI que exige uma autenticação extra para uso de stream nos modelos gpt-5;
+            # Poderia deixar habilitado o stream para uso com modelos gpt-4, mas parece que o excesso de atualizações em chunks prejudicou a GUI flet;
             "stream": False # model_name.startswith("gpt-4"),
-            # "store": False # Não armazena resposta do modelo para recuperação posterior. Prejudica o cache?
+            # "store": False # Padrão é True. Se False, não armazena resposta do modelo para recuperação posterior; Prejudicaria o cache?
         }
         try: 
             # Para modelos da família 'gpt-5' (ou outros que suportem), passe parâmetros

@@ -634,6 +634,7 @@ class PDFDocumentAnalyzer:
         return ", ".join(output_parts) if output_parts else "Nenhuma"
 
     ### ======================================================================================
+
     #@timing_decorator()
     def extract_texts_and_preprocess_files(self, pdf_paths_ordered: List[str], clean_spaces: bool = True, lowercase: bool = False
                                            ) -> Tuple[List[Tuple[int, str]], List[List[int]], List[Dict[int, str]], List[str]]:
@@ -779,7 +780,43 @@ class PDFDocumentAnalyzer:
                                                                     all_texts_for_analysis_list, model_embedding, ready_embeddings, preprocess_text_advanced)
 
         return combined_processed_page_data, all_global_page_keys_ordered, embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined
-   
+
+    def analyze_pre_extracted_texts(
+        self,
+        pre_extracted_data: Dict[str, List[Tuple[int, str]]],
+        pdf_paths_ordered: List[str]
+    ) -> Tuple[Dict[str, Dict[str, Any]], List[str], Optional[np_ndarray], Optional[spmatrix], Optional[np_ndarray]]:
+        """
+        Executa o pipeline de análise a partir de textos já extraídos, ignorando a releitura de arquivos.
+        """
+        processed_files_metadata = []
+        all_indices_in_batch = []
+        all_texts_for_storage_dict = []
+        all_texts_for_analysis_list = []
+
+        for file_idx, pdf_path in enumerate(pdf_paths_ordered):
+            if pdf_path in pre_extracted_data:
+                pages_content = pre_extracted_data[pdf_path]
+                
+                actual_indices = [idx for idx, _ in pages_content]
+                texts_for_storage = {idx: function_preprocess_text_basic(text) for idx, text in pages_content}
+                texts_for_analysis = [text for _, text in texts_for_storage.items()]
+
+                processed_files_metadata.append((file_idx, pdf_path))
+                all_indices_in_batch.append(actual_indices)
+                all_texts_for_storage_dict.append(texts_for_storage)
+                all_texts_for_analysis_list.extend(texts_for_analysis)
+
+        combined_page_data, ordered_keys = self.build_combined_page_data(
+            processed_files_metadata, all_indices_in_batch, all_texts_for_storage_dict
+        )
+
+        embedding_vectors, tfidf_vectors, tfidf_scores = self.get_similarity_and_tfidf_score_docs(
+            all_texts_for_analysis_list
+        )
+
+        return combined_page_data, ordered_keys, embedding_vectors, tfidf_vectors, tfidf_scores
+       
     ### ======================================================================================
 
     #@timing_decorator()
