@@ -118,7 +118,7 @@ class ChatViewContent(ft.Column):
         for f in files:
             self.file_list_view.controls.append(ft.ListTile(title=ft.Text(f["name"]), leading=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED), dense=True))
         self.file_list_panel.visible = True
-        self.file_list_panel.update()
+        # self.file_list_panel.update()
 
     def _create_panel(self, title: str, content: ft.Control, visible: bool = False) -> ft.ExpansionPanelList:
         """Cria um painel expansível padronizado, igual ao da nc_analyze_view."""
@@ -179,9 +179,9 @@ class ChatViewContent(ft.Column):
             main_layout_with_drawer, # Substitui a coluna de conteúdo direto
             ft.Divider(height=1),
             ft.Row([
-                ft.Container(expand=3),
-                ft.Container(content=input_bar, padding=ft.padding.symmetric(vertical=5, horizontal=10), expand=94),
-                ft.Container(expand=3),
+                ft.Container(expand=2),
+                ft.Container(content=input_bar, padding=ft.padding.symmetric(vertical=5, horizontal=10), expand=96),
+                ft.Container(expand=2),
             ])
         ]
 
@@ -211,18 +211,12 @@ class ChatViewContent(ft.Column):
         # Restaura mensagens
         messages = self.page.session.get(KEY_SESSION_CHAT_MESSAGES) or []
         if messages:
-            
+            self.chat_history_view.controls.clear()
             for msg_data in messages:
-                # Realiza o append diretamente em vez de chamar _add_message_to_view, para aproveitar um único _save_state_to_session ao final do loop
-                self._add_message_to_view(msg_data)
+                # Realiza o append diretamente em vez de chamar _add_message_to_view, pois não precisa chamar _save_state_to_session:
                 bubble = self._create_message_bubble(msg_data)
-                bubble.data = msg_data # Armazena os dados no controle
-                self.chat_history_view.controls.append(bubble)
-            
-            if self.page and self.chat_history_view.page:
-                self.chat_history_view.update()
-            self._save_state_to_session()  
-
+                self.chat_history_view.controls.append(bubble) 
+            self._update_message_actions()
         else:
             self._show_initial_greeting()
 
@@ -231,7 +225,7 @@ class ChatViewContent(ft.Column):
         if metrics:
             self._update_metrics_display(metrics[0], append=False) # Assumindo que métricas são um dict único
 
-        self.update()
+        self.page.update()
 
     def _show_initial_greeting(self):
         """Adiciona uma mensagem inicial de boas-vindas ao chat."""
@@ -243,11 +237,11 @@ class ChatViewContent(ft.Column):
     def _add_message_to_view(self, message_data: Dict[str, Any]):
         """Adiciona uma bolha de mensagem à lista de visualização e salva o estado."""
         bubble = self._create_message_bubble(message_data)
-        bubble.data = message_data # Armazena os dados no controle
         self.chat_history_view.controls.append(bubble)
-        if self.page and self.chat_history_view.page:
-            self.chat_history_view.update()
-        self._save_state_to_session()
+        if self.page and self.chat_history_view.page: 
+            self._update_message_actions()
+            self._save_state_to_session()
+            self.page.update()
 
     def _update_last_message_text(self, text_chunk: str, append: bool = True):
         """Atualiza o texto da última mensagem na view."""
@@ -260,29 +254,27 @@ class ChatViewContent(ft.Column):
             last_bubble.data["text"] = text_chunk
 
         # Re-renderiza apenas o conteúdo do último balão para eficiência
-        content_placeholder = last_bubble.controls[0].content.controls[0]
+        content_placeholder = last_bubble.controls[1].controls[1].content.controls[0] # TODO: melhorar esse mapeamento
         self._render_message_content(content_placeholder, last_bubble.data)
-        content_placeholder.update()
+        threading.Timer(0.1, content_placeholder.update).start()
         self._save_state_to_session()
 
     def _rebuild_chat_display(self):
-        """Limpa e recria toda a lista de mensagens a partir dos dados nos controles."""
-        all_message_data = [c.data for c in self.chat_history_view.controls]
+        # Esta função agora apenas reconstrói os controles. A atualização das ações é centralizada.
+        current_message_data = [c.data for c in self.chat_history_view.controls]
         self.chat_history_view.controls.clear()
-        for data in all_message_data:
-            bubble = self._create_message_bubble(data, is_rerun_visible=False)
-            bubble.data = data
-            self.chat_history_view.controls.append(bubble)
-        self.chat_history_view.update()
+        for data in current_message_data:
+            self.chat_history_view.controls.append(self._create_message_bubble(data))
+        
+        self._update_message_actions()
+        if self.chat_history_view.page:
+            self.chat_history_view.update()
 
     def _create_message_bubble(self, message: Dict[str, Any]) -> ft.Row:
         """Cria um componente visual para uma única mensagem no chat."""
         is_user = message.get("author") == "User"
         msg_id = message.get("id")
-        is_last_message_in_list = self.chat_history_view.controls and self.chat_history_view.controls[-1].data.get("id") == msg_id
-
-        is_rerun_visible = True if not is_user  and is_last_message_in_list else False
-        
+                
         avatar = ft.CircleAvatar(content=ft.Icon(ft.Icons.PERSON_OUTLINE if is_user else ft.Icons.ASSISTANT_OUTLINED))
         content_placeholder = ft.Container(expand=True)
 
@@ -297,13 +289,15 @@ class ChatViewContent(ft.Column):
             ]
         )
 
-        if not is_last_message_in_list:
-            actions_popup.items.append(ft.PopupMenuItem(text="Retomar daqui", icon=ft.Icons.RESTART_ALT, data="resume", on_click=lambda e: self._handle_message_action(e, msg_id)))
-        
-        if is_rerun_visible:
-            actions_popup.items.append(ft.PopupMenuItem(text="Regenerar resposta", icon=ft.Icons.REPLAY, data="rerun", on_click=lambda e: self._handle_message_action(e, msg_id)))
+        # is_last_message_in_list = self.chat_history_view.controls and self.chat_history_view.controls[-1].data.get("id") == msg_id
+        # if not is_last_message_in_list:
+        #     actions_popup.items.append(ft.PopupMenuItem(text="Retomar daqui", icon=ft.Icons.RESTART_ALT, data="resume", on_click=lambda e: self._handle_message_action(e, msg_id)))
+        # 
+        # is_rerun_visible = True if not is_user and is_last_message_in_list else False
+        # if is_rerun_visible:
+        #     actions_popup.items.append(ft.PopupMenuItem(text="Regenerar resposta", icon=ft.Icons.REPLAY, data="rerun", on_click=lambda e: self._handle_message_action(e, msg_id)))
 
-        progressing_status = True if is_rerun_visible and not message['text'].replace('\n', ' ').split() else False
+        progressing_status = not is_user and not message['text'].strip()
         self._render_message_content(content_placeholder, message, progressing_status)
 
         stack_actions_popup = ft.Stack([ft.Container(height=38, width=38), actions_popup])
@@ -319,18 +313,19 @@ class ChatViewContent(ft.Column):
         
         message_row = ft.Row(
             controls=[
-                ft.Container(expand=3),  # 5% esquerda
+                ft.Container(expand=2),  # 5% esquerda
                 ft.Row(
                     controls=[
                         avatar if not is_user else ft.Container(),
                         bubble_container,
                         avatar if is_user else ft.Container()
                     ],
-                    expand=94  # 90% centro
+                    expand=96  # 90% centro
                 ),
-                ft.Container(expand=3)  # 5% direita
+                ft.Container(expand=2)  # 5% direita
             ]
         )
+        message_row.data = message # Anexa os dados diretamente na Row principal
         return message_row
 
     def _render_message_content(self, container: ft.Container, message: Dict[str, Any], progressing_status: bool = False):
@@ -353,6 +348,38 @@ class ChatViewContent(ft.Column):
         else:
             container.content = ft.Markdown(texto_formatado, selectable=True, extension_set=ft.MarkdownExtensionSet.COMMON_MARK)
 
+    def _update_message_actions(self):
+        """
+        Atualiza os itens de menu contextuais (Regenerar, Retomar) para todas as mensagens.
+        Deve ser chamado sempre que o histórico do chat for alterado.
+        """
+        if not self.chat_history_view.controls:
+            return
+        
+        last_index = len(self.chat_history_view.controls) - 1
+
+        # Itera sobre todas as bolhas de mensagem para ajustar seus menus
+        for i, bubble in enumerate(self.chat_history_view.controls):
+            # Acessa o PopupMenuButton dentro da estrutura do bubble
+            # bubble (Row) -> controls[1] (Row interna) -> controls[1] (Container) -> content (Row) -> controls[1] (Stack) -> content (PopupMenuButton)
+            popup_menu = bubble.controls[1].controls[1].content.controls[1].controls[1]
+            
+            # Remove itens de menu condicionais existentes para evitar duplicação
+            popup_menu.items = [item for item in popup_menu.items if item.data not in ("rerun", "resume")]
+
+            # Adiciona "Regenerar resposta" se for a última mensagem da conversa (seja do usuário ou da IA)
+            if i == last_index:
+                popup_menu.items.append(
+                    ft.PopupMenuItem(text="Regenerar resposta", icon=ft.Icons.REPLAY, data="rerun", on_click=lambda e, mid=bubble.data["id"]: self._handle_message_action(e, mid))
+                )
+
+            # Adiciona "Retomar daqui" se não for a última mensagem de todas
+            if i < last_index:
+                popup_menu.items.append(
+                    ft.PopupMenuItem(text="Retomar daqui", icon=ft.Icons.RESTART_ALT, data="resume", on_click=lambda e, mid=bubble.data["id"]: self._handle_message_action(e, mid))
+                )
+
+
     # --- Handlers de Ações ---
 
     def _handle_upload_click(self, e: ft.ControlEvent):
@@ -373,7 +400,6 @@ class ChatViewContent(ft.Column):
             return
 
         self.page.session.set(KEY_SESSION_CHAT_FILES, successful_files)
-        self._save_state_to_session()
         self._update_file_list_display(successful_files)
         
         logger.info(f"Carregados {len(successful_files)} arquivos: {successful_files}")
@@ -433,7 +459,6 @@ class ChatViewContent(ft.Column):
 
             # Salva o contexto na sessão
             self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, aggregated_text)
-            self._save_state_to_session()
 
             # Atualiza a UI na thread principal
             def update_ui_after_processing():
@@ -472,9 +497,8 @@ class ChatViewContent(ft.Column):
                 all_texts_concatenated.extend([text for _, text in pages])
 
             self.page.session.set(KEY_SESSION_CHAT_RAW_PAGES_TEXT, raw_pages_text_map)
-            self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, "\n\n".join(all_texts_concatenated))
-            self._save_state_to_session()
-
+            self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, " ".join(all_texts_concatenated))
+            
             def update_ui():
                 hide_loading_overlay(self.page)
                 self.user_input_field.disabled = False
@@ -498,6 +522,10 @@ class ChatViewContent(ft.Column):
             color=theme.COLOR_WARNING
         )
 
+    def _scroll_to_last_message(self):
+        if self.chat_history_view.page:
+            self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT)
+
     def _handle_send_message(self, e: ft.ControlEvent):
         if self.is_processing_response: 
             return
@@ -506,29 +534,33 @@ class ChatViewContent(ft.Column):
         if not user_text:
             return
         
+        document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
+
+        if not document_context:
+            show_snackbar(self.page, "Aguarde a extração de texto ser concluída ou carregue um arquivo.", color=theme.COLOR_WARNING)
+            self.page.run_thread(lambda: self._set_processing_state(False))
+            return
+        
+        history_for_api = [ # Antes de adicionar a mensagem do usuário e a thinking message;
+            {"role": "assistant" if msg["author"] == "IA" else "user", 
+            "content": msg["text"]}
+            for msg in [c.data for c in self.chat_history_view.controls] if msg.get("author") in ["User", "IA"]
+        ]
+        
         self._set_processing_state(True, clear_input=True)
         user_message = {"id": time.time(), "author": "User", "text": user_text}
         self._add_message_to_view(user_message)
         logger.info('[DEBUG] Enviando mensagem do usuário ao Chat...')
-        self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT)
-        
-        # Inicia a geração da resposta da IA em uma thread
-        threading.Thread(target=self._get_context_and_call_ai, args=(user_text,), daemon=True).start()
+        self._scroll_to_last_message()
 
-    def _get_context_and_call_ai(self, user_question: str):
-        """
-        Determina qual contexto usar (otimizado ou bruto) e chama a IA.
-        """
-        document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
+        thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
+        self._add_message_to_view(thinking_message_data)
+        self._scroll_to_last_message()
 
-        if not document_context:
-            self.page.run_thread(lambda: show_snackbar(self.page, "Aguarde a extração de texto ser concluída ou carregue um arquivo.", color=theme.COLOR_WARNING))
-            self.page.run_thread(lambda: self._set_processing_state(False))
-            return
+        # Inicia a geração da resposta da IA em uma thread, passando o histórico já preparado
+        threading.Thread(target=self._handle_ai_response, args=(document_context, history_for_api, user_text), daemon=True).start()
 
-        self._handle_ai_response(document_context, user_question)
-
-    def _handle_ai_response(self, document_context: str, user_question: str):
+    def _handle_ai_response(self, document_context: str, history_for_api: List[Dict[str, str]], user_question: str):
         """
         Gerencia a chamada ao orquestrador e o streaming da resposta para a UI.
         """       
@@ -539,27 +571,10 @@ class ChatViewContent(ft.Column):
         if not api_key:
             error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
             logger.error(error_msg)
-            thinking_message_data = {"id": time.time(), "author": "IA", "text": error_msg}
-        else:
-            thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
-
-        self.page.run_thread(lambda: self._add_message_to_view(thinking_message_data))        
-        self.page.run_thread(self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT))
-
-        if not api_key:
+            self.page.run_thread(lambda: self._update_last_message_text(error_msg, append=False))
             self.page.run_thread(lambda: self._set_processing_state(False))
             return
         
-        messages = [m.data for m in self.chat_history_view.controls]
-
-        # O orquestrador agora insere o contexto. Passamos apenas o histórico da conversa.
-        history_for_api = [
-            {"role": "assistant" if msg["author"] == "IA" else "user", 
-             "content": msg["text"]}
-            # Passa as mensagens anteriores, excluindo a pergunta atual do usuário e a thinking_message
-            for msg in messages[:-2] if msg["author"] in ["User", "IA"]
-        ]
-
         try:
             model_name = settings.get('llm_model', DEFAULT_LLM_MODEL) 
             response_generator = self.orchestrator.generate_response(
@@ -586,7 +601,7 @@ class ChatViewContent(ft.Column):
                     break
         finally:
             self.page.run_thread(lambda: self._set_processing_state(False))
-            self.page.run_thread(lambda: self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT))
+            self.page.run_thread(lambda: self._scroll_to_last_message())
 
 
     def _set_processing_state(self, is_processing: bool, clear_input: bool = False):
@@ -607,7 +622,7 @@ class ChatViewContent(ft.Column):
             self.metrics_content.controls.clear()
 
         new_metric_rows = [
-            ft.Row([ft.Text("Custo da Resposta:", weight=ft.FontWeight.BOLD), ft.Text(f"U$ {metrics_data.get('total_cost_usd', 0):.4f}")], data=metrics_data),
+            ft.Row([ft.Text("Custo da Resposta:", weight=ft.FontWeight.BOLD), ft.Text(f"U$ {metrics_data.get('total_cost_usd', 0):.6f}")], data=metrics_data),
             ft.Row([ft.Text("Tokens de Entrada:", weight=ft.FontWeight.BOLD), ft.Text(f"{metrics_data.get('input_tokens', 0)}")]),
             ft.Row([ft.Text("Tokens de Cache:", weight=ft.FontWeight.BOLD), ft.Text(f"{metrics_data.get('cached_tokens', 0)}")]),
             ft.Row([ft.Text("Tokens de Saída:", weight=ft.FontWeight.BOLD), ft.Text(f"{metrics_data.get('output_tokens', 0)}")]),
@@ -615,13 +630,15 @@ class ChatViewContent(ft.Column):
         self.metrics_content.controls.extend(new_metric_rows)
         self.metrics_panel.visible = True
         self._save_state_to_session()
-        self.metrics_panel.update()
+        if self.metrics_panel.page:
+            self.metrics_panel.update()
 
     def _handle_message_action(self, e: ft.ControlEvent, message_id: float):
         """Handler central para ações do PopupMenuButton da mensagem."""
         action = e.control.data
-        all_messages_data = [c.data for c in self.chat_history_view.controls]
-        message_text = next((msg["text"] for msg in reversed(all_messages_data) if msg.get('if') == message_id), "")
+        # all_messages_data = [c.data for c in self.chat_history_view.controls]
+        # message_text = next((msg["text"] for msg in reversed(all_messages_data) if msg.get('if') == message_id), "")
+        message_text = next((c.data["text"] for c in self.chat_history_view.controls if c.data.get('id') == message_id), "")
 
         if action == "copy": self.page.set_clipboard(message_text)
         elif action == "edit": self._handle_edit_message(message_id)
@@ -631,7 +648,8 @@ class ChatViewContent(ft.Column):
 
     def _handle_delete_message(self, message_id: float):
         self.chat_history_view.controls = [c for c in self.chat_history_view.controls if c.data["id"] != message_id]
-        self._rebuild_chat_display()
+        self._update_message_actions()
+        self.chat_history_view.update()
         self._save_state_to_session()
 
     def _handle_edit_message(self, message_id: float):
@@ -655,34 +673,63 @@ class ChatViewContent(ft.Column):
         index = next((i for i, c in enumerate(self.chat_history_view.controls) if c.data["id"] == message_id), -1)
         if index != -1:
             self.chat_history_view.controls = self.chat_history_view.controls[:index + 1]
-            self._rebuild_chat_display()
+            self._update_message_actions() # Apenas atualiza as ações, não precisa reconstruir
             self._save_state_to_session()
-            self.chat_history_view.scroll_to(offset=-1, duration=300)
+            self.page.run_thread(lambda: self._scroll_to_last_message())
             
     def _handle_rerun(self, message_id: float):
-        all_messages_data = [c.data for c in self.chat_history_view.controls]
-        last_user_message = next((msg for msg in reversed(all_messages_data) if msg.get('author') == 'User'), None)
-        if last_user_message:
-            user_question = last_user_message['text']
-            self.chat_history_view.controls = [c for c in self.chat_history_view.controls if c.data.get("id") != message_id]
-            self._set_processing_state(True)
-            self._rebuild_chat_display()
-            threading.Thread(target=self._get_context_and_call_ai, args=(user_question,), daemon=True).start()
-        else:
-            logger.warning("Nenhuma mensagem de usuário encontrada para refazer a pergunta.")
+        rerun_index = next((i for i, c in enumerate(self.chat_history_view.controls) if c.data.get("id") == message_id), -1)
+        if rerun_index == -1:
+            logger.error(f"Não foi possível encontrar a mensagem com id {message_id} para regenerar.")
+            return        
+        
+        rerun_control = self.chat_history_view.controls[rerun_index]
+        author = rerun_control.data.get("author")
 
+        if author == "IA":
+            # Caso 1: Regenerando uma resposta da IA
+            if rerun_index == 0: return # Não pode regenerar a primeira mensagem se for da IA
+            user_question = self.chat_history_view.controls[rerun_index - 1].data["text"]
+            history_controls = self.chat_history_view.controls[:rerun_index - 1]
+            self.chat_history_view.controls.pop(rerun_index) # Remove a resposta antiga da IA
+
+        elif author == "User":
+            # Caso 2: Gerando resposta para a última mensagem do usuário (após "Retomar daqui")
+            user_question = rerun_control.data["text"]
+            history_controls = self.chat_history_view.controls[:rerun_index]
+        else:
+            return # Não faz nada se a mensagem não for do usuário ou da IA
+
+        self._set_processing_state(True, clear_input=False)
+
+        # Prepara o histórico para a API        
+        history_for_api = [
+            {"role": "assistant" if c.data["author"] == "IA" else "user", "content": c.data["text"]}
+            for c in history_controls if c.data.get("author") in ["User", "IA"]
+        ]
+
+        thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
+        self._add_message_to_view(thinking_message_data)
+
+        document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
+        if not document_context:
+            show_snackbar(self.page, "Contexto do documento não encontrado para regenerar a resposta.", color=theme.COLOR_ERROR)
+            return
+
+        threading.Thread(target=self._handle_ai_response, args=(document_context, history_for_api, user_question), daemon=True).start()
+    
     def _handle_clear_chat(self, e: ft.ControlEvent):
         def confirm_action():
             self.chat_history_view.controls.clear()
-            self.file_list_panel.visible = False
-            self.metrics_panel.visible = False
-            self.file_list_panel.update()
-            self.metrics_panel.update()
+            self.file_list_panel.visible = False # 
+            self.metrics_panel.visible = False   # update no _show_initial_greeting.add_message
+            
             # Limpa todas as chaves de sessão relacionadas ao chat
             for key in [KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS,
                         KEY_SESSION_CHAT_DOCUMENT_CONTEXT, KEY_SESSION_CHAT_RAW_PAGES_TEXT]:
                 if self.page.session.contains_key(key):
                     self.page.session.remove(key)
+            
             self._show_initial_greeting()
         
         show_confirmation_dialog(
@@ -718,11 +765,10 @@ def create_chat_view_content(page: ft.Page) -> ft.Control:
 '''
 FLUXOs principais da View:
 
-_handle_upload_click 	-> _handle_files_uploaded -> self.page.session.set(KEY_SESSION_CHAT_FILES, successful_files)
+_handle_upload_click 	-> _handle_files_uploaded   -> _extract_raw_context_from_files -> session.set(KEY_SESSION_CHAT_RAW_PAGES_TEXT,...) & session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT,...)
+                                                    -> self.page.session.set(KEY_SESSION_CHAT_FILES, files)
 
-
-_handle_optimize_click 	-> _preprocess_documents -> self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, aggregated_text)
-
+_handle_optimize_click 	-> _preprocess_documents(KEY_SESSION_CHAT_RAW_PAGES_TEXT) -> self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, aggregated_text)
 
 _handle_send_message 	-> THREAD: _get_context_and_call_ai -> Se texto ainda não processado: _get_raw_document_context -> _handle_ai_response -> _set_processing_state(False)
 						-> _set_processing_state(True)

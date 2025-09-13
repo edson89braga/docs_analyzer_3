@@ -217,7 +217,7 @@ class ChatLLMOrchestrator:
                 )
                 token_usage_info["total_cost_usd"] = cost_usd
                 
-                logger.info(f"Resposta do chat recebida. Tempo de resposta: {total_time}s; Métricas: {token_usage_info}")
+                logger.info(f"Resposta do chat recebida. Model: {model_name}; Tempo de resposta: {total_time}s; Métricas: {token_usage_info}")
                 yield {"type": "final_metrics", "data": token_usage_info}
             else:
                 logger.warning("Não foi possível obter métricas de uso da resposta do chat.")

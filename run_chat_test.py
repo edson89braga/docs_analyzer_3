@@ -2,6 +2,7 @@
 import flet as ft
 import sys, os
 
+
 # Adiciona o diretório raiz ao path para encontrar o pacote 'src' ...
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__))))
 
@@ -13,6 +14,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 try:
+    from src.logger.logger import LoggerSetup
     LoggerSetup.initialize(
         routine_name="DocsAnalyzer3",
         dev_mode = True, 

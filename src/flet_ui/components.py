@@ -66,8 +66,9 @@ def show_confirmation_dialog(
             with update_lock: page.update()
         else: page.update()
         page.overlay.remove(confirm_dialog) # Remove do overlay ao fechar
+        
         if hasattr(e.control, 'data') and e.control.data == "confirm" and on_confirm:
-            on_confirm() # Chama o callback de confirmação
+            threading.Timer(0.1, on_confirm).start() # Chama o callback de confirmação
 
     confirm_dialog = ft.AlertDialog(
         modal=True,
