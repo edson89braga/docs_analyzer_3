@@ -133,12 +133,12 @@ class ChatLLMOrchestrator:
                 if verbosity_level:
                     # parâmetro aninhado para controlar verbosity/text: { "verbosity": "low" | "medium" | "high" }
                     data_to_openai_api["text"] = {"verbosity": verbosity_level}
-
+                
             # Remove valores None (evita passar chaves com valor None)
             request_kwargs = {k: v for k, v in data_to_openai_api.items() if v is not None}
 
-            # Chama a API — se a versão do SDK/cliente não aceitar 'reasoning'/'text',
-            # fazemos fallback removendo essas chaves e chamando novamente.
+            logger.info(f"[DEBUG] Enviando request para OpenAI com kwargs: \n{request_kwargs}")
+
             start_time = time.perf_counter()
             try:
                 

@@ -587,28 +587,21 @@ class ManagedFilePicker:
     def __init__(
         self,
         page: ft.Page,
-        file_picker_instance: ft.FilePicker,
-        on_individual_file_complete: FileUploadCompleteCallback, # Renomeado para clareza
         upload_dir: str,
-        on_batch_complete: Optional[FileBatchUploadCompleteCallback] = None, # NOVO CALLBACK
         allowed_extensions: Optional[List[str]] = None,
-        pick_dialog_title: str = "Selecionar arquivo",
         on_upload_progress: Optional[FileUploadProgressCallback] = None,
         upload_url_expiry_seconds: int = 300,
     ):
         self.page = page
-        self.file_picker = file_picker_instance
-        self.on_individual_file_complete  = on_individual_file_complete 
-        self.on_batch_complete = on_batch_complete
+        # Obtém a referência ao picker global diretamente do page.data
+        self.file_picker: ft.FilePicker = self.page.data.get("global_file_picker")
+        if not self.file_picker:
+            raise RuntimeError("ManagedFilePicker: Instância global de ft.FilePicker não encontrada em page.data.")
+        
         self.upload_dir = os.path.abspath(upload_dir)
         self.allowed_extensions = [ext.lower().lstrip('.') for ext in allowed_extensions] if allowed_extensions else None
-        self.pick_dialog_title = pick_dialog_title
         self.on_upload_progress = on_upload_progress
         self.upload_url_expiry_seconds = upload_url_expiry_seconds
-
-        # Atribui os métodos internos aos eventos do FilePicker
-        self.file_picker.on_result = self._handle_picker_result
-        self.file_picker.on_upload = self._handle_picker_upload
 
         self._is_uploading_map: Dict[str, bool] = {}
         self.files_to_process_queue: List[ft.FilePickerFile] = []
@@ -626,15 +619,24 @@ class ManagedFilePicker:
     def pick_files(
         self,
         allow_multiple: bool = False,
+        dialog_title_override: str = "Selecionar arquivo(s)",
         allowed_extensions_override: Optional[List[str]] = None,
-        dialog_title_override: Optional[str] = None
+        on_individual_file_complete: Optional[FileUploadCompleteCallback] = None,
+        on_batch_complete: Optional[FileBatchUploadCompleteCallback] = None
     ):
         """Abre o diálogo do FilePicker para o usuário selecionar arquivos."""
+
+        # Atribui os callbacks específicos para esta operação
+        self.on_individual_file_complete = on_individual_file_complete
+        self.on_batch_complete = on_batch_complete
+        self.file_picker.on_result = self._handle_picker_result
+        self.file_picker.on_upload = self._handle_picker_upload
+
         current_allowed_extensions_normalized = [
             ext.lower().lstrip('.') for ext in allowed_extensions_override
         ] if allowed_extensions_override else self.allowed_extensions
         
-        current_dialog_title = dialog_title_override or self.pick_dialog_title
+        current_dialog_title = dialog_title_override
 
         logger.debug(f"Abrindo FilePicker: title='{current_dialog_title}', multiple={allow_multiple}, ext={current_allowed_extensions_normalized}")
         self.file_picker.pick_files(
@@ -647,11 +649,15 @@ class ManagedFilePicker:
         """Callback para o evento on_result do FilePicker."""
         if not e.files:
             logger.warning("Seleção de arquivo cancelada pelo usuário.")
+            
             # Chama o callback individual para registrar o cancelamento
-            self.on_individual_file_complete(False, "Seleção cancelada", None)
+            if self.on_individual_file_complete:
+                self.on_individual_file_complete(False, "Seleção cancelada", None)
+            
             # Se houver um callback de lote, informa que o lote (vazio) está completo
             if self.on_batch_complete:
                 self.on_batch_complete([])
+            
             # Limpa a fila e reseta o estado do lote para o caso de ter algo pendente
             self.files_to_process_queue.clear()
             self._current_batch_results = []
@@ -701,7 +707,8 @@ class ManagedFilePicker:
             })
         
         # Chama o callback individual
-        self.on_individual_file_complete(success, message, file_name)
+        if self.on_individual_file_complete:
+            self.on_individual_file_complete(success, message, file_name)
 
         # Verifica se o lote terminou
         if len(self._current_batch_results) >= self._files_expected_in_current_batch:
@@ -1919,7 +1926,7 @@ class ManagedAlertDialog(ft.AlertDialog):
             logger.debug(f"ManagedAlertDialog: Fechamento visual iniciado. Agendando finalização.")
             threading.Timer(self.close_delay_seconds, self._finish_close_action).start()
         else:
-             logger.debug("ManagedAlertDialog: _trigger_close_with_timer chamado, mas diálogo já estava fechado.")
+            logger.debug("ManagedAlertDialog: _trigger_close_with_timer chamado, mas diálogo já estava fechado.")
 
     def _finish_close_action(self):
         """
@@ -1933,11 +1940,12 @@ class ManagedAlertDialog(ft.AlertDialog):
 
         if self.on_dialog_fully_closed:
             try:
-                logger.debug(f"ManagedAlertDialog: Chamando on_dialog_fully_closed com dados: {self._result_data_for_callback}")
+                logger.info(f"[DEBUG] ManagedAlertDialog: Chamando on_dialog_fully_closed com dados: {self._result_data_for_callback}")
                 self.on_dialog_fully_closed(self._result_data_for_callback)
             except Exception as e:
                 logger.error(f"ManagedAlertDialog: Erro ao executar on_dialog_fully_closed: {e}", exc_info=True)
                 show_snackbar(self.page_ref, "Ocorreu um erro após fechar o diálogo.", color=theme.COLOR_ERROR)
+                
         elif self in self.page_ref.overlay: # Se foi removido e não há callback, um update pode ser necessário
             update_lock = self.page_ref.data.get("global_update_lock")
             if update_lock:
@@ -2249,7 +2257,6 @@ class FileListManager:
         self.update_selected_files_display(current_files)
         self.clear_cached_analysis_results()
         self.page.update(self.current_batch_name_text, self.selected_files_list_view) # Atualiza a UI aqui
-
 
 class CompactKeyValueTable(ft.Column):
     """

@@ -1117,9 +1117,18 @@ class PDFDocumentAnalyzer:
                 logger.warning(f"Chave de página relevante '{page_idx}' não encontrada...")
                 continue
 
-            page_text = processed_page_data[page_idx]['text_stored']
-            
-            page_tokens = count_tokens(page_text, model_name=model_name_for_tokens)
+            page_data = processed_page_data[page_idx]
+            original_page_text = page_data['text_stored']
+
+            # Extrai metadados para o cabeçalho
+            file_name = os.path.basename(page_data.get('original_pdf_path', ''))
+            page_num_display = page_data.get('page_index_in_file', -1) + 1
+
+            # Constrói o cabeçalho e o adiciona ao texto
+            header = f"[Documento: {file_name} | Página: {page_num_display}]\n\n"
+            page_text_with_header = header + original_page_text
+
+            page_tokens = count_tokens(page_text_with_header, model_name=model_name_for_tokens)
 
             # Adicionar tokens desta página ao total antes do truncamento
             # Isso acontece independentemente de a página ser totalmente incluída, parcialmente ou não.
@@ -1130,14 +1139,14 @@ class PDFDocumentAnalyzer:
                 continue
 
             if current_total_tokens_final + page_tokens <= token_limit:
-                texts_for_concatenation[page_idx] = page_text
+                texts_for_concatenation[page_idx] = page_text_with_header
                 current_total_tokens_final += page_tokens
             else:
                 remaining_token_budget = token_limit - current_total_tokens_final
                 if remaining_token_budget > 0:
                     
                     # Usar a função reduce_text_to_limit 
-                    partial_text = reduce_text_to_limit(page_text, remaining_token_budget, model_name=model_name_for_tokens)
+                    partial_text = reduce_text_to_limit(page_text_with_header, remaining_token_budget, model_name=model_name_for_tokens)
                     texts_for_concatenation[page_idx] = partial_text
                     
                     # Recalcular tokens do texto parcial para precisão

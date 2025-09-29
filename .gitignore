@@ -52,6 +52,7 @@ Thumbs.db
 
 # Arquivos de ambiente
 .env
+.env/
 .env.local
 .env.development
 .env.test
@@ -64,29 +65,44 @@ logs/
 
 # Arquivos de log
 *.log
-*.txt
 
-# Outros:
-*.pdf
-*.xlsx
-*.bat
-*.db
-*.tmp
+# Pastas e Arquivos específicos:
 
-docs/
-*.docx
+/assets/models
+/assets/temp_docx_exports
+/assets/temp_admin_exports
+/assets_demo/*
+
+/tests_in_dev
+/notebooks
 
 credentials_fb.json
+api_key.txt
 
-poppler-22.04.0/
-modelos_ocr/
+/admin_py/admin_python_files_consolidated.txt
+admin_python_files_consolidated.txt
+python_files_consolidated.txt
+run_pyinstaller.txt
+pyproject.txt
 
-admin_data/
+TODO.md
+/docs/Prompts_Assistant.md
+/docs/base_prompts_descontinuados.txt
+/docs/*docx
+/docs/PrintScreens Telas.pdf
+/docs/PrintScreens Telas/prints_to_video
 
-Tarefas a fazer (TODO).md
-Notes.md
 extract_pyfiles.py
 extract_pyfiles2.py
 teste_int.py
 teste_int.ipynb
 
+# Outros:
+*.xlsx
+*.bat
+*.db
+*.tmp
+
+poppler-22.04.0/
+modelos_ocr/
+admin_data/

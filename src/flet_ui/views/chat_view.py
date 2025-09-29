@@ -3,6 +3,7 @@ from math import e
 import flet as ft
 import time, threading, os
 from typing import List, Dict, Any, Optional
+from time import perf_counter
 
 from src.flet_ui import theme
 from src.flet_ui.components import (
@@ -12,9 +13,6 @@ from src.flet_ui.components import (
     hide_loading_overlay,
     show_snackbar
 )
-# Importa o novo componente de drawer refatorado
-from src.flet_ui.settings_drawer import SettingsDrawerManager
-
 # Adiciona import do novo orquestrador e settings
 from src.core.chat_llm_orchestrator import ChatLLMOrchestrator
 from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS, 
@@ -22,34 +20,15 @@ from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS,
                           DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE,
                           KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_DOCUMENT_CONTEXT,
                           KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS,
-                          KEY_SESSION_CHAT_RAW_PAGES_TEXT)
+                          KEY_SESSION_CHAT_RAW_PAGES_TEXT, 
+                          KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY, KEY_SESSION_CHAT_PROMPT_STRICT,
+                          KEY_SESSION_CHAT_PROMPT_FLEXIBLE, KEY_SESSION_CHAT_PROMPT_CUSTOM)
+
+from src.utils import get_user_cache
 
 import logging
 logger = logging.getLogger(__name__)
 
-system_prompt_estrito = '''
-Você é um assistente especializado em análise de documentos para a Polícia Federal.  
-Sua principal função é responder perguntas baseando-se estrita e exclusivamente no texto do(s) documento(s) fornecido(s).  
-
-Regras:  
-- Seja preciso, objetivo e neutro.  
-- Se a resposta não estiver claramente contida no(s) documento(s), informe:  
-  "A informação não foi encontrada no(s) documento(s) fornecido(s)."  
-- Não invente, não deduza, não utilize conhecimento externo ao(s) documento(s).  
-- Não use exemplos ou analogias que não estejam presentes nos documentos.  
-'''
-
-system_prompt_flexivel = '''
-Você é um assistente especializado em análise de documentos para a Polícia Federal.  
-Sua principal função é responder perguntas dando prioridade ao(s) documento(s) fornecido(s), mas você também pode utilizar seu conhecimento geral para complementar informações.  
-
-Regras:  
-- Sempre indique claramente quando a resposta vem do documento (ex.: "No documento consta que...")  
-- Se utilizar conhecimento externo, diferencie com clareza (ex.: "Além do documento, em termos gerais...").  
-- Seja preciso, objetivo e mantenha tom neutro.  
-- Caso não haja referência direta no documento, explique com transparência que a resposta foi baseada em conhecimento geral.  
-'''
-    
 class ChatViewContent(ft.Column):
     def __init__(self, page: ft.Page):
         super().__init__(expand=True, spacing=10)
@@ -62,7 +41,7 @@ class ChatViewContent(ft.Column):
         self.editing_message_id: Optional[float] = None
         self._is_drawer_open = False
 
-        # Controles da UI
+        # Controles da UI 
         self.upload_button = ft.ElevatedButton("Carregar Arquivos", icon=ft.Icons.UPLOAD_FILE, on_click=self._handle_upload_click)
         self.optimize_button = ft.ElevatedButton("Otimizar Páginas", icon=ft.Icons.FILTER_LIST, on_click=self._handle_optimize_click, disabled=True, 
                                                  tooltip="Filtra páginas irrelevantes para economizar tokens e melhorar o foco da IA.")
@@ -70,6 +49,7 @@ class ChatViewContent(ft.Column):
                                                     disabled=True, tooltip="Identifica e oculta dados e entidades antes de enviar à IA.")
         self.clear_chat_button = ft.IconButton(icon=ft.Icons.DELETE_SWEEP_OUTLINED, tooltip="Limpar Conversa", on_click=self._handle_clear_chat)
         self.settings_button = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, tooltip="Configurações", on_click=self._handle_toggle_settings_drawer)
+        
         
         self.file_list_view = ft.ListView(expand=False, spacing=3)
         self.file_list_panel = self._create_panel("Arquivos Carregados", self.file_list_view, visible=False)
@@ -90,7 +70,8 @@ class ChatViewContent(ft.Column):
         self.managed_file_picker = self._initialize_file_picker()
         
         # Drawer de Configurações (agora um container lateral)
-        self.settings_drawer_component = SettingsDrawerManager(self.page) # Mantém a lógica do drawer
+        from src.flet_ui.settings_drawer import ChatSettingsDrawer
+        self.settings_drawer_component = ChatSettingsDrawer(self.page) # Usa o drawer específico do Chat
         self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0, animate=ft.Animation(300, ft.AnimationCurve.EASE_OUT_QUART))
         
         self._build_layout()
@@ -106,11 +87,8 @@ class ChatViewContent(ft.Column):
 
         return ManagedFilePicker(
             page=self.page,
-            file_picker_instance=global_picker,
-            on_individual_file_complete=lambda s, p, f: None,
-            on_batch_complete=self._handle_files_uploaded,
             upload_dir=UPLOAD_TEMP_DIR,
-            allowed_extensions=["pdf"] # , "txt", "docx", "csv", "xlsx"]
+            allowed_extensions=["pdf"] # "txt", "docx", "csv", "xlsx"
         )
 
     def _update_file_list_display(self, files: List[Dict[str, Any]]):
@@ -267,6 +245,7 @@ class ChatViewContent(ft.Column):
             self.chat_history_view.controls.append(self._create_message_bubble(data))
         
         self._update_message_actions()
+
         if self.chat_history_view.page:
             self.chat_history_view.update()
 
@@ -379,7 +358,6 @@ class ChatViewContent(ft.Column):
                     ft.PopupMenuItem(text="Retomar daqui", icon=ft.Icons.RESTART_ALT, data="resume", on_click=lambda e, mid=bubble.data["id"]: self._handle_message_action(e, mid))
                 )
 
-
     # --- Handlers de Ações ---
 
     def _handle_upload_click(self, e: ft.ControlEvent):
@@ -388,7 +366,10 @@ class ChatViewContent(ft.Column):
             self.page.session.remove(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
         
         show_loading_overlay(self.page, "Abrindo seletor de arquivos...")
-        self.managed_file_picker.pick_files(allow_multiple=True)
+        
+        self.managed_file_picker.pick_files(allow_multiple=True,
+                                            # on_individual_file_complete=lambda s, p, f: None,
+                                            on_batch_complete=self._handle_files_uploaded)
 
     def _handle_files_uploaded(self, batch_results: List[Dict[str, Any]]):
         """Callback do ManagedFilePicker após o término do upload."""
@@ -449,7 +430,7 @@ class ChatViewContent(ft.Column):
             )
             
             # Usamos um limite de tokens alto para manter o contexto completo
-            token_limit = 180_000 # TODO: vincular parâmetro ao drawer
+            token_limit = 180_000 # TODO: vincular parâmetro ao drawer "llm_token_limit_tf"
             _, aggregated_text, _, _ = analyzer.group_texts_by_relevance_and_token_limit(
                 processed_data, relevant_indices, token_limit
             )
@@ -581,12 +562,13 @@ class ChatViewContent(ft.Column):
                 api_key=api_key,
                 model_name=model_name,
                 document_context=document_context,
-                instructions=system_prompt_flexivel,
+                instructions=self._get_active_system_prompt(),
                 history=history_for_api,
                 user_question=user_question,
                 loaded_llm_providers=self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or [],
-                temperature=settings.get('llm_temperature', DEFAULT_TEMPERATURE) 
-                # TODO:  incluir parâmetros de reasoning e verbosity
+                temperature=settings.get('llm_temperature', DEFAULT_TEMPERATURE),
+                reasoning_mode=settings.get('reasoning_effort'),
+                verbosity_level=settings.get('verbosity_level')
             )
 
             for response_part in response_generator:
@@ -603,7 +585,6 @@ class ChatViewContent(ft.Column):
             self.page.run_thread(lambda: self._set_processing_state(False))
             self.page.run_thread(lambda: self._scroll_to_last_message())
 
-
     def _set_processing_state(self, is_processing: bool, clear_input: bool = False):
         if clear_input:
             self.user_input_field.value = ""
@@ -615,6 +596,40 @@ class ChatViewContent(ft.Column):
         self.send_button.update()
         if not is_processing:
             self.user_input_field.focus()
+
+    def _get_active_system_prompt(self) -> str:
+        """
+        Retorna o texto do prompt de sistema ativo lendo diretamente da sessão.
+        A responsabilidade de carregar os prompts (do Firestore ou fallback)
+        é do ChatSettingsDrawer.
+        """
+        from src.flet_ui.settings_drawer import DEFAULT_PROMPTS
+        DEFAULT_KEY = "flexivel"
+
+        active_key = self.page.session.get(KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY) or DEFAULT_KEY
+
+        prompt_key_map = {
+            "estrito": KEY_SESSION_CHAT_PROMPT_STRICT,
+            "flexivel": KEY_SESSION_CHAT_PROMPT_FLEXIBLE,
+            "custom": KEY_SESSION_CHAT_PROMPT_CUSTOM,
+        }
+        
+        session_key = prompt_key_map.get(active_key)
+        if session_key:
+            instructions_in_session = self.page.session.get(session_key)
+            instructions_hardcoded = DEFAULT_PROMPTS.get(active_key, "")
+            
+            if instructions_in_session:
+                logger.info(f"Instruction_Prompt obtido da sessão: {instructions_in_session[:60]}...")
+            elif instructions_hardcoded:
+                logger.warning(f"Instruction_Prompt não encontrado na sessão. Utilizando Default_Prompt hardcoded: {instructions_hardcoded[:60]}...")
+            
+            return instructions_in_session or instructions_hardcoded
+            # TODO: if active_key=="custom" and not session.get -> buscar do json local ?
+        
+        # Fallback final se a chave for desconhecida
+        logger.warning(f"Instruction_Prompt sem chave mapeada! Utilizando fallback hardcoded: {DEFAULT_PROMPTS[DEFAULT_KEY][:60]}...")
+        return DEFAULT_PROMPTS[DEFAULT_KEY]
 
     def _update_metrics_display(self, metrics_data: dict, append: bool = True):
         """Atualiza o painel de métricas com os dados da última resposta."""
@@ -744,7 +759,7 @@ class ChatViewContent(ft.Column):
         
         if self._is_drawer_open:
             self.settings_drawer_container.border = ft.border.only(left=ft.border.BorderSide(2, theme.PRIMARY))
-            self.settings_button.bgcolor = ft.Colors.with_opacity(0.1, theme.PRIMARY)
+            self.settings_button.bgcolor = bgcolor=ft.Colors.with_opacity(0.40, theme.COLOR_ERROR)
         else:
             self.settings_drawer_container.border = None
             self.settings_button.bgcolor = None
@@ -760,10 +775,23 @@ class ChatViewContent(ft.Column):
 
 def create_chat_view_content(page: ft.Page) -> ft.Control:
     """Função de fábrica para criar a view de Chat com Documentos."""
-    return ChatViewContent(page)
+    logger.info("View Chat_Docs: Iniciando criação (nova estrutura).")
+    
+    # A verificação de user_cache com prompts_instructions é feita no building com DrawerSettings
+    
+    start_time_p = perf_counter()
+    retorno = ChatViewContent(page)
+    execution_time_p = perf_counter() - start_time_p
+    logger.info(f"[DEBUG] Create_analyze_pdf_content em {execution_time_p:.4f}s")
+    
+    return retorno
+
 
 '''
-FLUXOs principais da View:
+## Fluxos:
+
+1) create_chat_view_content -> ChatViewContent -> _build_layout -> _restore_state_from_session
+
 
 _handle_upload_click 	-> _handle_files_uploaded   -> _extract_raw_context_from_files -> session.set(KEY_SESSION_CHAT_RAW_PAGES_TEXT,...) & session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT,...)
                                                     -> self.page.session.set(KEY_SESSION_CHAT_FILES, files)

@@ -19,7 +19,7 @@ from src.settings import (K_PROXY_ENABLED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY
 _SERVER_SIDE_CACHE = {}
 
 def get_user_cache(page) -> dict:
-    """Retorna o cache específico para a sessão do usuário atual, criando-o se não existir."""
+    """Retorna o cache específico (single) para a sessão do usuário atual, criando-o se não existir."""
     session_id = page.session_id
     if session_id not in _SERVER_SIDE_CACHE:
         _SERVER_SIDE_CACHE[session_id] = {}

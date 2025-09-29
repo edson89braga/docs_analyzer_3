@@ -128,11 +128,13 @@ FALLBACK_ANALYSIS_SETTINGS = {
     "tfidf_analyzer": "sklearn",
     "llm_provider": "openai",
     "llm_model": "gpt-5-nano",
-    "llm_input_token_limit": 180000,
+    "llm_input_token_limit": 180_000,
     "llm_output_format": "Padrão",
     "llm_max_output_length": "Padrão",
     "llm_temperature": 0.2,
     "prompt_structure": "prompt_unico",
+    "reasoning_effort": "medium",
+    "verbosity_level": "medium"
 }
 
 
@@ -185,6 +187,13 @@ KEY_SESSION_CHAT_RAW_PAGES_TEXT = "chat_view_raw_pages_text"
 KEY_SESSION_CHAT_DOCUMENT_CONTEXT = "chat_view_document_context"
 KEY_SESSION_CHAT_MESSAGES = "chat_view_messages"
 KEY_SESSION_CHAT_METRICS = "chat_view_metrics"
+
+KEY_SESSION_CHAT_PROMPT_STRICT = "chat_prompt_strict"
+KEY_SESSION_CHAT_PROMPT_FLEXIBLE = "chat_prompt_flexible"
+KEY_SESSION_CHAT_PROMPT_CUSTOM = "chat_prompt_custom"
+KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY = "chat_prompt_active_key"
+
+CHAT_PROMPTS_DEFAULTS_DOC_ID = "chat_prompts_defaults"
 
 # -----------------------------------------------------------------------------------------------------------------
 

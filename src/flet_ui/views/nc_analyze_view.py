@@ -21,7 +21,6 @@ from src.flet_ui.components import (
     ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable,
     CardWithHeader, show_confirmation_dialog, ReadOnlySelectableTextField,
 )
-from src.flet_ui.settings_drawer import SettingsDrawerManager
 
 from src.flet_ui import theme
 
@@ -35,8 +34,6 @@ from src.settings import (KEY_SESSION_CURRENT_BATCH_NAME, KEY_SESSION_PDF_FILES_
                           KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, KEY_SESSION_LLM_REANALYSIS, KEY_SESSION_PDF_AGGREGATED_TEXT_INFO,
                           KEY_SESSION_PDF_LLM_RESPONSE, KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL, KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK,
                           KEY_SESSION_PROMPTS_FINAL, KEY_SESSION_PROMPTS_DICT, KEY_SESSION_LIST_TO_PROMPTS)
-
-from src.services.firebase_client import FirebaseClientFirestore, _from_firestore_value
 
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
                         get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l)
@@ -54,11 +51,12 @@ from src.core.doc_generator import DocxExporter
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
 municipios_list = get_municipios_por_uf_cached()
 
+from src.services.firebase_client import FirebaseClientFirestore, _from_firestore_value
 firestore_client = FirebaseClientFirestore()
 
 logger.info(f"[DEBUG] Carregamento pesado dentro de NC_ANALYZE_VIEW em {perf_counter()-start_time:.4f}s")
 
-from src.utils import _SERVER_SIDE_CACHE, get_user_cache, clear_user_cache
+from src.utils import get_user_cache, clear_user_cache
 
 # Constantes para nomes de controles (facilita acesso) CTL = Control
 CTL_UPLOAD_BTN = "upload_button"
@@ -96,70 +94,8 @@ class FeedbackDialogAction(Enum):
     SKIP_AND_CONTINUE = "skip_and_continue"
     CANCELLED_OR_ERROR = "cancelled_or_error" 
 
-def load_prompts_from_firestore(page: ft.Page):
-    """
-    Carrega os componentes base de prompts (ALL_lists, ALL_prompts) do Firestore,
-    constrói os pipelines de prompts finais e os armazena no cache do servidor.
-    """
-    logger.debug("Carregando componentes base de prompt...")
-    user_token = page.session.get("auth_id_token")
-    user_id = page.session.get("auth_user_id")
-    user_cache = get_user_cache(page)
+# ---
 
-    prompts_path = os.path.join(ASSETS_DIR, 'dict_prompts.json')
-
-    loaded_components = None
-
-    if user_token:
-        prompts_doc_path = f"{PROMPTS_COLLECTION}/{PROMPTS_DOCUMENT_ID}"
-        try:
-            response = firestore_client._make_firestore_request("GET", user_token, prompts_doc_path)
-            if response.status_code == 200:
-                prompts_data = response.json()
-                fields = prompts_data.get("fields", {})
-                if fields:
-                    loaded_components = {k: _from_firestore_value(v) for k, v in fields.items()}
-                    logger.debug("Componentes base de prompt carregados com sucesso do Firestore.")
-                    # Salva uma cópia local ao baixar com sucesso
-                    with open(prompts_path, 'w', encoding='utf-8') as f:
-                        json.dump(loaded_components, f, ensure_ascii=False, indent=4)
-                        logger.debug(f"Cópia local dos prompts salva em: {prompts_path}")
-        except Exception as e:
-            logger.error(f"Exceção ao carregar componentes de prompts do Firestore: {e}", exc_info=True)
-
-    # É esperado trabalhar somente com prompts baixados ou versão local em assets; 
-    # prompts hardocoded em prompts.py serão descontinuados
-    if not loaded_components: 
-        if os.path.exists(prompts_path):
-            with open(prompts_path, 'r', encoding='utf-8') as f:
-                loaded_components = json.load(f)
-                logger.debug("Fallback: Componentes de prompts carregados localmente.")
-    
-    if not loaded_components:
-        msg_erro = "Nenhum componente de prompt carregado localmente."
-        logger.critical(msg_erro)
-        raise Exception(msg_erro)
-
-    user_cache = get_user_cache(page)
-    # Agora, construa os prompts finais usando os componentes carregados (do Firestore ou fallback)
-    try:
-        # Passa os componentes carregados para a função de construção
-        final_prompts, prompts_dict = get_prompts_for_initial_analysis(
-            loaded_components["ALL_lists"],
-            loaded_components["ALL_prompts"]
-        )
-        # Armazena o resultado final no cache do servidor
-        user_cache[KEY_SESSION_PROMPTS_FINAL] = final_prompts
-        user_cache[KEY_SESSION_PROMPTS_DICT] = prompts_dict
-        user_cache[KEY_SESSION_LIST_TO_PROMPTS] = loaded_components["ALL_lists"]
-        logger.info("Pipelines de prompts finais construídos e armazenados no cache do servidor.")
-    except Exception as e:
-        logger.error(f"Falha ao construir pipelines de prompts finais: {e}", exc_info=True)
-        # Em caso de erro, armazena um dicionário vazio para evitar falhas posteriores
-        user_cache[KEY_SESSION_PROMPTS_FINAL] = {}
-        user_cache[KEY_SESSION_PROMPTS_DICT] = {}
-        user_cache[KEY_SESSION_LIST_TO_PROMPTS] = {}
-     
 class AnalyzePDFViewContent(ft.Column):
     """
     Conteúdo principal da view de Análise de Notícias-Crime e Outros Documentos.
@@ -180,17 +116,10 @@ class AnalyzePDFViewContent(ft.Column):
         super().__init__(expand=True, spacing=10)
         self.page = page
         self.gui_controls: Dict[str, ft.Control] = {}
-        self.file_list_manager: Optional[InternalFileListManager] = None
-        self.analysis_controller: Optional[InternalAnalysisController] = None
-        # self.gui_controls_drawer: Dict[str, ft.Control] = {}
         # self.settings_drawer_manager: Optional[SettingsDrawerManager] = None
-        
-        self.export_manager: Optional[InternalExportManager] = None
-        self.managed_file_picker: Optional[ManagedFilePicker] = None
-        self.global_file_picker_instance: Optional[ft.FilePicker] = None
+        # self.gui_controls_drawer: Dict[str, ft.Control] = {}
 
-        self.pdf_analyzer = PDFDocumentAnalyzer()
-        self.docx_exporter = DocxExporter()
+        self.user_cache = get_user_cache(self.page)
 
         # Estado interno da View
         self._is_drawer_open = False
@@ -201,16 +130,19 @@ class AnalyzePDFViewContent(ft.Column):
         self._is_prompt_view_active = False
         self._original_main_layout_container: Optional[ft.Row] = None
         self._prompt_display_layout: Optional[ft.Container] = None
-
-        self.feedback_workflow_manager: Optional[FeedbackWorkflowManager] = None
-        
-        self.user_cache = get_user_cache(self.page)
-
+    
         self._build_gui_structure()
+        
+        self.export_manager = InternalExportManager(self)
+        self.file_list_manager = InternalFileListManager(self.page, self.gui_controls, self)
+        self.analysis_controller = InternalAnalysisController(self.page, self.gui_controls, self)
         self.feedback_workflow_manager = FeedbackWorkflowManager(self.page, self)
-        self._initialize_pickers()
+
+        self._initialize_file_picker()  # Inicia o self.managed_file_picker
         self._setup_event_handlers()
-        self._restore_state_from_session()
+
+        self.settings_drawer_component.load_settings_into_controls() # Carrega configurações em page.session
+        self._update_gui_from_state() # Atualiza GUI a partir do estado interno
 
     def _remove_data_session(self, key: str):
         """
@@ -306,20 +238,10 @@ class AnalyzePDFViewContent(ft.Column):
 
         # Container 3: Resposta/Resultado da Análise
         self.llm_result_title = ft.Row([ft.Container(width=12),
-                                            ft.Text("Resultado da Análise LLM:",
-                                                style=ft.TextThemeStyle.TITLE_MEDIUM,
-                                                weight=ft.FontWeight.BOLD)], visible=False)
+                                        ft.Text("Resultado da Análise LLM:",
+                                            style=ft.TextThemeStyle.TITLE_MEDIUM,
+                                            weight=ft.FontWeight.BOLD)], visible=False)
         
-        def close_ai_warning_balloon(e: ft.ControlEvent):
-            """
-            Fecha o balão de aviso de IA.
-
-            Args:
-                e (ft.ControlEvent): Evento de clique do botão.
-            """
-            e.control.parent.parent.visible = False
-            e.control.parent.parent.update()
-
         self.gui_controls[CTL_LLM_AI_WARNING_BALLOON] = ft.Container(
             content=ft.Row(
                 [
@@ -332,7 +254,7 @@ class AnalyzePDFViewContent(ft.Column):
                     ),
                     ft.IconButton(
                         ft.Icons.CLOSE_ROUNDED,
-                        on_click=close_ai_warning_balloon,
+                        on_click=lambda e: (setattr(e.control.parent.parent, 'visible', False), e.control.parent.parent.update()),
                         icon_size=18,
                         tooltip="Fechar Aviso"
                     )
@@ -419,7 +341,8 @@ class AnalyzePDFViewContent(ft.Column):
         )
 
         # --- Drawer de Configurações (Placeholder) ---
-        self.settings_drawer_component = SettingsDrawerManager(self.page)
+        from src.flet_ui.settings_drawer import AnalyzeSettingsDrawer
+        self.settings_drawer_component = AnalyzeSettingsDrawer(self.page)
         self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0)
         # self.settings_drawer_manager não é mais necessário
 
@@ -436,12 +359,7 @@ class AnalyzePDFViewContent(ft.Column):
             ft.Divider(height=1),
             self._original_main_layout_container # Esta linha contém o conteúdo e o drawer
         ])
-
-        # Adaptação do FileListManager (será uma classe interna ou métodos diretos)
-        self.file_list_manager = InternalFileListManager(self.page, self.gui_controls, self)
-
-        # Adaptação do AnalysisController (será uma classe interna ou métodos diretos)
-        self.analysis_controller = InternalAnalysisController(self.page, self.gui_controls, self)
+    
     def _create_prompt_display_layout(self) -> ft.Container:
         """
         Cria e retorna o layout para exibir os prompts estruturados utilizados na análise LLM.
@@ -493,7 +411,7 @@ class AnalyzePDFViewContent(ft.Column):
         )
     
     # --- setup file_picker ---
-    def _initialize_pickers(self):
+    def _initialize_file_picker(self):
         """
         Inicializa os FilePickers necessários para upload e exportação.
 
@@ -503,102 +421,21 @@ class AnalyzePDFViewContent(ft.Column):
         """
         logger.debug("Inicializando FilePickers (Managed para upload, Global para exportação).")
         
-        # Primeiro, obtenha a referência ao picker global
-        self.global_file_picker_instance = self.page.data.get("global_file_picker")
-        if not self.global_file_picker_instance:
+        # Primeiro, obtém a referência ao picker global
+        if not self.page.data.get("global_file_picker"):
             logger.critical("FilePicker global NÃO encontrado em page.data! Upload e Exportação podem falhar.")
             show_snackbar(self.page, "Erro crítico: FilePicker não inicializado.", theme.COLOR_ERROR)
             return
         else:
-             logger.debug("Referência ao FilePicker GLOBAL para exportação e upload armazenada.")
-
-        # Configura o ManagedFilePicker para UPLOADS, passando a instância global
-        if self.global_file_picker_instance: # Só instancia se o picker global existir
-            # Callbacks para o ManagedFilePicker (upload)
-            def individual_file_upload_complete_cb(success: bool, path_or_msg: str, file_name: Optional[str]):
-                """
-                Callback executado quando o upload de um arquivo individual é concluído.
-
-                Args:
-                    success (bool): True se o upload foi bem-sucedido, False caso contrário.
-                    path_or_msg (str): O caminho temporário do arquivo no servidor (se sucesso) ou uma mensagem de erro.
-                    file_name (Optional[str]): O nome original do arquivo.
-                """
-                if success and file_name and path_or_msg:
-                    logger.debug(f"Upload individual de '{file_name}' OK. Path: {path_or_msg}")
-                    current_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
-                    if not isinstance(current_files, list):
-                        current_files = []
-                    if not any(f['name'] == file_name and f['path'] == path_or_msg for f in current_files):
-                        new_file_entry = {"name": file_name,
-                                          "path": path_or_msg,
-                                          "original_index": len(current_files)}
-                        current_files.append(new_file_entry)
-                        self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
-                elif path_or_msg == "Seleção cancelada":
-                    logger.info("Seleção de arquivos cancelada.")
-                else:
-                    logger.error(f"Falha no upload de '{file_name}': {path_or_msg}")
-
-            def batch_upload_complete_cb(batch_results: List[Dict[str, Any]]):
-                """
-                Callback executado quando o upload de um lote de arquivos é concluído.
-
-                Atualiza a UI com o status do upload e o estado da view.
-
-                Args:
-                    batch_results (List[Dict[str, Any]]): Lista de dicionários com os resultados de cada arquivo no lote.
-                """
-                logger.info(f"Upload_Batch Completo (ManagedFilePicker): {len(batch_results)} resultados.")
-                hide_loading_overlay(self.page)
-                
-                successful_uploads = [r for r in batch_results if r['success']]
-                failed_count = len(batch_results) - len(successful_uploads)
-                final_message, final_color = "", theme.COLOR_INFO
-
-                if successful_uploads and not failed_count:
-                    final_message = f"{len(successful_uploads)} arquivo(s) carregado(s)!"
-                    final_color = theme.COLOR_SUCCESS
-                elif successful_uploads and failed_count:
-                    final_message = f"{len(successful_uploads)} carregado(s), {failed_count} falha(s)."
-                    final_color = theme.COLOR_WARNING
-                elif not successful_uploads and failed_count:
-                    final_message = f"Todos os {failed_count} uploads falharam."
-                    final_color = theme.COLOR_ERROR
-                elif not batch_results:
-                    logger.debug("Nenhum arquivo selecionado.")
-                    final_message = "Nenhum arquivo selecionado."
-                    final_color = theme.COLOR_WARNING
-                
-                if final_message:
-                    show_snackbar(self.page, final_message, color=final_color)
-                
-                # Se novos arquivos foram adicionados, invalida os resultados anteriores.
-                if successful_uploads:
-                    self._reset_processing_and_llm_results()
-                else:
-                    # Se todos os uploads falharam, apenas atualiza a UI sem resetar os dados
-                    self._update_gui_from_state()
-                    
-                update_lock = self.page.data.get("global_update_lock")
-                with update_lock:
-                    self.page.update()
-
-            self.managed_file_picker = ManagedFilePicker(
-                page=self.page,
-                file_picker_instance=self.global_file_picker_instance, # Passa a instância global
-                on_individual_file_complete=individual_file_upload_complete_cb,
-                upload_dir=UPLOAD_TEMP_DIR,
-                on_batch_complete=batch_upload_complete_cb,
-                allowed_extensions=["pdf"]
-            )
-            logger.debug("ManagedFilePicker para UPLOAD instanciado usando o picker global.")
-        else:
-            logger.warning("ManagedFilePicker para UPLOAD não pôde ser instanciado pois o picker global não foi encontrado.")
+            logger.debug("Referência ao FilePicker GLOBAL para exportação e upload armazenada.")
+    
+        self.managed_file_picker = ManagedFilePicker(
+            page=self.page,
+            upload_dir =UPLOAD_TEMP_DIR,
+            allowed_extensions =["pdf"]
+        )
+        logger.debug("ManagedFilePicker para UPLOAD instanciado usando o picker global.")
         
-        # Inicializa o InternalExportManager passando as dependências necessárias
-        self.export_manager = InternalExportManager(self, self.docx_exporter, self.global_file_picker_instance)
-
     def _setup_event_handlers(self):
         """
         Configura os handlers de eventos para os controles da UI.
@@ -626,10 +463,83 @@ class AnalyzePDFViewContent(ft.Column):
         """
         logger.info("Botão 'Carregar Arquivo(s)' clicado.")
 
+        # Callbacks para o ManagedFilePicker (upload)
+        def individual_file_upload_complete_cb(success: bool, path_or_msg: str, file_name: Optional[str]):
+            """
+            Callback executado quando o upload de um arquivo individual é concluído.
+
+            Args:
+                success (bool): True se o upload foi bem-sucedido, False caso contrário.
+                path_or_msg (str): O caminho temporário do arquivo no servidor (se sucesso) ou uma mensagem de erro.
+                file_name (Optional[str]): O nome original do arquivo.
+            """
+            if success and file_name and path_or_msg:
+                logger.debug(f"Upload individual de '{file_name}' OK. Path: {path_or_msg}")
+                current_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
+                if not isinstance(current_files, list):
+                    current_files = []
+                if not any(f['name'] == file_name and f['path'] == path_or_msg for f in current_files):
+                    new_file_entry = {"name": file_name,
+                                        "path": path_or_msg,
+                                        "original_index": len(current_files)}
+                    current_files.append(new_file_entry)
+                    self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
+            elif path_or_msg == "Seleção cancelada":
+                logger.info("Seleção de arquivos cancelada.")
+            else:
+                logger.error(f"Falha no upload de '{file_name}': {path_or_msg}")
+
+        def batch_upload_complete_cb(batch_results: List[Dict[str, Any]]):
+            """
+            Callback executado quando o upload de um lote de arquivos é concluído.
+
+            Atualiza a UI com o status do upload e o estado da view.
+
+            Args:
+                batch_results (List[Dict[str, Any]]): Lista de dicionários com os resultados de cada arquivo no lote.
+            """
+            logger.info(f"Upload_Batch Completo (ManagedFilePicker): {len(batch_results)} resultados.")
+            hide_loading_overlay(self.page)
+            
+            successful_uploads = [r for r in batch_results if r['success']]
+            failed_count = len(batch_results) - len(successful_uploads)
+            final_message, final_color = "", theme.COLOR_INFO
+
+            if successful_uploads and not failed_count:
+                final_message = f"{len(successful_uploads)} arquivo(s) carregado(s)!"
+                final_color = theme.COLOR_SUCCESS
+            elif successful_uploads and failed_count:
+                final_message = f"{len(successful_uploads)} carregado(s), {failed_count} falha(s)."
+                final_color = theme.COLOR_WARNING
+            elif not successful_uploads and failed_count:
+                final_message = f"Todos os {failed_count} uploads falharam."
+                final_color = theme.COLOR_ERROR
+            elif not batch_results:
+                logger.debug("Nenhum arquivo selecionado.")
+                final_message = "Nenhum arquivo selecionado."
+                final_color = theme.COLOR_WARNING
+            
+            if final_message:
+                show_snackbar(self.page, final_message, color=final_color)
+            
+            # Se novos arquivos foram adicionados, invalida os resultados anteriores.
+            if successful_uploads:
+                self._reset_processing_and_llm_results()
+            else:
+                # Se todos os uploads falharam, apenas atualiza a UI sem resetar os dados
+                self._update_gui_from_state()
+                
+            update_lock = self.page.data.get("global_update_lock")
+            with update_lock:
+                self.page.update()
+        
         def primary_upload_action():
             if self.managed_file_picker:
                 threading.Timer(0.1, show_loading_overlay, args=[self.page, "A carregar arquivo(s)..."]).start()
-                self.managed_file_picker.pick_files(allow_multiple=True, dialog_title_override="Selecione PDF(s) para análise")
+                self.managed_file_picker.pick_files(allow_multiple=True, 
+                                                    dialog_title_override="Selecione PDF(s) para análise",
+                                                    on_individual_file_complete=individual_file_upload_complete_cb,
+                                                    on_batch_complete=batch_upload_complete_cb)
             else:
                 show_snackbar(self.page, "Erro: Gerenciador de upload não está pronto.", theme.COLOR_ERROR)
 
@@ -817,7 +727,7 @@ class AnalyzePDFViewContent(ft.Column):
         simple_export_item.on_click = self.export_manager.handle_export_selected # Atribui o mesmo handler
         export_button.items.append(simple_export_item)
 
-        available_templates = self.docx_exporter.get_available_templates()
+        available_templates = self.export_manager.docx_exporter.get_available_templates()
         if available_templates:
             export_button.items.append(ft.PopupMenuItem()) # Funciona como divisor
             export_button.items.append(
@@ -1315,22 +1225,6 @@ class AnalyzePDFViewContent(ft.Column):
         logger.info("Atualização da GUI a partir do estado concluída.")
         
     # --- Gerenciamento de Estado e Limpeza ---
-    def _restore_state_from_session(self):
-        """
-        Restaura o estado da view a partir dos dados salvos na sessão.
-
-        Isso inclui configurações de análise e o estado atual dos dados processados e analisados,
-        garantindo que a UI reflita a última sessão do usuário.
-        """
-        logger.info("Restaurando estado da view Análise PDF da sessão.")
-        
-        # A instância do SettingsDrawerManager já carrega as configurações da sessão em seu __init__
-        if self.settings_drawer_component:
-            self.settings_drawer_component._load_settings_into_controls()
-
-        # Chama o método central que lê a sessão e atualiza All componentes da UI
-        self._update_gui_from_state()
-
     def _clear_all_data_and_gui(self):
         """
         Limpa todos os dados da sessão relacionados a esta view e reseta a UI para o estado inicial.
@@ -1364,1010 +1258,13 @@ class AnalyzePDFViewContent(ft.Column):
         
         # Limpa diretório de uploads temporários, se o ManagedFilePicker estiver configurado
         if self.managed_file_picker:
-             self.managed_file_picker.clear_upload_directory()
+            self.managed_file_picker.clear_upload_directory()
 
         # Chama o método central para atualizar toda a UI para o estado limpo
         self._update_gui_from_state()
         #self._show_info_balloon_or_result(show_balloon=True)
-# 
-# --- Classes Internas para Gerenciamento ---
-class InternalFileListManager:
-    """
-    Gerencia a lista de arquivos PDF selecionados na UI.
 
-    Responsável por exibir os arquivos, permitir reordenar e remover itens,
-    e atualizar a UI e o estado da sessão de acordo.
-    """
-    def __init__(self, page: ft.Page, gui_controls: Dict[str, ft.Control], parent_view: 'AnalyzePDFViewContent'):
-        """
-        Inicializa o gerenciador da lista de arquivos.
-
-        Args:
-            page (ft.Page): A página Flet.
-            gui_controls (Dict[str, ft.Control]): Dicionário de controles da UI da view principal.
-            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
-        """
-        self.page = page
-        self.gui_controls = gui_controls
-        self.parent_view = parent_view
-
-    def update_selected_files_display(self, files_ordered: Optional[List[Dict[str, Any]]] = None):
-        """
-        Atualiza a exibição da lista de arquivos selecionados na UI.
-
-        Args:
-            files_ordered (Optional[List[Dict[str, Any]]]): Lista opcional de dicionários representando os arquivos.
-                                                            Se None, obtém a lista da sessão.
-        """
-        list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
-        title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
-        list_view.controls.clear()
-        
-        _files = files_ordered if files_ordered is not None else self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
- 
-        if not isinstance(_files, list): _files = []
- 
-        if not _files:
-            title_text.value = "Nenhum arquivo carregado." # list_view.height = 0
-            self.gui_controls[CTL_FILE_LIST_PANEL].visible = False
-        else:
-            self.gui_controls[CTL_FILE_LIST_PANEL].visible = True
-            self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = True
-            for idx, file_info in enumerate(_files):
-                if not isinstance(file_info, dict):
-                    continue # Skip malformado
-                
-                file_name_display = ft.Text(
-                    value=file_info.get('name', 'Nome Indisponível'),
-                    overflow=ft.TextOverflow.ELLIPSIS, width=700, # expand=True
-                    #tooltip=file_info.get('name', 'Nome Indisponível'
-                )
-                action_buttons = ft.Row([
-                    ft.IconButton(ft.Icons.ARROW_UPWARD_ROUNDED, on_click=lambda _, i=idx: self._move_file_in_list(i, -1), disabled=(idx == 0), icon_size=18, padding=3, tooltip="Mover para Cima"),
-                    ft.IconButton(ft.Icons.ARROW_DOWNWARD_ROUNDED, on_click=lambda _, i=idx: self._move_file_in_list(i, 1), disabled=(idx == len(_files) - 1), icon_size=18, padding=3, tooltip="Mover para Baixo"),
-                    ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED, on_click=lambda _, i=idx: self._remove_file_from_list(i), icon_color=theme.COLOR_ERROR, icon_size=18, padding=3, tooltip="Remover Arquivo")
-                ], spacing=0, alignment=ft.MainAxisAlignment.START, width=110)
-                # Necessário definir width aqui devido concorrência de espaço indevido com file_name_text no ListTile
- 
-                list_tile = ft.ListTile(title=file_name_display,
-                                        leading=ft.Icon(ft.Icons.PICTURE_AS_PDF_ROUNDED),
-                                        trailing=action_buttons,)
-                                        # visual_density=ft.VisualDensity.COMPACT,) # Torna o ListTile um pouco mais compacto
-                                        # dense=True,) # Outra opção para compactar
-                
-                # Draggable/DragTarget (simplificado, verificar documentação Flet para melhor implementação)
-                # Para este exemplo, a reordenação será via botões. Drag-and-drop pode ser complexo aqui.
-                list_view.controls.append(list_tile)
- 
-            if len(_files) == 1:
-                title_text.value = f"Arquivo selecionado: {_files[0]['name']}"
-            else:
-                title_text.value = f"Arquivos selecionados: {_files[0]['name']} e Outros {len(_files)-1}"
-            #list_view.height = min(len(_files) * 55, 220) # Ajustar altura máxima
-        
-        # Comentado devido AssertionError: Text Control must be added to the page first
-        # if self.page:
-        #    title_text.update()
-        #    list_view.update()
-        
-        self.page.session.set(KEY_SESSION_CURRENT_BATCH_NAME, title_text.value) # Salva nome do lote
-        # A atualização dos botões será feita pela view principal
-
-    def _move_file_in_list(self, index: int, direction: int):
-        """
-        Move um arquivo na lista de arquivos selecionados.
-
-        Args:
-            index (int): O índice atual do arquivo a ser movido.
-            direction (int): A direção do movimento (-1 para cima, 1 para baixo).
-        """
-        current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
-        new_index = index + direction
-        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)):
-            return
- 
-        def primary_move_action():
-            current_files.insert(new_index, current_files.pop(index))
-            self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
-            # Apenas reseta os resultados, a UI será atualizada pelo método de reset
-            self.parent_view._reset_processing_and_llm_results()
-            update_lock = self.page.data.get("global_update_lock")
-            with update_lock:
-                self.page.update()
-                    
-        if self.parent_view.feedback_workflow_manager:
-            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
-                action_context_name="Reordenar Arquivos",
-                primary_action_callable=primary_move_action,
-            )
-        else:
-            primary_move_action()
-        
-    def _remove_file_from_list(self, index: int):
-        """
-        Remove um arquivo da lista de arquivos selecionados.
-
-        Args:
-            index (int): O índice do arquivo a ser removido.
-        """
-        current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
-        if not (0 <= index < len(current_files)):
-            return
-        
-        def primary_remove_action():
-            removed_file_info = current_files.pop(index)
-            self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
-            
-            if self.parent_view.managed_file_picker:
-                self.parent_view.managed_file_picker.clear_upload_state_for_file(removed_file_info['name'])
-            
-            self.update_selected_files_display(current_files)
-            if not current_files: # Se a lista ficou vazia
-                self.parent_view._clear_all_data_and_gui() # Limpa tudo
-            else: # Apenas reseta os resultados do processamento
-                self.parent_view._reset_processing_and_llm_results()
-            
-            update_lock = self.page.data.get("global_update_lock")
-            with update_lock:
-                self.page.update()
-
-        if self.parent_view.feedback_workflow_manager:
-            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
-                action_context_name="Remover Arquivo da Lista",
-                primary_action_callable=primary_remove_action,
-            )
-        else:
-            primary_remove_action()
-
-class InternalAnalysisController:
-    """
-    Controla o fluxo de processamento de PDF e análise LLM.
-
-    Gerencia as etapas de extração de texto, pré-processamento, análise de similaridade,
-    classificação, agregação de texto e a chamada ao orquestrador de IA para análise LLM.
-    Também lida com a atualização do estado da UI e o registro de métricas.
-    """
-    def __init__(self, page: ft.Page, gui_controls: Dict[str, ft.Control], parent_view: 'AnalyzePDFViewContent'):
-        """
-        Inicializa o controlador de análise.
-
-        Args:
-            page (ft.Page): A página Flet.
-            gui_controls (Dict[str, ft.Control]): Dicionário de controles da UI da view principal.
-            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
-        """
-        self.page = page
-        self.gui_controls = gui_controls
-        self.parent_view = parent_view
-        self.pdf_analyzer = parent_view.pdf_analyzer
-        self.firestore_client = firestore_client
-        self.user_cache = get_user_cache(self.page)
-
-    def _get_current_analysis_settings(self) -> Dict[str, Any]:
-        """
-        Busca as configurações de análise atuais da sessão.
-
-        Retorna um dicionário com as configurações, aplicando valores padrão (fallbacks)
-        se as configurações não forem encontradas ou estiverem em formato inválido.
-        Realiza a conversão de tipos para garantir a correta utilização dos valores.
-
-        Returns:
-            Dict[str, Any]: Um dicionário contendo as configurações de análise.
-        """
-        settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
-        if not settings or not isinstance(settings, dict):
-            logger.warning("Configurações de análise não encontradas na sessão ou formato inválido. Usando fallbacks.")
-            return FALLBACK_ANALYSIS_SETTINGS.copy() # Retorna uma cópia
-        
-        # Garante que os tipos numéricos estejam corretos, pois podem vir de TextFields como string
-        # Faz uma cópia para não modificar o original na sessão aqui.
-        # A normalização de tipos deve ocorrer quando os valores são lidos do drawer.
-        # Aqui, apenas garantimos que se o tipo for string e deveria ser número, tentamos converter.
-        current_settings = settings.copy()
-        try:
-            current_settings['llm_input_token_limit'] = int(current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']))
-        except (ValueError, TypeError):
-                current_settings['llm_input_token_limit'] = FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']
-        
-        try:
-            current_settings['llm_temperature'] = float(current_settings.get('llm_temperature', FALLBACK_ANALYSIS_SETTINGS['llm_temperature']))
-        except (ValueError, TypeError):
-            current_settings['llm_temperature'] = FALLBACK_ANALYSIS_SETTINGS['llm_temperature']
-        try:
-            current_settings['similarity_threshold'] = float(current_settings.get('similarity_threshold', FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']))
-        except (ValueError, TypeError):
-            current_settings['similarity_threshold'] = FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']
-        
-        return current_settings
-
-    def _update_status_callback(self, text: str, is_error: bool = False, only_txt: bool = False):
-        """
-        Callback para atualizar o texto de status na UI (executado na thread principal).
-
-        Args:
-            text (str): O texto de status a ser exibido.
-            is_error (bool): Se True, formata o texto como erro.
-            only_txt (bool): Se True, atualiza apenas o texto, sem mostrar/esconder o overlay de loading.
-        """
-        # Este callback será executado pela thread principal via page.run_thread
-        #_logger.info(f"[DEBUG] Callback UI: Atualizando {control_key} para '{text}' (Erro: {is_error})")
-        
-        txt_to_update = self.gui_controls[CTL_LLM_STATUS_INFO] # control_key = ft.Text
- 
-        hide_loading_overlay(self.page)
-        if not only_txt:
-            show_loading_overlay(self.page, text)
-        
-        if txt_to_update.page and txt_to_update.uid:
-            txt_to_update.value = text
-            txt_to_update.color = theme.COLOR_ERROR if is_error else None
-            txt_to_update.weight = ft.FontWeight.BOLD if is_error else ft.FontWeight.NORMAL
-            txt_to_update.update()
-        
-    def _pdf_processing_thread_func(self, pdf_paths: List[str], batch_name: str, analyze_llm_after: bool, is_reanalysis: bool = False):
-        """
-        Função executada em uma thread separada para realizar o processamento de PDF.
-
-        Esta função orquestra as etapas de extração de texto, pré-processamento,
-        cálculo de embeddings, classificação de páginas por relevância e agregação de texto,
-        atualizando a UI com o progresso. Opcionalmente, pode iniciar a análise LLM em seguida.
-
-        Args:
-            pdf_paths (List[str]): Lista de caminhos para os arquivos PDF a serem processados.
-            batch_name (str): Nome do lote de arquivos, usado para identificação nos logs e UI.
-            analyze_llm_after (bool): Se True, inicia a análise LLM automaticamente após o processamento de PDF.
-            is_reanalysis (bool): Indica se esta é uma reanálise, afetando o comportamento de logging e feedback.
-        """
-        current_analysis_settings = self._get_current_analysis_settings()
-        logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
-        pdf_extractor = current_analysis_settings.get("pdf_extractor", FALLBACK_ANALYSIS_SETTINGS["pdf_extractor"])
-        provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
-        vectorization_model = current_analysis_settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
-        similarity_threshold = current_analysis_settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
-        token_limit_pref = current_analysis_settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
- 
-        # TODO: avaliar se tornar esses parâmetros mutáveis na Gui:
-        mode_main_filter = 'get_pages_among_similars_graphs'
-        mode_filter_similar = 'bigger_content'
-        
-        if pdf_extractor == 'PdfPlumber':
-            self.pdf_analyzer.extractor = PdfPlumberExtractor()
-            logger.debug("Alterando pdf_extractor para PdfPlumber!")
- 
-        decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
-        if decrypted_api_key:
-            logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
- 
-        try:
-            start_time = perf_counter()
- 
-            logger.debug(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
-            self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
- 
-            processed_files_metadata, all_indices, all_texts_to_storage, all_texts_to_loop = \
-                                self.pdf_analyzer.extract_texts_and_preprocess_files(pdf_paths)
- 
-            processed_page_data_combined, all_global_page_keys_ordered = \
-                                self.pdf_analyzer.build_combined_page_data(processed_files_metadata, all_indices, all_texts_to_storage)
- 
-            self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
- 
-            ready_embeddings, tokens_embeddings = None, None
-            calculated_embedding_cost_usd = 0
-            if vectorization_model == "text-embedding-3-small":
-                if not decrypted_api_key:
-                    decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
-                    assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
- 
-                loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
-                ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
-                                                                                     all_texts_to_loop, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
- 
-            embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.pdf_analyzer.get_similarity_and_tfidf_score_docs(
-                                                                            all_texts_to_loop, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
-            
-            point_time = perf_counter()
-            self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
- 
-            if tokens_embeddings:
-                self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
-                logger.debug(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
-            else:
-                if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
-                    self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
-                    logger.debug("Tokens de embedding removidos da sessão (não retornados pela análise).")
-                
-            if not processed_page_data_combined:
-                raise ValueError("Nenhum dado processável encontrado nos PDFs.")
-            
-            #pr-int('\n[DEBUG]:\n', processed_page_data_combined, '\n\n')
-            classified_data = self.pdf_analyzer.filter_and_classify_pages(processed_page_data_combined, all_global_page_keys_ordered,
-                                                                          embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined,
-                                                                          mode_main_filter, mode_filter_similar, similarity_threshold)
-            
-            relevant_ordered_indices, unintelligible_indices, count_similars = classified_data
-            count_sel, count_unint = len(relevant_ordered_indices), len(unintelligible_indices)
- 
-            if not relevant_ordered_indices:
-                raise ValueError("Nenhuma página relevante encontrada após classificação.")
- 
-            if perf_counter() - point_time < 1: sleep(1) # Apenas Garante visibilidade do text_progressing
- 
-            point_time = perf_counter()
-            self.page.run_thread(self._update_status_callback, "Etapa 4/5: Filtrando páginas...")
- 
-            aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(processed_page_data_combined, relevant_ordered_indices, token_limit_pref)
-            
-            self.user_cache = get_user_cache(self.page)
-            self.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = aggregated_info
-            self.page.session.set("has_analyzer_data", True)
-            
-            pages_agg_indices, _, tokens_antes_agg, tokens_final_agg = aggregated_info
-            count_sel_final = len(pages_agg_indices)
-            #pr-int('\n[DEBUG]:\n', pages_agg_indices, '\n\n')
- 
-            supressed_tokens = tokens_antes_agg - tokens_final_agg
-            perc_supressed = (supressed_tokens / tokens_antes_agg * 100) if tokens_antes_agg > 0 else 0
- 
-            total_processing_time = perf_counter() - start_time
-            
-            proc_meta_for_ui = {
-                "total_pages_processed": len(processed_page_data_combined),
-                "relevant_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(relevant_ordered_indices),
-                "count_selected_relevant": count_sel,
-                "unintelligible_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(unintelligible_indices),
-                "count_discarded_unintelligible": count_unint,
-                "count_discarded_similarity": count_similars,
-                "total_tokens_before_truncation": tokens_antes_agg,
-                "final_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(pages_agg_indices),
-                "count_selected_final": count_sel_final,
-                "final_aggregated_tokens": tokens_final_agg,
-                "supressed_tokens_percentage": perc_supressed,
-                "processing_time": format_seconds_to_min_sec(total_processing_time),
-                "calculated_embedding_cost_usd": calculated_embedding_cost_usd
-            }
-            self.page.session.set(KEY_SESSION_PROCESSING_METADATA, proc_meta_for_ui)
-            self.page.run_thread(self.parent_view._update_processing_metadata_display, proc_meta_for_ui)
- 
-            self.parent_view._files_processed = True
-            logger.info(f"Thread: Processamento de PDF para '{batch_name}' concluído.")
- 
-            if perf_counter() - point_time < 1: sleep(1)
-            self.page.run_thread(self._update_status_callback, "Aguardando para exibir os resultados...", False, True)
- 
-            if analyze_llm_after:
-                self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
-                self.start_llm_analysis_only(aggregated_info[1], batch_name, from_pipeline=True, is_reanalysis=is_reanalysis) # Passa o texto agregado
-                self.page.run_thread(self._update_status_callback, "", False, True)
-            else: # Só processou, não vai para LLM agora
-                hide_loading_overlay(self.page)
-                # Se não vai para a LLM, a UI precisa ser atualizada agora com os resultados do processamento.
-                self.page.run_thread(self.parent_view._update_gui_from_state)
-                self.page.run_thread(show_snackbar, self.page, f"Conteúdo de '{batch_name}' processado. Pronto para análise LLM.", theme.COLOR_SUCCESS)
-        
-        except Exception as ex_proc:
-            logger.error(f"Thread: Erro no processamento de PDF para '{batch_name}': {ex_proc}", exc_info=True)
-            self.page.run_thread(self._update_status_callback, f"Erro ao processar PDFs: {ex_proc}", True, True)
-            self.parent_view._files_processed = False # Falhou
-        finally:
-            self.gui_controls[CTL_PROC_METADATA_PANEL].visible = True
-            self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = True
-            hide_loading_overlay(self.page)
-            # Garante que, mesmo em erro, os botões sejam reavaliados.
-            # Se a análise não prosseguir para a LLM, a atualização da UI já foi feita no try.
-            if not analyze_llm_after:
-                self.page.run_thread(self.parent_view._update_button_states)
-
-    def _get_valid_user_context(self) -> Optional[Tuple[str, str]]:
-        """
-        Verifica e renova o token se necessário, retornando um contexto de usuário válido.
-        Centraliza a lógica de verificação de token para a view.
-
-        Returns:
-            Optional[Tuple[str, str]]: Uma tupla (user_token, user_id) se a sessão for válida,
-                                       ou None se a sessão for inválida (e o logout for acionado).
-        """
-        from src.flet_ui.app import check_and_refresh_token_if_needed
-        
-        if not check_and_refresh_token_if_needed(self.page):
-            logger.error("Contexto do usuário inválido ou sessão expirada. Ação abortada.")
-            return None
-        
-        user_token = self.page.session.get("auth_id_token")
-        user_id = self.page.session.get("auth_user_id")
-
-        if not user_token or not user_id:
-            logger.error("Token ou ID do usuário ausente da sessão mesmo após verificação. Ação abortada.")
-            return None
-            
-        return user_token, user_id
-    
-    def _get_data_to_log(self):
-        """
-        Coleta e retorna os dados relevantes da sessão e do cache para fins de logging e métricas.
-
-        Retorna:
-            Tuple: Uma tupla contendo:
-                - user_id (str): ID do usuário autenticado.
-                - user_token (str): Token de autenticação do usuário.
-                - filenames_uploaded (List[str]): Lista de nomes dos arquivos PDF carregados.
-                - proc_meta_session (Dict[str, Any]): Metadados do processamento de PDF.
-                - tokens_embeddings_session (Tuple): Informações sobre tokens de embeddings.
-                - llm_meta_session (Dict[str, Any]): Metadados da análise LLM.
-                - current_settings (Dict[str, Any]): Configurações de análise atuais.
-                - default_settings (Dict[str, Any]): Configurações padrão da nuvem.
-                - llm_response_obj (formatted_initial_analysis): Objeto de resposta estruturada da LLM.
-                - fields_to_log (List[str]): Lista de campos da resposta LLM a serem logados.
-        """
-        context = self._get_valid_user_context()
-        if not context:
-            logger.error("Não foi possível obter contexto de usuário válido para coletar dados de log.")
-            # Retorna uma tupla com Nones para evitar que o chamador quebre
-            return (None, None, [], {}, None, {}, {}, {}, None, [])
-            
-        user_token, user_id = context
-    
-        llm_meta_session = self.page.session.get(KEY_SESSION_LLM_METADATA) or {}
-
-        if llm_meta_session: # Salva no objeto que será logado
-            event_timestamp_for_llm_analysis = datetime.now().isoformat() # Timestamp desta análise
-            llm_meta_session["event_timestamp_iso"] = event_timestamp_for_llm_analysis
-            # Também salva na sessão para que o save_feedback_data_now possa pegar
-            self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_session)
-
-        files_ordered_session = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
-        filenames_uploaded = [f.get('name', 'unknown_file') for f in files_ordered_session if isinstance(f, dict)]
-        
-        proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {}
-        tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
-        current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
-        default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
-        
-        llm_response_obj = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
-
-        if llm_response_obj and isinstance(llm_response_obj, formatted_initial_analysis):
-            fields_to_log = [
-                "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
-                "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
-                "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re",
-                "materia_especial", "destinacao"
-            ]
-        else:
-            fields_to_log = []
-        
-        return (user_id, user_token, filenames_uploaded, proc_meta_session, tokens_embeddings_session, llm_meta_session,
-            current_settings, default_settings, llm_response_obj, fields_to_log)
-    
-    def _llm_analysis_thread_func(self, aggregated_text: str, batch_name: str, is_reanalysis: bool = False):
-        """
-        Função executada em uma thread separada para realizar a análise LLM.
-
-        Orquestra a chamada ao modelo de linguagem, gerencia o uso de chaves de API,
-        atualiza o estado da UI com os resultados da análise e registra métricas.
-
-        Args:
-            aggregated_text (str): O texto agregado das páginas relevantes do PDF para análise.
-            batch_name (str): Nome do lote de arquivos, usado para identificação nos logs e UI.
-            is_reanalysis (bool): Indica se esta é uma reanálise, afetando o comportamento de logging e feedback.
-        """
-        import src.core.ai_orchestrator as ai_orchestrator
- 
-        current_analysis_settings = self._get_current_analysis_settings()
-        logger.debug(f"Usando configurações de análise para LLM: {current_analysis_settings}")
-        provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
-        model_name = current_analysis_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
-        temperature = current_analysis_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
-        mode_prompt = current_analysis_settings.get("prompt_structure", FALLBACK_ANALYSIS_SETTINGS["prompt_structure"])
-  
-        if mode_prompt == "sequential_prompts":
-            key_prompt_group = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
-        else: # if mode_prompt == "prompt_unico":
-            key_prompt_group = "PROMPT_UNICO_for_INITIAL_ANALYSIS"
-
-        self.user_cache = get_user_cache(self.page)
-        loaded_prompts = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL)
-        if not loaded_prompts:
-            logger.error("Prompts ausentes para a thread de análise!")
-            self.page.run_thread(self.parent_view._update_gui_from_state)
-            self.page.run_thread(self._update_status_callback, f"Erro crítico: Não foi possível carregar os prompts de análise.", True, True)
-            hide_loading_overlay(self.page)
-            return # Aborta a execução da thread
-
-        try:
-            logger.debug(f"Thread: Iniciando análise LLM para '{batch_name}'...")
-            self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
- 
-            decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
-            if decrypted_api_key:
-                logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
-            else:
-                decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
-                assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
- 
-            loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
- 
-            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(key_prompt_group, loaded_prompts, aggregated_text,
-                                                                                                 provider, model_name, temperature,
-                                                                                                 decrypted_api_key, loaded_llm_providers)
- 
-            if llm_response_data:
-                # Se já existe uma llm_response na sessão é porque é caso de reanálise (usuário clicou em 'Solicitar Análise' novamente).
-                # Registrar essa informação para o feedback_metric
-                self.page.session.set(KEY_SESSION_LLM_REANALYSIS, is_reanalysis)
-                
-                self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = llm_response_data
-                self.page.session.set("has_llm_response", True)
-                # A flag 'is_new_llm_response' será passada para a sessão para ser usada por _update_ui_from_state
-                self.page.session.set("is_new_llm_response_flag", True)
-                
-                llm_meta_for_gui = token_usage_info if token_usage_info else {}
-                llm_meta_for_gui.update({
-                    "llm_provider_used": provider.upper(),
-                    "llm_model_used": model_name.upper(),
-                    "processing_time": format_seconds_to_min_sec(processing_time_llm)
-                })
-                
-                self.parent_view._analysis_requested = True
-                self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_for_gui)
-                self.page.run_thread(self.parent_view._update_gui_from_state)
-                self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
-                self.page.run_thread(self._update_status_callback,  "", False, True)
- 
-                data_to_log = self._get_data_to_log()
-                if self.firestore_client.save_analysis_metrics(*data_to_log):
-                    #Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
-                    self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
- 
-            else:
-                self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
-                self.page.run_thread(self._update_status_callback,  "Análise LLM: Falha ao obter resposta da IA.", True, True)
-                self.page.run_thread(show_snackbar, self.page, "Erro na consulta à LLM.", theme.COLOR_ERROR)
-                self.parent_view._analysis_requested = False
-        except Exception as ex_llm:
-            logger.error(f"Thread: Erro na análise LLM para '{batch_name}': {ex_llm}", exc_info=True)
-            self.parent_view._analysis_requested = False
-            self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
-            self.page.run_thread(self._update_status_callback,  f"Erro na consulta à LLM: {ex_llm}", True, True)
-        finally:
-            self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
-            self.gui_controls[CTL_LLM_METADATA_PANEL].controls[0].expanded = True
-            hide_loading_overlay(self.page)
-            # A atualização da GUI já foi tratada dentro do try/except, não precisa aqui.
- 
-    def start_pdf_processing_only(self, pdf_paths: List[str], batch_name: str):
-        """
-        Inicia o processo de extração e pré-processamento de PDF em uma nova thread.
-
-        Args:
-            pdf_paths (List[str]): Lista de caminhos para os arquivos PDF.
-            batch_name (str): Nome do lote de arquivos.
-        """
-        show_loading_overlay(self.page, "Iniciando processamento...")
-        thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, False), daemon=True)
-        thread.start()
-
-    def start_llm_analysis_only(self, aggregated_text: str, batch_name: str, from_pipeline:bool = False, is_reanalysis: bool = False):
-        """
-        Inicia a análise LLM em uma nova thread.
-
-        Args:
-            aggregated_text (str): O texto agregado para análise.
-            batch_name (str): Nome do lote de arquivos.
-            from_pipeline (bool): Indica se a chamada veio do pipeline completo (True) ou diretamente (False).
-        """
-        if not from_pipeline: # Se chamado diretamente (não pelo pipeline do fast_forward)
-            ...
-        # A thread _llm_analysis_thread_func já lida com hide_loading_overlay no finally
-        thread = threading.Thread(target=self._llm_analysis_thread_func, args=(aggregated_text, batch_name, is_reanalysis), daemon=True)
-        thread.start()
-    
-    def start_full_analysis_pipeline(self, pdf_paths: List[str], batch_name: str, is_reanalysis: bool = False):
-        """
-        Inicia o pipeline completo: processamento de PDF seguido por análise LLM.
-
-        Args:
-            pdf_paths (List[str]): Lista de caminhos para os arquivos PDF.
-            batch_name (str): Nome do lote de arquivos.
-            is_reanalysis (bool): Indica se esta é uma reanálise.
-        """
-        show_loading_overlay(self.page, "Iniciando processamento e análise...")
-        thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, True, is_reanalysis), daemon=True)
-        thread.start()
-
-class InternalExportManager:
-    """
-    Gerencia as operações de exportação dos resultados da análise para DOCX.
-
-    Lida com a interação com o FilePicker para salvar arquivos e utiliza o DocxExporter
-    para gerar os documentos nos formatos simples ou usando templates.
-    """
-    def __init__(self, parent_view: AnalyzePDFViewContent, docx_exporter: DocxExporter, global_file_picker: Optional[ft.FilePicker]):
-        """
-        Inicializa o gerenciador de exportação.
-
-        Args:
-            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
-            docx_exporter (DocxExporter): Instância do DocxExporter para gerar os arquivos.
-            global_file_picker (Optional[ft.FilePicker]): Instância global do FilePicker para operações de salvar.
-        """
-        self.parent_view = parent_view
-        self.page = parent_view.page
-        self.docx_exporter = docx_exporter
-        self.global_file_picker = global_file_picker
-
-    def _get_default_filename_base(self) -> str:
-        """
-        Gera um nome de arquivo base padrão para exportação, derivado do nome do lote atual.
-
-        Returns:
-            str: O nome de arquivo base limpo e formatado.
-        """
-        base = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "analise_documento"
-        return base.replace("Arquivos selecionados: ", "").replace("Arquivo selecionado: ", "").split(" e Outros")[0].replace(".pdf", "")
-
-    def _handle_desktop_save_result(self, event: ft.FilePickerResultEvent):
-        """
-        Handler para o resultado do diálogo "Salvar Como" no desktop.
-        Este método está descontinuado e não possui implementação funcional.
-
-        Args:
-            event (ft.FilePickerResultEvent): O evento do FilePicker com o caminho selecionado.
-        """
-        self.desktop_picker_operation: ExportOperation = ExportOperation.NONE
-        self.desktop_picker_template_path: Optional[str] = None
-        self.current_data_for_export_obj: Optional[formatted_initial_analysis] = None
-        pass # descontinuado
-
-    def start_export(self, operation_type: ExportOperation, data_to_export: formatted_initial_analysis, template_path: Optional[str] = None):
-        """
-        Inicia o processo de exportação dos resultados da análise para um arquivo DOCX.
-
-        Gerencia a lógica de exportação para o modo web (download) e desktop (salvar como),
-        utilizando o DocxExporter para a geração do documento.
-
-        Args:
-            operation_type (ExportOperation): O tipo de exportação (simples ou com template).
-            data_to_export (formatted_initial_analysis): Os dados estruturados da análise a serem exportados.
-            template_path (Optional[str]): O caminho para o arquivo de template DOCX (obrigatório para exportação com template).
-        """
-        logger.debug(f"ExportManager: start_export. Op: {operation_type}, Web: {self.page.web}")
-
-        if not data_to_export: # Verificação de segurança
-            logger.error("ExportManager (start_export): Dados para exportação ausentes ou inválidos.")
-            show_snackbar(self.page, "Erro: Dados para exportação inválidos.", theme.COLOR_ERROR)
-            return
-        
-        default_filename_base = self._get_default_filename_base()
-        if self.page.web:
-            # --- LÓGICA PARA MODO WEB ---
-            show_loading_overlay(self.page, "Preparando arquivo para download...")
-            temp_server_filename = ""
-            export_success_on_server = False
-            missing_keys_on_server: List[str] = []
-            server_save_path = ""
-            
-            try:
-                temp_exports_path = os.path.join(ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR)
-                os.makedirs(temp_exports_path, exist_ok=True)
-            except OSError as e:
-                logger.error(f"EXPORT_MANAGER (Web): Falha ao criar diretório de exportações temporárias '{temp_exports_path}': {e}")
-                hide_loading_overlay(self.page)
-                show_snackbar(self.page, "Erro ao preparar diretório para download.", theme.COLOR_ERROR)
-                return
-            
-            if operation_type == ExportOperation.SIMPLE_DOCX:
-                temp_server_filename = f"{default_filename_base}_simples_{int(time())}.docx"
-                server_save_path = os.path.join(temp_exports_path, temp_server_filename)
-                export_success_on_server = self.docx_exporter.export_simple_docx(data_to_export, server_save_path)
-            elif operation_type == ExportOperation.TEMPLATE_DOCX and template_path:
-                template_name = os.path.basename(template_path).replace(".docx","").replace(" ", "_").lower()
-                temp_server_filename = f"{default_filename_base}_{template_name}_{int(time())}.docx"
-                server_save_path = os.path.join(temp_exports_path, temp_server_filename)
-                export_success_on_server, _ = self.docx_exporter.export_from_template_docx(data_to_export, template_path, server_save_path)
-            else: 
-                logger.error(f"EXPORT_MANAGER (Web): Tipo de operação desconhecido ou template_path ausente: {operation_type}")
-                hide_loading_overlay(self.page)
-                show_snackbar(self.page, "Erro: Tipo de exportação inválido.", theme.COLOR_ERROR)
-                return
-            
-            hide_loading_overlay(self.page)
-            if export_success_on_server and temp_server_filename:
-                download_url = f"/{WEB_TEMP_EXPORTS_SUBDIR}/{temp_server_filename}"
-                self.page.launch_url(download_url, web_window_name="_blank") # or web_window_name="_self"
-                show_snackbar(self.page, f"Download de '{temp_server_filename}' iniciado.", theme.COLOR_SUCCESS)
-            else: 
-                logger.error(f"ExportManager (Web): Falha ao gerar DOCX: {server_save_path}")
-                show_snackbar(self.page, "Falha ao gerar arquivo para download.", theme.COLOR_ERROR)
-                    
-        else: # Desktop
-            raise ValueError("Método não customizado para desktop!")
-
-    def handle_add_new_template_click(self):
-        """
-        Handler para o clique no item 'Adicionar Novo Template'.
-
-        Inicia o processo de seleção de um novo arquivo de template DOCX,
-        diferenciando o comportamento para o modo web (upload) e desktop (cópia local).
-        """
-        logger.info("Botão 'Adicionar Novo Template' clicado.")
-        
-        # Lista de placeholders que o usuário pode usar no template
-        placeholders_disponiveis = [
-            "<descricao_geral>", "<tipo_documento_origem>", "<orgao_origem>",
-            "<uf_origem>", "<municipio_origem>", "<resumo_fato>", "<uf_fato>",
-            "<municipio_fato>", "<tipo_local>", "<valor_apuracao>", "<tipificacao_penal>",
-            "<materia_especial>", "<area_atribuicao>", "<destinacao>", "<tipo_a_autuar>",
-            "<assunto_re>", "<pessoas_envolvidas>", "<linha_do_tempo>", "<observacoes>"
-        ]
-        placeholders_text = "\n".join([f"- {ph}" for ph in placeholders_disponiveis])
-        
-        dialog_content = ft.Column(
-            [
-                ft.Text("Para criar um template .docx, insira os seguintes placeholders no seu documento onde você deseja que os dados da análise sejam inseridos. \n"
-                        "A aplicação irá substituí-los pelos valores correspondentes.", selectable=True),
-                ft.Divider(),
-                ft.Text("Placeholders Disponíveis:", weight=ft.FontWeight.BOLD),
-                ft.TextField(
-                    value=placeholders_text,
-                    multiline=True,
-                    read_only=True,
-                    border=ft.InputBorder.NONE,
-                    height=250 # Ajuste a altura conforme necessário
-                )
-            ],
-            tight=True,
-            scroll=ft.ScrollMode.ALWAYS
-        )
-
-        def proceed_to_upload(e=None):
-            # Esta função é chamada quando o usuário clica em "Continuar"
-            # Ela contém a lógica original de abrir o seletor de arquivos
-            if not self.global_file_picker:
-                show_snackbar(self.page, "Erro: Seletor de arquivos não pronto.", theme.COLOR_ERROR)
-                return
-
-            if self.page.web:
-                self.global_file_picker.on_result = self.on_template_file_selected_for_web_upload
-                self.global_file_picker.on_upload = self.on_template_file_uploaded_web
-            else:
-                self.global_file_picker.on_result = self.on_new_template_picked
-                self.global_file_picker.on_upload = None
-            
-            self.global_file_picker.pick_files(
-                dialog_title="Selecionar Template DOCX",
-                allowed_extensions=["docx"],
-                allow_multiple=False)
-            # O dialog já será fechado pela função show_confirmation_dialog
-            # Não é necessário self.page.update() aqui
-            
-        show_confirmation_dialog(
-            page=self.page,
-            title="Como Adicionar um Novo Template",
-            content=dialog_content,
-            confirm_text="Continuar para Upload",
-            cancel_text="Cancelar",
-            on_confirm=proceed_to_upload
-        )
-
-    def on_template_file_selected_for_web_upload(self, e: ft.FilePickerResultEvent):
-        """
-        Handler para a seleção de um arquivo de template no modo web (antes do upload).
-
-        Prepara o URL de upload e inicia o processo de upload do arquivo para o servidor temporário.
-
-        Args:
-            e (ft.FilePickerResultEvent): O evento do FilePicker com os arquivos selecionados.
-        """
-        if not e.files:
-            show_snackbar(self.page, "Seleção cancelada.", theme.COLOR_INFO)
-            return
-        
-        file_name = e.files[0].name
-        temp_target = os.path.join(UPLOAD_TEMP_DIR, file_name)
-        
-        if os.path.exists(temp_target):
-            try:
-                os.remove(temp_target)
-            except OSError as er:
-                logger.warning(f"Não remover temp anterior '{temp_target}': {er}")
-        try:
-            upload_url = self.page.get_upload_url(file_name, expires=300)
-            if not upload_url:
-                raise ValueError("URL de upload template não gerada.")
-            
-            self.global_file_picker.upload([
-                ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)])
-            show_loading_overlay(self.page, f"Fazendo upload de '{file_name}'...")
-            self.page.update()
-        except Exception as ex:
-            logger.error(f"Erro upload template web: {ex}", exc_info=True)
-            show_snackbar(self.page, f"Erro upload: {ex}", theme.COLOR_ERROR)
-            hide_loading_overlay(self.page)
-
-    def on_template_file_uploaded_web(self, e: ft.FilePickerUploadEvent):
-        """
-        Handler para o evento de upload de um arquivo de template no modo web.
-
-        Após o upload, verifica a existência do arquivo no servidor e o copia para o diretório de assets.
-
-        Args:
-            e (ft.FilePickerUploadEvent): O evento de upload do FilePicker.
-        """
-        if e.error:
-            hide_loading_overlay(self.page)
-            show_snackbar(self.page, f"Erro upload template: {e.error}", theme.COLOR_ERROR)
-            return
-        if e.progress is not None and e.progress < 1.0:
-            return
-        
-        hide_loading_overlay(self.page)
-        source_path_server = os.path.join(UPLOAD_TEMP_DIR, e.file_name)
-        file_found = False
-        for _ in range(5):
-            if os.path.exists(source_path_server):
-                file_found = True
-                break
-            time.sleep(0.3)
-        
-        if not file_found:
-            logger.error(f"Template '{e.file_name}' não encontrado em '{source_path_server}'.")
-            show_snackbar(self.page, "Erro: Arquivo não confirmado no servidor.", theme.COLOR_ERROR)
-            return
-        
-        self.copy_template_to_assets(source_path_server, e.file_name, is_web_upload_temp=True)
-
-    def on_new_template_picked(self, e: ft.FilePickerResultEvent):
-        """
-        Handler para a seleção de um novo arquivo de template no modo desktop.
-
-        Copia o arquivo selecionado para o diretório de assets.
-
-        Args:
-            e (ft.FilePickerResultEvent): O evento do FilePicker com os arquivos selecionados.
-        """
-        if not e.files:
-            show_snackbar(self.page, "Seleção cancelada.", theme.COLOR_INFO)
-            return
-        
-        source_path = e.files[0].path
-        original_name = e.files[0].name
- 
-        if not self.page.web:
-            if not source_path:
-                logger.error("Desktop: source_path None.")
-                show_snackbar(self.page, "Erro caminho template.", theme.COLOR_ERROR)
-                return
-            self.copy_template_to_assets(source_path, original_name)
- 
-    def copy_template_to_assets(self, source_path: str, original_filename: str, is_web_upload_temp: bool = False):
-        """
-        Copia um arquivo de template para o diretório de assets.
-
-        Args:
-            source_path (str): O caminho de origem do arquivo.
-            original_filename (str): O nome original do arquivo.
-            is_web_upload_temp (bool): Indica se o arquivo de origem é um temporário de upload web.
-        """
-        templates_dir = os.path.join(ASSETS_DIR, TEMPLATES_DOCX_SUBDIR)
-        os.makedirs(templates_dir, exist_ok=True)
-        destination_path = os.path.join(templates_dir, original_filename)
-        try:
-            shutil.copy2(source_path, destination_path)
-            show_snackbar(self.page, f"Template '{original_filename}' adicionado!", theme.COLOR_SUCCESS)
-            self.parent_view._update_export_button_menu() # Acessa via parent_view
-            if self.page: self.page.update()
-        except Exception as ex:
-            logger.error(f"Erro ao copiar template '{original_filename}': {ex}", exc_info=True)
-            show_snackbar(self.page, f"Falha: {ex}", theme.COLOR_ERROR)
-        finally:
-            if is_web_upload_temp and source_path.startswith(os.path.abspath(UPLOAD_TEMP_DIR)):
-                try:
-                    os.remove(source_path)
-                except OSError as er:
-                    logger.warning(f"Não remover temp template '{source_path}': {er}")
- 
-    def _trigger_feedback_and_export(self, export_operation: ExportOperation, template_path: Optional[str]):
-        """
-        Dispara o fluxo de feedback do usuário antes de iniciar a exportação.
-
-        Valida os dados do formulário para exportação e, se válidos, solicita feedback
-        ao usuário antes de chamar a função de exportação primária.
-
-        Args:
-            export_operation (ExportOperation): O tipo de exportação a ser realizada.
-            template_path (Optional[str]): O caminho para o arquivo de template DOCX (se aplicável).
-        """
-        logger.debug(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
- 
-        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
-        if not isinstance(llm_display_component, LLMStructuredResultDisplay):
-            logger.error("ExportManager: LLMStructuredResultDisplay não encontrado.")
-            show_snackbar(self.page, "Erro interno: Display de resultados não operacional.", theme.COLOR_ERROR)
-            return
- 
-        # Garante que os dados da UI sejam validados E obtidos.
-        # A validação para exportação acontece aqui, antes do diálogo de feedback.
-        data_to_export_or_errors = llm_display_component.get_current_form_data(validate_for_export=True)
- 
-        if isinstance(data_to_export_or_errors, list):
-            first_error_tuple = data_to_export_or_errors[0]
-            if first_error_tuple[0].startswith("pydantic_validation_error") or first_error_tuple[0].startswith("internal_form_data_error"):
-                error_msg_detail = "Verifique os campos e tente novamente." if "pydantic" in first_error_tuple[0] else "Tente recarregar os dados."
-                show_snackbar(self.page, f"Erro de validação nos dados do formulário. {error_msg_detail}", theme.COLOR_ERROR, duration=5000)
-                return
-            
-            error_messages = []
-            first_invalid_ctrl: Optional[ft.Control] = None
-            for field_name, control_instance in data_to_export_or_errors:
-                friendly_field_name = field_name.replace("_", " ").title()
-                error_messages.append(f"- {friendly_field_name}")
-                if control_instance and not first_invalid_ctrl:
-                    first_invalid_ctrl = control_instance
- 
-            if error_messages:
-                dialog_content_controls_list = [ft.Text("Os seguintes campos obrigatórios precisam ser preenchidos antes da exportação:")]
-                for msg_item in error_messages:
-                    dialog_content_controls_list.append(ft.Text(msg_item))
-                show_confirmation_dialog(
-                    page=self.page, title="Campos Obrigatórios Pendentes",
-                    content=ft.Column(dialog_content_controls_list, tight=True, spacing=5),
-                    confirm_text="OK", cancel_text=None,
-                    on_confirm= lambda: first_invalid_ctrl.focus() if first_invalid_ctrl and hasattr(first_invalid_ctrl, 'focus') else None)
-                return
-            
-        elif not data_to_export_or_errors:
-            show_snackbar(self.page, "Dados de análise inválidos.", theme.COLOR_ERROR)
-            return
- 
-        # Se chegou aqui, data_to_export_or_errors é um objeto FormatAnaliseInicial válido
-        current_data_for_export = data_to_export_or_errors
- 
-        def primary_export_action():
-            self.start_export(export_operation, current_data_for_export, template_path)
-        
-        # `feedback_workflow_manager` é acessado via `self.parent_view`
-        if self.parent_view.feedback_workflow_manager:
-            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
-                action_context_name="Exportar Análise",
-                primary_action_callable=primary_export_action,
-            )
-        else: # Fallback se o manager não estiver pronto
-            primary_export_action()
- 
-    def handle_export_selected(self, e: ft.ControlEvent):
-        """
-        Handler para a seleção de um item no menu do botão de Exportar.
-
-        Args:
-            e (ft.ControlEvent): O evento do controle.
-        """
-        logger.debug(f"ExportManager: Item de exportação selecionado - Data: {e.control.data}")
-        selected_action_data = e.control.data
-                   
-        operation: Optional[ExportOperation] = None
-        template_p: Optional[str] = None
- 
-        if selected_action_data == "export_simple_docx":
-            operation = ExportOperation.SIMPLE_DOCX
-        elif selected_action_data and selected_action_data.startswith("export_template_"):
-            operation = ExportOperation.TEMPLATE_DOCX
-            template_p = selected_action_data[len("export_template_"):]
-        elif selected_action_data == "manage_templates":
-            self.handle_add_new_template_click()
-            return
-        else:
-            logger.warning(f"Ação de exportação desconhecida: {selected_action_data}")
-            return
- 
-        if not operation: # Se a operação não foi definida (ex: manage_templates já retornou)
-            return
-            
-        # A validação e obtenção dos dados, bem como o disparo do diálogo de feedback,
-        # são agora responsabilidade de _trigger_feedback_and_export.
-        # Se a validação em _trigger_feedback_and_export falhar (get_current_form_data retornar lista de erros),
-        # a exportação não prosseguirá.
-        self._trigger_feedback_and_export(operation, template_p) # Passa template_p
-
+# --- Classe Interna com GUI_build complementar ---
 class LLMStructuredResultDisplay(ft.Column):
     """
     Componente Flet para exibir e editar os resultados estruturados da análise LLM.
@@ -3044,7 +1941,911 @@ class LLMStructuredResultDisplay(ft.Column):
             if validate_for_export:
                 return [("pydantic_validation_error_final", None)] 
             return None
+
+# --- Classes Internas para Gerenciamento ---
+class InternalFileListManager:
+    """
+    Gerencia a lista de arquivos PDF selecionados na UI.
+
+    Responsável por exibir os arquivos, permitir reordenar e remover itens,
+    e atualizar a UI e o estado da sessão de acordo.
+    """
+    def __init__(self, page: ft.Page, gui_controls: Dict[str, ft.Control], parent_view: 'AnalyzePDFViewContent'):
+        """
+        Inicializa o gerenciador da lista de arquivos.
+
+        Args:
+            page (ft.Page): A página Flet.
+            gui_controls (Dict[str, ft.Control]): Dicionário de controles da UI da view principal.
+            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
+        """
+        self.page = page
+        self.gui_controls = gui_controls
+        self.parent_view = parent_view
+
+    def update_selected_files_display(self, files_ordered: Optional[List[Dict[str, Any]]] = None):
+        """
+        Atualiza a exibição da lista de arquivos selecionados na UI.
+
+        Args:
+            files_ordered (Optional[List[Dict[str, Any]]]): Lista opcional de dicionários representando os arquivos.
+                                                            Se None, obtém a lista da sessão.
+        """
+        list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
+        title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
+        list_view.controls.clear()
+        
+        _files = files_ordered if files_ordered is not None else self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
+ 
+        if not isinstance(_files, list): _files = []
+ 
+        if not _files:
+            title_text.value = "Nenhum arquivo carregado." # list_view.height = 0
+            self.gui_controls[CTL_FILE_LIST_PANEL].visible = False
+        else:
+            self.gui_controls[CTL_FILE_LIST_PANEL].visible = True
+            self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = True
+            for idx, file_info in enumerate(_files):
+                if not isinstance(file_info, dict):
+                    continue # Skip malformado
+                
+                file_name_display = ft.Text(
+                    value=file_info.get('name', 'Nome Indisponível'),
+                    overflow=ft.TextOverflow.ELLIPSIS, width=700, # expand=True
+                    #tooltip=file_info.get('name', 'Nome Indisponível'
+                )
+                action_buttons = ft.Row([
+                    ft.IconButton(ft.Icons.ARROW_UPWARD_ROUNDED, on_click=lambda _, i=idx: self._move_file_in_list(i, -1), disabled=(idx == 0), icon_size=18, padding=3, tooltip="Mover para Cima"),
+                    ft.IconButton(ft.Icons.ARROW_DOWNWARD_ROUNDED, on_click=lambda _, i=idx: self._move_file_in_list(i, 1), disabled=(idx == len(_files) - 1), icon_size=18, padding=3, tooltip="Mover para Baixo"),
+                    ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED, on_click=lambda _, i=idx: self._remove_file_from_list(i), icon_color=theme.COLOR_ERROR, icon_size=18, padding=3, tooltip="Remover Arquivo")
+                ], spacing=0, alignment=ft.MainAxisAlignment.START, width=110)
+                # Necessário definir width aqui devido concorrência de espaço indevido com file_name_text no ListTile
+ 
+                list_tile = ft.ListTile(title=file_name_display,
+                                        leading=ft.Icon(ft.Icons.PICTURE_AS_PDF_ROUNDED),
+                                        trailing=action_buttons,)
+                                        # visual_density=ft.VisualDensity.COMPACT,) # Torna o ListTile um pouco mais compacto
+                                        # dense=True,) # Outra opção para compactar
+                
+                # Draggable/DragTarget (simplificado, verificar documentação Flet para melhor implementação)
+                # Para este exemplo, a reordenação será via botões. Drag-and-drop pode ser complexo aqui.
+                list_view.controls.append(list_tile)
+ 
+            if len(_files) == 1:
+                title_text.value = f"Arquivo selecionado: {_files[0]['name']}"
+            else:
+                title_text.value = f"Arquivos selecionados: {_files[0]['name']} e Outros {len(_files)-1}"
+            #list_view.height = min(len(_files) * 55, 220) # Ajustar altura máxima
+        
+        # Comentado devido AssertionError: Text Control must be added to the page first
+        # if self.page:
+        #    title_text.update()
+        #    list_view.update()
+        
+        self.page.session.set(KEY_SESSION_CURRENT_BATCH_NAME, title_text.value) # Salva nome do lote
+        # A atualização dos botões será feita pela view principal
+
+    def _move_file_in_list(self, index: int, direction: int):
+        """
+        Move um arquivo na lista de arquivos selecionados.
+
+        Args:
+            index (int): O índice atual do arquivo a ser movido.
+            direction (int): A direção do movimento (-1 para cima, 1 para baixo).
+        """
+        current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
+        new_index = index + direction
+        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)):
+            return
+ 
+        def primary_move_action():
+            current_files.insert(new_index, current_files.pop(index))
+            self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
+            # Apenas reseta os resultados, a UI será atualizada pelo método de reset
+            self.parent_view._reset_processing_and_llm_results()
+            update_lock = self.page.data.get("global_update_lock")
+            with update_lock:
+                self.page.update()
+                    
+        if self.parent_view.feedback_workflow_manager:
+            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Reordenar Arquivos",
+                primary_action_callable=primary_move_action,
+            )
+        else:
+            primary_move_action()
+        
+    def _remove_file_from_list(self, index: int):
+        """
+        Remove um arquivo da lista de arquivos selecionados.
+
+        Args:
+            index (int): O índice do arquivo a ser removido.
+        """
+        current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
+        if not (0 <= index < len(current_files)):
+            return
+        
+        def primary_remove_action():
+            removed_file_info = current_files.pop(index)
+            self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
+            
+            if self.parent_view.managed_file_picker:
+                self.parent_view.managed_file_picker.clear_upload_state_for_file(removed_file_info['name'])
+            
+            self.update_selected_files_display(current_files)
+            if not current_files: # Se a lista ficou vazia
+                self.parent_view._clear_all_data_and_gui() # Limpa tudo
+            else: # Apenas reseta os resultados do processamento
+                self.parent_view._reset_processing_and_llm_results()
+            
+            update_lock = self.page.data.get("global_update_lock")
+            with update_lock:
+                self.page.update()
+
+        if self.parent_view.feedback_workflow_manager:
+            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Remover Arquivo da Lista",
+                primary_action_callable=primary_remove_action,
+            )
+        else:
+            primary_remove_action()
+
+class InternalAnalysisController:
+    """
+    Controla o fluxo de processamento de PDF e análise LLM.
+
+    Gerencia as etapas de extração de texto, pré-processamento, análise de similaridade,
+    classificação, agregação de texto e a chamada ao orquestrador de IA para análise LLM.
+    Também lida com a atualização do estado da UI e o registro de métricas.
+    """
+    def __init__(self, page: ft.Page, gui_controls: Dict[str, ft.Control], parent_view: 'AnalyzePDFViewContent'):
+        """
+        Inicializa o controlador de análise.
+
+        Args:
+            page (ft.Page): A página Flet.
+            gui_controls (Dict[str, ft.Control]): Dicionário de controles da UI da view principal.
+            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
+        """
+        self.page = page
+        self.gui_controls = gui_controls
+        self.parent_view = parent_view
+        self.pdf_analyzer = PDFDocumentAnalyzer()
+        self.firestore_client = firestore_client
+        self.user_cache = get_user_cache(self.page)
+
+    def _get_current_analysis_settings(self) -> Dict[str, Any]:
+        """
+        Busca as configurações de análise atuais da sessão.
+
+        Retorna um dicionário com as configurações, aplicando valores padrão (fallbacks)
+        se as configurações não forem encontradas ou estiverem em formato inválido.
+        Realiza a conversão de tipos para garantir a correta utilização dos valores.
+
+        Returns:
+            Dict[str, Any]: Um dicionário contendo as configurações de análise.
+        """
+        settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
+        if not settings or not isinstance(settings, dict):
+            logger.warning("Configurações de análise não encontradas na sessão ou formato inválido. Usando fallbacks.")
+            return FALLBACK_ANALYSIS_SETTINGS.copy() # Retorna uma cópia
+        
+        # Garante que os tipos numéricos estejam corretos, pois podem vir de TextFields como string
+        # Faz uma cópia para não modificar o original na sessão aqui.
+        # A normalização de tipos deve ocorrer quando os valores são lidos do drawer.
+        # Aqui, apenas garantimos que se o tipo for string e deveria ser número, tentamos converter.
+        current_settings = settings.copy()
+        try:
+            current_settings['llm_input_token_limit'] = int(current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']))
+        except (ValueError, TypeError):
+                current_settings['llm_input_token_limit'] = FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']
+        
+        try:
+            current_settings['llm_temperature'] = float(current_settings.get('llm_temperature', FALLBACK_ANALYSIS_SETTINGS['llm_temperature']))
+        except (ValueError, TypeError):
+            current_settings['llm_temperature'] = FALLBACK_ANALYSIS_SETTINGS['llm_temperature']
+        try:
+            current_settings['similarity_threshold'] = float(current_settings.get('similarity_threshold', FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']))
+        except (ValueError, TypeError):
+            current_settings['similarity_threshold'] = FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']
+        
+        return current_settings
+
+    def _update_status_callback(self, text: str, is_error: bool = False, only_txt: bool = False):
+        """
+        Callback para atualizar o texto de status na UI (executado na thread principal).
+
+        Args:
+            text (str): O texto de status a ser exibido.
+            is_error (bool): Se True, formata o texto como erro.
+            only_txt (bool): Se True, atualiza apenas o texto, sem mostrar/esconder o overlay de loading.
+        """
+        # Este callback será executado pela thread principal via page.run_thread
+        #_logger.info(f"[DEBUG] Callback UI: Atualizando {control_key} para '{text}' (Erro: {is_error})")
+        
+        txt_to_update = self.gui_controls[CTL_LLM_STATUS_INFO] # control_key = ft.Text
+ 
+        hide_loading_overlay(self.page)
+        if not only_txt:
+            show_loading_overlay(self.page, text)
+        
+        if txt_to_update.page and txt_to_update.uid:
+            txt_to_update.value = text
+            txt_to_update.color = theme.COLOR_ERROR if is_error else None
+            txt_to_update.weight = ft.FontWeight.BOLD if is_error else ft.FontWeight.NORMAL
+            txt_to_update.update()
+        
+    def _pdf_processing_thread_func(self, pdf_paths: List[str], batch_name: str, analyze_llm_after: bool, is_reanalysis: bool = False):
+        """
+        Função executada em uma thread separada para realizar o processamento de PDF.
+
+        Esta função orquestra as etapas de extração de texto, pré-processamento,
+        cálculo de embeddings, classificação de páginas por relevância e agregação de texto,
+        atualizando a UI com o progresso. Opcionalmente, pode iniciar a análise LLM em seguida.
+
+        Args:
+            pdf_paths (List[str]): Lista de caminhos para os arquivos PDF a serem processados.
+            batch_name (str): Nome do lote de arquivos, usado para identificação nos logs e UI.
+            analyze_llm_after (bool): Se True, inicia a análise LLM automaticamente após o processamento de PDF.
+            is_reanalysis (bool): Indica se esta é uma reanálise, afetando o comportamento de logging e feedback.
+        """
+        current_analysis_settings = self._get_current_analysis_settings()
+        logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
+        pdf_extractor = current_analysis_settings.get("pdf_extractor", FALLBACK_ANALYSIS_SETTINGS["pdf_extractor"])
+        provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
+        vectorization_model = current_analysis_settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
+        similarity_threshold = current_analysis_settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
+        token_limit_pref = current_analysis_settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
+ 
+        # TODO: avaliar se tornar esses parâmetros mutáveis na Gui:
+        mode_main_filter = 'get_pages_among_similars_graphs'
+        mode_filter_similar = 'bigger_content'
+        
+        if pdf_extractor == 'PdfPlumber':
+            self.pdf_analyzer.extractor = PdfPlumberExtractor()
+            logger.debug("Alterando pdf_extractor para PdfPlumber!")
+ 
+        decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
+        if decrypted_api_key:
+            logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+ 
+        try:
+            start_time = perf_counter()
+ 
+            logger.debug(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
+            self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
+ 
+            processed_files_metadata, all_indices, all_texts_to_storage, all_texts_to_loop = \
+                                self.pdf_analyzer.extract_texts_and_preprocess_files(pdf_paths)
+ 
+            processed_page_data_combined, all_global_page_keys_ordered = \
+                                self.pdf_analyzer.build_combined_page_data(processed_files_metadata, all_indices, all_texts_to_storage)
+ 
+            self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
+ 
+            ready_embeddings, tokens_embeddings = None, None
+            calculated_embedding_cost_usd = 0
+            if vectorization_model == "text-embedding-3-small":
+                if not decrypted_api_key:
+                    decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
+                    assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
+ 
+                loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
+                ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
+                                                                                     all_texts_to_loop, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
+ 
+            embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.pdf_analyzer.get_similarity_and_tfidf_score_docs(
+                                                                            all_texts_to_loop, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
+            
+            point_time = perf_counter()
+            self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
+ 
+            if tokens_embeddings:
+                self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
+                logger.debug(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
+            else:
+                if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
+                    self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
+                    logger.debug("Tokens de embedding removidos da sessão (não retornados pela análise).")
+                
+            if not processed_page_data_combined:
+                raise ValueError("Nenhum dado processável encontrado nos PDFs.")
+            
+            #pr-int('\n[DEBUG]:\n', processed_page_data_combined, '\n\n')
+            classified_data = self.pdf_analyzer.filter_and_classify_pages(processed_page_data_combined, all_global_page_keys_ordered,
+                                                                          embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined,
+                                                                          mode_main_filter, mode_filter_similar, similarity_threshold)
+            
+            relevant_ordered_indices, unintelligible_indices, count_similars = classified_data
+            count_sel, count_unint = len(relevant_ordered_indices), len(unintelligible_indices)
+ 
+            if not relevant_ordered_indices:
+                raise ValueError("Nenhuma página relevante encontrada após classificação.")
+ 
+            if perf_counter() - point_time < 1: sleep(1) # Apenas Garante visibilidade do text_progressing
+ 
+            point_time = perf_counter()
+            self.page.run_thread(self._update_status_callback, "Etapa 4/5: Filtrando páginas...")
+ 
+            aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(processed_page_data_combined, relevant_ordered_indices, token_limit_pref)
+            
+            self.user_cache = get_user_cache(self.page)
+            self.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = aggregated_info
+            self.page.session.set("has_analyzer_data", True)
+            
+            pages_agg_indices, _, tokens_antes_agg, tokens_final_agg = aggregated_info
+            count_sel_final = len(pages_agg_indices)
+            #pr-int('\n[DEBUG]:\n', pages_agg_indices, '\n\n')
+ 
+            supressed_tokens = tokens_antes_agg - tokens_final_agg
+            perc_supressed = (supressed_tokens / tokens_antes_agg * 100) if tokens_antes_agg > 0 else 0
+ 
+            total_processing_time = perf_counter() - start_time
+            
+            proc_meta_for_ui = {
+                "total_pages_processed": len(processed_page_data_combined),
+                "relevant_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(relevant_ordered_indices),
+                "count_selected_relevant": count_sel,
+                "unintelligible_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(unintelligible_indices),
+                "count_discarded_unintelligible": count_unint,
+                "count_discarded_similarity": count_similars,
+                "total_tokens_before_truncation": tokens_antes_agg,
+                "final_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(pages_agg_indices),
+                "count_selected_final": count_sel_final,
+                "final_aggregated_tokens": tokens_final_agg,
+                "supressed_tokens_percentage": perc_supressed,
+                "processing_time": format_seconds_to_min_sec(total_processing_time),
+                "calculated_embedding_cost_usd": calculated_embedding_cost_usd
+            }
+            self.page.session.set(KEY_SESSION_PROCESSING_METADATA, proc_meta_for_ui)
+            self.page.run_thread(self.parent_view._update_processing_metadata_display, proc_meta_for_ui)
+ 
+            self.parent_view._files_processed = True
+            logger.info(f"Thread: Processamento de PDF para '{batch_name}' concluído.")
+ 
+            if perf_counter() - point_time < 1: sleep(1)
+            self.page.run_thread(self._update_status_callback, "Aguardando para exibir os resultados...", False, True)
+ 
+            if analyze_llm_after:
+                self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
+                self.start_llm_analysis_only(aggregated_info[1], batch_name, from_pipeline=True, is_reanalysis=is_reanalysis) # Passa o texto agregado
+                self.page.run_thread(self._update_status_callback, "", False, True)
+            else: # Só processou, não vai para LLM agora
+                hide_loading_overlay(self.page)
+                # Se não vai para a LLM, a UI precisa ser atualizada agora com os resultados do processamento.
+                self.page.run_thread(self.parent_view._update_gui_from_state)
+                self.page.run_thread(show_snackbar, self.page, f"Conteúdo de '{batch_name}' processado. Pronto para análise LLM.", theme.COLOR_SUCCESS)
+        
+        except Exception as ex_proc:
+            logger.error(f"Thread: Erro no processamento de PDF para '{batch_name}': {ex_proc}", exc_info=True)
+            self.page.run_thread(self._update_status_callback, f"Erro ao processar PDFs: {ex_proc}", True, True)
+            self.parent_view._files_processed = False # Falhou
+        finally:
+            self.gui_controls[CTL_PROC_METADATA_PANEL].visible = True
+            self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = True
+            hide_loading_overlay(self.page)
+            # Garante que, mesmo em erro, os botões sejam reavaliados.
+            # Se a análise não prosseguir para a LLM, a atualização da UI já foi feita no try.
+            if not analyze_llm_after:
+                self.page.run_thread(self.parent_view._update_button_states)
+
+    def _get_valid_user_context(self) -> Optional[Tuple[str, str]]:
+        """
+        Verifica e renova o token se necessário, retornando um contexto de usuário válido.
+        Centraliza a lógica de verificação de token para a view.
+
+        Returns:
+            Optional[Tuple[str, str]]: Uma tupla (user_token, user_id) se a sessão for válida,
+                                       ou None se a sessão for inválida (e o logout for acionado).
+        """
+        from src.flet_ui.app import check_and_refresh_token_if_needed
+        
+        if not check_and_refresh_token_if_needed(self.page):
+            logger.error("Contexto do usuário inválido ou sessão expirada. Ação abortada.")
+            return None
+        
+        user_token = self.page.session.get("auth_id_token")
+        user_id = self.page.session.get("auth_user_id")
+
+        if not user_token or not user_id:
+            logger.error("Token ou ID do usuário ausente da sessão mesmo após verificação. Ação abortada.")
+            return None
+            
+        return user_token, user_id
     
+    def _get_data_to_log(self):
+        """
+        Coleta e retorna os dados relevantes da sessão e do cache para fins de logging e métricas.
+
+        Retorna:
+            Tuple: Uma tupla contendo:
+                - user_id (str): ID do usuário autenticado.
+                - user_token (str): Token de autenticação do usuário.
+                - filenames_uploaded (List[str]): Lista de nomes dos arquivos PDF carregados.
+                - proc_meta_session (Dict[str, Any]): Metadados do processamento de PDF.
+                - tokens_embeddings_session (Tuple): Informações sobre tokens de embeddings.
+                - llm_meta_session (Dict[str, Any]): Metadados da análise LLM.
+                - current_settings (Dict[str, Any]): Configurações de análise atuais.
+                - default_settings (Dict[str, Any]): Configurações padrão da nuvem.
+                - llm_response_obj (formatted_initial_analysis): Objeto de resposta estruturada da LLM.
+                - fields_to_log (List[str]): Lista de campos da resposta LLM a serem logados.
+        """
+        context = self._get_valid_user_context()
+        if not context:
+            logger.error("Não foi possível obter contexto de usuário válido para coletar dados de log.")
+            # Retorna uma tupla com Nones para evitar que o chamador quebre
+            return (None, None, [], {}, None, {}, {}, {}, None, [])
+            
+        user_token, user_id = context
+    
+        llm_meta_session = self.page.session.get(KEY_SESSION_LLM_METADATA) or {}
+
+        if llm_meta_session: # Salva no objeto que será logado
+            event_timestamp_for_llm_analysis = datetime.now().isoformat() # Timestamp desta análise
+            llm_meta_session["event_timestamp_iso"] = event_timestamp_for_llm_analysis
+            # Também salva na sessão para que o save_feedback_data_now possa pegar
+            self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_session)
+
+        files_ordered_session = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
+        filenames_uploaded = [f.get('name', 'unknown_file') for f in files_ordered_session if isinstance(f, dict)]
+        
+        proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {}
+        tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
+        current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
+        default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
+        
+        llm_response_obj = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
+
+        if llm_response_obj and isinstance(llm_response_obj, formatted_initial_analysis):
+            fields_to_log = [
+                "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
+                "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
+                "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re",
+                "materia_especial", "destinacao"
+            ]
+        else:
+            fields_to_log = []
+        
+        return (user_id, user_token, filenames_uploaded, proc_meta_session, tokens_embeddings_session, llm_meta_session,
+            current_settings, default_settings, llm_response_obj, fields_to_log)
+    
+    def _llm_analysis_thread_func(self, aggregated_text: str, batch_name: str, is_reanalysis: bool = False):
+        """
+        Função executada em uma thread separada para realizar a análise LLM.
+
+        Orquestra a chamada ao modelo de linguagem, gerencia o uso de chaves de API,
+        atualiza o estado da UI com os resultados da análise e registra métricas.
+
+        Args:
+            aggregated_text (str): O texto agregado das páginas relevantes do PDF para análise.
+            batch_name (str): Nome do lote de arquivos, usado para identificação nos logs e UI.
+            is_reanalysis (bool): Indica se esta é uma reanálise, afetando o comportamento de logging e feedback.
+        """
+        import src.core.ai_orchestrator as ai_orchestrator
+ 
+        current_analysis_settings = self._get_current_analysis_settings()
+        logger.debug(f"Usando configurações de análise para LLM: {current_analysis_settings}")
+        provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
+        model_name = current_analysis_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
+        temperature = current_analysis_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
+        mode_prompt = current_analysis_settings.get("prompt_structure", FALLBACK_ANALYSIS_SETTINGS["prompt_structure"])
+  
+        if mode_prompt == "sequential_prompts":
+            key_prompt_group = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
+        else: # if mode_prompt == "prompt_unico":
+            key_prompt_group = "PROMPT_UNICO_for_INITIAL_ANALYSIS"
+
+        self.user_cache = get_user_cache(self.page)
+        loaded_prompts = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL)
+        if not loaded_prompts:
+            logger.error("Prompts ausentes para a thread de análise!")
+            self.page.run_thread(self.parent_view._update_gui_from_state)
+            self.page.run_thread(self._update_status_callback, f"Erro crítico: Não foi possível carregar os prompts de análise.", True, True)
+            hide_loading_overlay(self.page)
+            return # Aborta a execução da thread
+
+        try:
+            logger.debug(f"Thread: Iniciando análise LLM para '{batch_name}'...")
+            self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
+ 
+            decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
+            if decrypted_api_key:
+                logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+            else:
+                decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
+                assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
+ 
+            loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
+ 
+            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(key_prompt_group, loaded_prompts, aggregated_text,
+                                                                                                 provider, model_name, temperature,
+                                                                                                 decrypted_api_key, loaded_llm_providers)
+ 
+            if llm_response_data:
+                # Se já existe uma llm_response na sessão é porque é caso de reanálise (usuário clicou em 'Solicitar Análise' novamente).
+                # Registrar essa informação para o feedback_metric
+                self.page.session.set(KEY_SESSION_LLM_REANALYSIS, is_reanalysis)
+                
+                self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = llm_response_data
+                self.page.session.set("has_llm_response", True)
+                # A flag 'is_new_llm_response' será passada para a sessão para ser usada por _update_ui_from_state
+                self.page.session.set("is_new_llm_response_flag", True)
+                
+                llm_meta_for_gui = token_usage_info if token_usage_info else {}
+                llm_meta_for_gui.update({
+                    "llm_provider_used": provider.upper(),
+                    "llm_model_used": model_name.upper(),
+                    "processing_time": format_seconds_to_min_sec(processing_time_llm)
+                })
+                
+                self.parent_view._analysis_requested = True
+                self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_for_gui)
+                self.page.run_thread(self.parent_view._update_gui_from_state)
+                self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
+                self.page.run_thread(self._update_status_callback,  "", False, True)
+ 
+                data_to_log = self._get_data_to_log()
+                if self.firestore_client.save_analysis_metrics(*data_to_log):
+                    #Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
+                    self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
+ 
+            else:
+                self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
+                self.page.run_thread(self._update_status_callback,  "Análise LLM: Falha ao obter resposta da IA.", True, True)
+                self.page.run_thread(show_snackbar, self.page, "Erro na consulta à LLM.", theme.COLOR_ERROR)
+                self.parent_view._analysis_requested = False
+        except Exception as ex_llm:
+            logger.error(f"Thread: Erro na análise LLM para '{batch_name}': {ex_llm}", exc_info=True)
+            self.parent_view._analysis_requested = False
+            self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
+            self.page.run_thread(self._update_status_callback,  f"Erro na consulta à LLM: {ex_llm}", True, True)
+        finally:
+            self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
+            self.gui_controls[CTL_LLM_METADATA_PANEL].controls[0].expanded = True
+            hide_loading_overlay(self.page)
+            # A atualização da GUI já foi tratada dentro do try/except, não precisa aqui.
+ 
+    def start_pdf_processing_only(self, pdf_paths: List[str], batch_name: str):
+        """
+        Inicia o processo de extração e pré-processamento de PDF em uma nova thread.
+
+        Args:
+            pdf_paths (List[str]): Lista de caminhos para os arquivos PDF.
+            batch_name (str): Nome do lote de arquivos.
+        """
+        show_loading_overlay(self.page, "Iniciando processamento...")
+        thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, False), daemon=True)
+        thread.start()
+
+    def start_llm_analysis_only(self, aggregated_text: str, batch_name: str, from_pipeline:bool = False, is_reanalysis: bool = False):
+        """
+        Inicia a análise LLM em uma nova thread.
+
+        Args:
+            aggregated_text (str): O texto agregado para análise.
+            batch_name (str): Nome do lote de arquivos.
+            from_pipeline (bool): Indica se a chamada veio do pipeline completo (True) ou diretamente (False).
+        """
+        if not from_pipeline: # Se chamado diretamente (não pelo pipeline do fast_forward)
+            ...
+        # A thread _llm_analysis_thread_func já lida com hide_loading_overlay no finally
+        thread = threading.Thread(target=self._llm_analysis_thread_func, args=(aggregated_text, batch_name, is_reanalysis), daemon=True)
+        thread.start()
+    
+    def start_full_analysis_pipeline(self, pdf_paths: List[str], batch_name: str, is_reanalysis: bool = False):
+        """
+        Inicia o pipeline completo: processamento de PDF seguido por análise LLM.
+
+        Args:
+            pdf_paths (List[str]): Lista de caminhos para os arquivos PDF.
+            batch_name (str): Nome do lote de arquivos.
+            is_reanalysis (bool): Indica se esta é uma reanálise.
+        """
+        show_loading_overlay(self.page, "Iniciando processamento e análise...")
+        thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, True, is_reanalysis), daemon=True)
+        thread.start()
+
+class InternalExportManager:
+    """
+    Gerencia as operações de exportação dos resultados da análise para DOCX.
+
+    Lida com a interação com o FilePicker para salvar arquivos e utiliza o DocxExporter
+    para gerar os documentos nos formatos simples ou usando templates.
+    """
+    def __init__(self, parent_view: AnalyzePDFViewContent):
+        """
+        Inicializa o gerenciador de exportação.
+
+        Args:
+            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
+            docx_exporter (DocxExporter): Instância do DocxExporter para gerar os arquivos.
+            global_file_picker (Optional[ft.FilePicker]): Instância global do FilePicker para operações de salvar.
+        """
+        self.parent_view = parent_view
+        self.page = parent_view.page
+        self.docx_exporter = DocxExporter()
+
+    def _get_default_filename_base(self) -> str:
+        """
+        Gera um nome de arquivo base padrão para exportação, derivado do nome do lote atual.
+
+        Returns:
+            str: O nome de arquivo base limpo e formatado.
+        """
+        base = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "analise_documento"
+        return base.replace("Arquivos selecionados: ", "").replace("Arquivo selecionado: ", "").split(" e Outros")[0].replace(".pdf", "")
+
+    def start_export(self, operation_type: ExportOperation, data_to_export: formatted_initial_analysis, template_path: Optional[str] = None):
+        """
+        Inicia o processo de exportação dos resultados da análise para um arquivo DOCX.
+
+        Gerencia a lógica de exportação para o modo web (download) e desktop (salvar como),
+        utilizando o DocxExporter para a geração do documento.
+
+        Args:
+            operation_type (ExportOperation): O tipo de exportação (simples ou com template).
+            data_to_export (formatted_initial_analysis): Os dados estruturados da análise a serem exportados.
+            template_path (Optional[str]): O caminho para o arquivo de template DOCX (obrigatório para exportação com template).
+        """
+        logger.debug(f"ExportManager: start_export. Op: {operation_type}, Web: {self.page.web}")
+
+        if not data_to_export: # Verificação de segurança
+            logger.error("ExportManager (start_export): Dados para exportação ausentes ou inválidos.")
+            show_snackbar(self.page, "Erro: Dados para exportação inválidos.", theme.COLOR_ERROR)
+            return
+        
+        default_filename_base = self._get_default_filename_base()
+        if self.page.web:
+            # --- LÓGICA PARA MODO WEB ---
+            show_loading_overlay(self.page, "Preparando arquivo para download...")
+            temp_server_filename = ""
+            export_success_on_server = False
+            missing_keys_on_server: List[str] = []
+            server_save_path = ""
+            
+            try:
+                temp_exports_path = os.path.join(ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR)
+                os.makedirs(temp_exports_path, exist_ok=True)
+            except OSError as e:
+                logger.error(f"EXPORT_MANAGER (Web): Falha ao criar diretório de exportações temporárias '{temp_exports_path}': {e}")
+                hide_loading_overlay(self.page)
+                show_snackbar(self.page, "Erro ao preparar diretório para download.", theme.COLOR_ERROR)
+                return
+            
+            if operation_type == ExportOperation.SIMPLE_DOCX:
+                temp_server_filename = f"{default_filename_base}_simples_{int(time())}.docx"
+                server_save_path = os.path.join(temp_exports_path, temp_server_filename)
+                export_success_on_server = self.docx_exporter.export_simple_docx(data_to_export, server_save_path)
+            elif operation_type == ExportOperation.TEMPLATE_DOCX and template_path:
+                template_name = os.path.basename(template_path).replace(".docx","").replace(" ", "_").lower()
+                temp_server_filename = f"{default_filename_base}_{template_name}_{int(time())}.docx"
+                server_save_path = os.path.join(temp_exports_path, temp_server_filename)
+                export_success_on_server, _ = self.docx_exporter.export_from_template_docx(data_to_export, template_path, server_save_path)
+            else: 
+                logger.error(f"EXPORT_MANAGER (Web): Tipo de operação desconhecido ou template_path ausente: {operation_type}")
+                hide_loading_overlay(self.page)
+                show_snackbar(self.page, "Erro: Tipo de exportação inválido.", theme.COLOR_ERROR)
+                return
+            
+            hide_loading_overlay(self.page)
+            if export_success_on_server and temp_server_filename:
+                download_url = f"/{WEB_TEMP_EXPORTS_SUBDIR}/{temp_server_filename}"
+                self.page.launch_url(download_url, web_window_name="_blank") # or web_window_name="_self"
+                show_snackbar(self.page, f"Download de '{temp_server_filename}' iniciado.", theme.COLOR_SUCCESS)
+            else: 
+                logger.error(f"ExportManager (Web): Falha ao gerar DOCX: {server_save_path}")
+                show_snackbar(self.page, "Falha ao gerar arquivo para download.", theme.COLOR_ERROR)
+                    
+        else: # Desktop
+            raise ValueError("Método não customizado para desktop!")
+
+    def handle_add_new_template_click(self):
+        """
+        Handler para o clique no item 'Adicionar Novo Template'.
+
+        Inicia o processo de seleção de um novo arquivo de template DOCX,
+        diferenciando o comportamento para o modo web (upload) e desktop (cópia local).
+        """
+        logger.info("Botão 'Adicionar Novo Template' clicado.")
+        
+        # Lista de placeholders que o usuário pode usar no template
+        placeholders_disponiveis = [
+            "<descricao_geral>", "<tipo_documento_origem>", "<orgao_origem>",
+            "<uf_origem>", "<municipio_origem>", "<resumo_fato>", "<uf_fato>",
+            "<municipio_fato>", "<tipo_local>", "<valor_apuracao>", "<tipificacao_penal>",
+            "<materia_especial>", "<area_atribuicao>", "<destinacao>", "<tipo_a_autuar>",
+            "<assunto_re>", "<pessoas_envolvidas>", "<linha_do_tempo>", "<observacoes>"
+        ]
+        placeholders_text = "\n".join([f"- {ph}" for ph in placeholders_disponiveis])
+        
+        dialog_content = ft.Column(
+            [
+                ft.Text("Para criar um template .docx, insira os seguintes placeholders no seu documento onde você deseja que os dados da análise sejam inseridos. \n"
+                        "A aplicação irá substituí-los pelos valores correspondentes.", selectable=True),
+                ft.Divider(),
+                ft.Text("Placeholders Disponíveis:", weight=ft.FontWeight.BOLD),
+                ft.TextField(
+                    value=placeholders_text,
+                    multiline=True,
+                    read_only=True,
+                    border=ft.InputBorder.NONE,
+                    height=250 # Ajuste a altura conforme necessário
+                )
+            ],
+            tight=True,
+            scroll=ft.ScrollMode.ALWAYS
+        )
+
+        def proceed_to_upload(e=None):
+            # Esta função é chamada quando o usuário clica em "Continuar"
+
+            if not hasattr(self, 'template_uploader'):
+                self.template_uploader = ManagedFilePicker(
+                    page=self.page,
+                    upload_dir=UPLOAD_TEMP_DIR,
+                    allowed_extensions=["docx"],
+                )
+            self.template_uploader.pick_files(
+                dialog_title="Selecionar Template .docx",
+                allow_multiple=False,
+                on_batch_complete=self.on_template_file_uploaded
+            )
+            
+        show_confirmation_dialog(
+            page=self.page,
+            title="Como Adicionar um Novo Template",
+            content=dialog_content,
+            confirm_text="Continuar para Upload",
+            cancel_text="Cancelar",
+            on_confirm=proceed_to_upload
+        )
+
+    def on_template_file_uploaded(self, batch_results: List[Dict[str, Any]]):
+        """Callback chamado quando o upload do template (web ou desktop) é concluído."""
+        hide_loading_overlay(self.page)
+        if not batch_results or not batch_results[0].get("success"):
+            error_msg = batch_results[0].get("path_or_message", "Erro desconhecido no upload.") if batch_results else "Upload cancelado."
+            show_snackbar(self.page, f"Falha ao carregar template: {error_msg}", theme.COLOR_ERROR)
+            return
+        
+        uploaded_file = batch_results[0]
+        source_path = uploaded_file["path_or_message"]
+        file_name = uploaded_file["name"]
+        
+        # O source_path já é o caminho final (seja no desktop ou na pasta de uploads web)
+        self.copy_template_to_assets(source_path, file_name, is_web_upload_temp=self.page.web)
+
+
+    def copy_template_to_assets(self, source_path: str, original_filename: str, is_web_upload_temp: bool = False):
+        """
+        Copia um arquivo de template para o diretório de assets.
+
+        Args:
+            source_path (str): O caminho de origem do arquivo.
+            original_filename (str): O nome original do arquivo.
+            is_web_upload_temp (bool): Indica se o arquivo de origem é um temporário de upload web.
+        """
+        templates_dir = os.path.join(ASSETS_DIR, TEMPLATES_DOCX_SUBDIR)
+        os.makedirs(templates_dir, exist_ok=True)
+        destination_path = os.path.join(templates_dir, original_filename)
+        try:
+            shutil.copy2(source_path, destination_path)
+            show_snackbar(self.page, f"Template '{original_filename}' adicionado!", theme.COLOR_SUCCESS)
+            self.parent_view._update_export_button_menu() # Acessa via parent_view
+            if self.page: self.page.update()
+        except Exception as ex:
+            logger.error(f"Erro ao copiar template '{original_filename}': {ex}", exc_info=True)
+            show_snackbar(self.page, f"Falha: {ex}", theme.COLOR_ERROR)
+        finally:
+            if is_web_upload_temp and source_path.startswith(os.path.abspath(UPLOAD_TEMP_DIR)):
+                try:
+                    os.remove(source_path)
+                except OSError as er:
+                    logger.warning(f"Não remover temp template '{source_path}': {er}")
+ 
+    def _trigger_feedback_and_export(self, export_operation: ExportOperation, template_path: Optional[str]):
+        """
+        Dispara o fluxo de feedback do usuário antes de iniciar a exportação.
+
+        Valida os dados do formulário para exportação e, se válidos, solicita feedback
+        ao usuário antes de chamar a função de exportação primária.
+
+        Args:
+            export_operation (ExportOperation): O tipo de exportação a ser realizada.
+            template_path (Optional[str]): O caminho para o arquivo de template DOCX (se aplicável).
+        """
+        logger.debug(f"ExportManager: Disparando diálogo de feedback antes da exportação (Op: {export_operation}).")
+ 
+        llm_display_component = self.parent_view.gui_controls.get(CTL_LLM_STRUCTURED_RESULT_DISPLAY)
+        if not isinstance(llm_display_component, LLMStructuredResultDisplay):
+            logger.error("ExportManager: LLMStructuredResultDisplay não encontrado.")
+            show_snackbar(self.page, "Erro interno: Display de resultados não operacional.", theme.COLOR_ERROR)
+            return
+ 
+        # Garante que os dados da UI sejam validados E obtidos.
+        # A validação para exportação acontece aqui, antes do diálogo de feedback.
+        data_to_export_or_errors = llm_display_component.get_current_form_data(validate_for_export=True)
+ 
+        if isinstance(data_to_export_or_errors, list):
+            first_error_tuple = data_to_export_or_errors[0]
+            if first_error_tuple[0].startswith("pydantic_validation_error") or first_error_tuple[0].startswith("internal_form_data_error"):
+                error_msg_detail = "Verifique os campos e tente novamente." if "pydantic" in first_error_tuple[0] else "Tente recarregar os dados."
+                show_snackbar(self.page, f"Erro de validação nos dados do formulário. {error_msg_detail}", theme.COLOR_ERROR, duration=5000)
+                return
+            
+            error_messages = []
+            first_invalid_ctrl: Optional[ft.Control] = None
+            for field_name, control_instance in data_to_export_or_errors:
+                friendly_field_name = field_name.replace("_", " ").title()
+                error_messages.append(f"- {friendly_field_name}")
+                if control_instance and not first_invalid_ctrl:
+                    first_invalid_ctrl = control_instance
+ 
+            if error_messages:
+                dialog_content_controls_list = [ft.Text("Os seguintes campos obrigatórios precisam ser preenchidos antes da exportação:")]
+                for msg_item in error_messages:
+                    dialog_content_controls_list.append(ft.Text(msg_item))
+                show_confirmation_dialog(
+                    page=self.page, title="Campos Obrigatórios Pendentes",
+                    content=ft.Column(dialog_content_controls_list, tight=True, spacing=5),
+                    confirm_text="OK", cancel_text=None,
+                    on_confirm= lambda: first_invalid_ctrl.focus() if first_invalid_ctrl and hasattr(first_invalid_ctrl, 'focus') else None)
+                return
+            
+        elif not data_to_export_or_errors:
+            show_snackbar(self.page, "Dados de análise inválidos.", theme.COLOR_ERROR)
+            return
+ 
+        # Se chegou aqui, data_to_export_or_errors é um objeto FormatAnaliseInicial válido
+        current_data_for_export = data_to_export_or_errors
+ 
+        def primary_export_action():
+            self.start_export(export_operation, current_data_for_export, template_path)
+        
+        # `feedback_workflow_manager` é acessado via `self.parent_view`
+        if self.parent_view.feedback_workflow_manager:
+            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Exportar Análise",
+                primary_action_callable=primary_export_action,
+            )
+        else: # Fallback se o manager não estiver pronto
+            primary_export_action()
+ 
+    def handle_export_selected(self, e: ft.ControlEvent):
+        """
+        Handler para a seleção de um item no menu do botão de Exportar.
+
+        Args:
+            e (ft.ControlEvent): O evento do controle.
+        """
+        logger.debug(f"ExportManager: Item de exportação selecionado - Data: {e.control.data}")
+        selected_action_data = e.control.data
+                   
+        operation: Optional[ExportOperation] = None
+        template_p: Optional[str] = None
+ 
+        if selected_action_data == "export_simple_docx":
+            operation = ExportOperation.SIMPLE_DOCX
+        elif selected_action_data and selected_action_data.startswith("export_template_"):
+            operation = ExportOperation.TEMPLATE_DOCX
+            template_p = selected_action_data[len("export_template_"):]
+        elif selected_action_data == "manage_templates":
+            self.handle_add_new_template_click()
+            return
+        else:
+            logger.warning(f"Ação de exportação desconhecida: {selected_action_data}")
+            return
+ 
+        if not operation: # Se a operação não foi definida (ex: manage_templates já retornou)
+            return
+            
+        # A validação e obtenção dos dados, bem como o disparo do diálogo de feedback,
+        # são agora responsabilidade de _trigger_feedback_and_export.
+        # Se a validação em _trigger_feedback_and_export falhar (get_current_form_data retornar lista de erros),
+        # a exportação não prosseguirá.
+        self._trigger_feedback_and_export(operation, template_p) # Passa template_p
+
 class FeedbackDialog(ft.AlertDialog):
     """
     Diálogo para coletar feedback do usuário sobre a precisão da análise da LLM.
@@ -3439,6 +3240,70 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     return retorno
 
 # Funções acessórias:
+
+def load_prompts_from_firestore(page: ft.Page):
+    """
+    Carrega os componentes base de prompts (ALL_lists, ALL_prompts) do Firestore,
+    constrói os pipelines de prompts finais e os armazena no cache do servidor.
+    """
+    logger.debug("Carregando componentes base de prompt...")
+    user_token = page.session.get("auth_id_token")
+    user_id = page.session.get("auth_user_id")
+    user_cache = get_user_cache(page)
+
+    prompts_path = os.path.join(ASSETS_DIR, 'dict_prompts.json')
+
+    loaded_components = None
+
+    if user_token:
+        prompts_doc_path = f"{PROMPTS_COLLECTION}/{PROMPTS_DOCUMENT_ID}"
+        try:
+            response = firestore_client._make_firestore_request("GET", user_token, prompts_doc_path)
+            if response.status_code == 200:
+                prompts_data = response.json()
+                fields = prompts_data.get("fields", {})
+                if fields:
+                    loaded_components = {k: _from_firestore_value(v) for k, v in fields.items()}
+                    logger.debug("Componentes base de prompt carregados com sucesso do Firestore.")
+                    # Salva uma cópia local ao baixar com sucesso
+                    with open(prompts_path, 'w', encoding='utf-8') as f:
+                        json.dump(loaded_components, f, ensure_ascii=False, indent=4)
+                        logger.debug(f"Cópia local dos prompts salva em: {prompts_path}")
+        except Exception as e:
+            logger.error(f"Exceção ao carregar componentes de prompts do Firestore: {e}", exc_info=True)
+
+    # É esperado trabalhar somente com prompts baixados ou versão local em assets; 
+    # prompts hardocoded em prompts.py serão descontinuados
+    if not loaded_components: 
+        if os.path.exists(prompts_path):
+            with open(prompts_path, 'r', encoding='utf-8') as f:
+                loaded_components = json.load(f)
+                logger.debug("Fallback: Componentes de prompts carregados localmente.")
+    
+    if not loaded_components:
+        msg_erro = "Nenhum componente de prompt carregado localmente."
+        logger.critical(msg_erro)
+        raise Exception(msg_erro)
+
+    user_cache = get_user_cache(page)
+    # Agora, construa os prompts finais usando os componentes carregados (do Firestore ou fallback)
+    try:
+        # Passa os componentes carregados para a função de construção
+        final_prompts, prompts_dict = get_prompts_for_initial_analysis(
+            loaded_components["ALL_lists"],
+            loaded_components["ALL_prompts"]
+        )
+        # Armazena o resultado final no cache do servidor
+        user_cache[KEY_SESSION_LIST_TO_PROMPTS] = loaded_components["ALL_lists"]
+        user_cache[KEY_SESSION_PROMPTS_DICT]    = prompts_dict
+        user_cache[KEY_SESSION_PROMPTS_FINAL]   = final_prompts
+        logger.info("Pipelines de prompts finais construídos e armazenados no cache do servidor.")
+    except Exception as e:
+        logger.error(f"Falha ao construir pipelines de prompts finais: {e}", exc_info=True)
+        # Em caso de erro, armazena um dicionário vazio para evitar falhas posteriores
+        user_cache[KEY_SESSION_LIST_TO_PROMPTS] = {}
+        user_cache[KEY_SESSION_PROMPTS_DICT]    = {}
+        user_cache[KEY_SESSION_PROMPTS_FINAL]   = {}
 
 def get_api_key_in_firestore(page: ft.Page, provider: str, firestore_client: FirebaseClientFirestore) -> Optional[str]:
     """

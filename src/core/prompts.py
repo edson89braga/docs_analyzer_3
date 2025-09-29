@@ -67,13 +67,14 @@ def get_prompts_for_initial_analysis(all_lists_dict, all_prompts_dict):
     PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS = [[replace_values_by_lists(all_prompts_dict[dict_value], all_lists_dict) 
                                                     for dict_value in prompt] for prompt in PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS]
 
+    return {'PROMPT_UNICO_for_INITIAL_ANALYSIS': PROMPT_UNICO_for_INITIAL_ANALYSIS}, all_prompts_dict
+    
+    # Descontinuado, por ora, o prompt_segmentado.
     prompts = {
         'PROMPT_UNICO_for_INITIAL_ANALYSIS': PROMPT_UNICO_for_INITIAL_ANALYSIS,
         'prompt_inicial_para_cache': prompt_inicial_para_cache,
         'PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS': PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS
-    }
-
-    #all_prompts_dict = {k: replace_values_by_lists(v, all_lists_dict)  for k, v in all_prompts_dict.items()}
+    }   
     return prompts, all_prompts_dict
 
 ### FORMATOS das saídas estruturadas:
