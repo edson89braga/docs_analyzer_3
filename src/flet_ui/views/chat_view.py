@@ -358,6 +358,261 @@ class ChatViewContent(ft.Column):
                     ft.PopupMenuItem(text="Retomar daqui", icon=ft.Icons.RESTART_ALT, data="resume", on_click=lambda e, mid=bubble.data["id"]: self._handle_message_action(e, mid))
                 )
 
+    # --- Handlers e Lógica de Negócio ---
+
+    def _scroll_to_last_message(self):
+        if self.chat_history_view.page:
+            self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT)
+
+    def _handle_send_message(self, e: ft.ControlEvent):
+        if self.is_processing_response: 
+            return
+        
+        user_text = self.user_input_field.value # .strip()
+        if not user_text:
+            return
+        
+        document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
+
+        if not document_context:
+            show_snackbar(self.page, "Aguarde a extração de texto ser concluída ou carregue um arquivo.", color=theme.COLOR_WARNING)
+            self.page.run_thread(lambda: self._set_processing_state(False))
+            return
+        
+        history_for_api = [ # Antes de adicionar a mensagem do usuário e a thinking message;
+            {"role": "assistant" if msg["author"] == "IA" else "user", 
+            "content": msg["text"]}
+            for msg in [c.data for c in self.chat_history_view.controls] if msg.get("author") in ["User", "IA"]
+        ]
+        
+        self._set_processing_state(True, clear_input=True)
+        user_message = {"id": time.time(), "author": "User", "text": user_text}
+        self._add_message_to_view(user_message)
+        logger.info('[DEBUG] Enviando mensagem do usuário ao Chat...')
+        self._scroll_to_last_message()
+
+        thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
+        self._add_message_to_view(thinking_message_data)
+        self._scroll_to_last_message()
+
+        # Inicia a geração da resposta da IA em uma thread, passando o histórico já preparado
+        threading.Thread(target=self._handle_ai_response, args=(document_context, history_for_api, user_text), daemon=True).start()
+
+    def _handle_ai_response(self, document_context: str, history_for_api: List[Dict[str, str]], user_question: str):
+        """
+        Gerencia a chamada ao orquestrador e o streaming da resposta para a UI.
+        """       
+        # Prepara parâmetros para a IA
+        settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
+        api_key = self.page.session.get(f"decrypted_api_key_{settings.get('llm_provider', DEFAULT_LLM_PROVIDER)}") 
+        
+        if not api_key:
+            error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
+            logger.error(error_msg)
+            self.page.run_thread(lambda: self._update_last_message_text(error_msg, append=False))
+            self.page.run_thread(lambda: self._set_processing_state(False))
+            return
+        
+        try:
+            model_name = settings.get('llm_model', DEFAULT_LLM_MODEL) 
+            response_generator = self.orchestrator.generate_response(
+                api_key=api_key,
+                model_name=model_name,
+                document_context=document_context,
+                instructions=self._get_active_system_prompt(),
+                history=history_for_api,
+                user_question=user_question,
+                loaded_llm_providers=self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or [],
+                temperature=settings.get('llm_temperature', DEFAULT_TEMPERATURE),
+                reasoning_mode=settings.get('reasoning_effort'),
+                verbosity_level=settings.get('verbosity_level')
+            )
+
+            for response_part in response_generator:
+                if response_part["type"] == "chunk":
+                    self.page.run_thread(lambda chunk=response_part["content"]: self._update_last_message_text(chunk, append=True))
+                    logger.info(f"[DEBUG] Chunk Msg LLM by model {model_name}: {response_part['content'][:160]}...")
+                elif response_part["type"] == "final_metrics":
+                    self.page.run_thread(lambda data=response_part["data"]: self._update_metrics_display(data, append=True))
+                elif response_part["type"] == "error":
+                    error_text = f"**Erro:** {response_part['content']}"
+                    self.page.run_thread(lambda: self._update_last_message_text(error_text, append=False))
+                    break
+        finally:
+            self.page.run_thread(lambda: self._set_processing_state(False))
+            self.page.run_thread(lambda: self._scroll_to_last_message())
+
+    def _set_processing_state(self, is_processing: bool, clear_input: bool = False):
+        if clear_input:
+            self.user_input_field.value = ""
+        
+        self.is_processing_response     = is_processing
+        self.user_input_field.disabled  = is_processing
+        self.send_button.disabled       = is_processing
+        self.user_input_field.update()
+        self.send_button.update()
+        if not is_processing:
+            self.user_input_field.focus()
+
+    def _get_active_system_prompt(self) -> str:
+        """
+        Retorna o texto do prompt de sistema ativo lendo diretamente da sessão.
+        A responsabilidade de carregar os prompts (do Firestore ou fallback)
+        é do ChatSettingsDrawer.
+        """
+        from src.flet_ui.settings_drawer import DEFAULT_PROMPTS
+        DEFAULT_KEY = "flexivel"
+
+        active_key = self.page.session.get(KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY) or DEFAULT_KEY
+
+        prompt_key_map = {
+            "estrito": KEY_SESSION_CHAT_PROMPT_STRICT,
+            "flexivel": KEY_SESSION_CHAT_PROMPT_FLEXIBLE,
+            "custom": KEY_SESSION_CHAT_PROMPT_CUSTOM,
+        }
+        
+        session_key = prompt_key_map.get(active_key)
+        if session_key:
+            instructions_in_session = self.page.session.get(session_key)
+            instructions_hardcoded = DEFAULT_PROMPTS.get(active_key, "")
+            
+            if instructions_in_session:
+                logger.info(f"Instruction_Prompt obtido da sessão: {instructions_in_session[:60]}...")
+            elif instructions_hardcoded:
+                logger.warning(f"Instruction_Prompt não encontrado na sessão. Utilizando Default_Prompt hardcoded: {instructions_hardcoded[:60]}...")
+            
+            return instructions_in_session or instructions_hardcoded
+            # TODO: if active_key=="custom" and not session.get -> buscar do sqlite local
+        
+        # Fallback final se a chave for desconhecida
+        logger.warning(f"Instruction_Prompt sem chave mapeada! Utilizando fallback hardcoded: {DEFAULT_PROMPTS[DEFAULT_KEY][:60]}...")
+        return DEFAULT_PROMPTS[DEFAULT_KEY]
+
+    def _handle_message_action(self, e: ft.ControlEvent, message_id: float):
+        """Handler central para ações do PopupMenuButton da mensagem."""
+        action = e.control.data
+        # all_messages_data = [c.data for c in self.chat_history_view.controls]
+        # message_text = next((msg["text"] for msg in reversed(all_messages_data) if msg.get('if') == message_id), "")
+        message_text = next((c.data["text"] for c in self.chat_history_view.controls if c.data.get('id') == message_id), "")
+
+        if action == "copy": self.page.set_clipboard(message_text)
+        elif action == "edit": self._handle_edit_message(message_id)
+        elif action == "delete": self._handle_delete_message(message_id)
+        elif action == "resume": self._handle_resume_from(message_id)
+        elif action == "rerun": self._handle_rerun(message_id)
+
+    def _handle_delete_message(self, message_id: float):
+        self.chat_history_view.controls = [c for c in self.chat_history_view.controls if c.data["id"] != message_id]
+        self._update_message_actions()
+        self.chat_history_view.update()
+        self._save_state_to_session()
+
+    def _handle_edit_message(self, message_id: float):
+        self.editing_message_id = message_id
+        self._rebuild_chat_display()
+
+    def _handle_save_edit(self, message_id: float, new_text: str):
+        for control in self.chat_history_view.controls:
+            if control.data["id"] == message_id:
+                control.data["text"] = new_text
+                break
+        self.editing_message_id = None
+        self._rebuild_chat_display()
+        self._save_state_to_session()
+
+    def _handle_cancel_edit(self, message_id: float):
+        self.editing_message_id = None
+        self._rebuild_chat_display()
+
+    def _handle_resume_from(self, message_id: float):
+        index = next((i for i, c in enumerate(self.chat_history_view.controls) if c.data["id"] == message_id), -1)
+        if index != -1:
+            self.chat_history_view.controls = self.chat_history_view.controls[:index + 1]
+            self._update_message_actions() # Apenas atualiza as ações, não precisa reconstruir
+            self._save_state_to_session()
+            self.page.run_thread(lambda: self._scroll_to_last_message())
+            
+    def _handle_rerun(self, message_id: float):
+        rerun_index = next((i for i, c in enumerate(self.chat_history_view.controls) if c.data.get("id") == message_id), -1)
+        if rerun_index == -1:
+            logger.error(f"Não foi possível encontrar a mensagem com id {message_id} para regenerar.")
+            return        
+        
+        rerun_control = self.chat_history_view.controls[rerun_index]
+        author = rerun_control.data.get("author")
+
+        if author == "IA":
+            # Caso 1: Regenerando uma resposta da IA
+            if rerun_index == 0: return # Não pode regenerar a primeira mensagem se for da IA
+            user_question = self.chat_history_view.controls[rerun_index - 1].data["text"]
+            history_controls = self.chat_history_view.controls[:rerun_index - 1]
+            self.chat_history_view.controls.pop(rerun_index) # Remove a resposta antiga da IA
+
+        elif author == "User":
+            # Caso 2: Gerando resposta para a última mensagem do usuário (após "Retomar daqui")
+            user_question = rerun_control.data["text"]
+            history_controls = self.chat_history_view.controls[:rerun_index]
+        else:
+            return # Não faz nada se a mensagem não for do usuário ou da IA
+
+        self._set_processing_state(True, clear_input=False)
+
+        # Prepara o histórico para a API        
+        history_for_api = [
+            {"role": "assistant" if c.data["author"] == "IA" else "user", "content": c.data["text"]}
+            for c in history_controls if c.data.get("author") in ["User", "IA"]
+        ]
+
+        thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
+        self._add_message_to_view(thinking_message_data)
+
+        document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
+        if not document_context:
+            show_snackbar(self.page, "Contexto do documento não encontrado para regenerar a resposta.", color=theme.COLOR_ERROR)
+            return
+
+        threading.Thread(target=self._handle_ai_response, args=(document_context, history_for_api, user_question), daemon=True).start()
+    
+    def _handle_clear_chat(self, e: ft.ControlEvent):
+        def confirm_action():
+            self.chat_history_view.controls.clear()
+            self.file_list_panel.visible = False # 
+            self.metrics_panel.visible = False   # update no _show_initial_greeting.add_message
+            
+            # Limpa todas as chaves de sessão relacionadas ao chat
+            for key in [KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS,
+                        KEY_SESSION_CHAT_DOCUMENT_CONTEXT, KEY_SESSION_CHAT_RAW_PAGES_TEXT]:
+                if self.page.session.contains_key(key):
+                    self.page.session.remove(key)
+            
+            self._show_initial_greeting()
+        
+        show_confirmation_dialog(
+            self.page, title="Limpar Conversa",
+            content=ft.Text("Tem certeza que deseja abandonar esta conversa? Atualmente o histórico de chat não é recuperável."),
+            on_confirm=confirm_action
+        )
+
+    def _handle_toggle_settings_drawer(self, e: Optional[ft.ControlEvent] = None):
+        self._is_drawer_open = not self._is_drawer_open
+        self.settings_drawer_container.width = 320 if self._is_drawer_open else 0
+        
+        if self._is_drawer_open:
+            self.settings_drawer_container.border = ft.border.only(left=ft.border.BorderSide(2, theme.PRIMARY))
+            self.settings_button.bgcolor = bgcolor=ft.Colors.with_opacity(0.40, theme.COLOR_ERROR)
+        else:
+            self.settings_drawer_container.border = None
+            self.settings_button.bgcolor = None
+
+        self.settings_drawer_container.update()
+        self.settings_button.update()
+
+    def _handle_bubble_hover(self, e: ft.HoverEvent, toolbar: ft.Row, message_id: float):
+        """Mostra ou esconde a barra de ferramentas de ações da mensagem."""
+        if self.editing_message_id != message_id:
+            toolbar.visible = e.data == "true"
+            toolbar.update()
+
     # --- Handlers de Ações ---
 
     def _handle_upload_click(self, e: ft.ControlEvent):
@@ -503,134 +758,6 @@ class ChatViewContent(ft.Column):
             color=theme.COLOR_WARNING
         )
 
-    def _scroll_to_last_message(self):
-        if self.chat_history_view.page:
-            self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT)
-
-    def _handle_send_message(self, e: ft.ControlEvent):
-        if self.is_processing_response: 
-            return
-        
-        user_text = self.user_input_field.value # .strip()
-        if not user_text:
-            return
-        
-        document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
-
-        if not document_context:
-            show_snackbar(self.page, "Aguarde a extração de texto ser concluída ou carregue um arquivo.", color=theme.COLOR_WARNING)
-            self.page.run_thread(lambda: self._set_processing_state(False))
-            return
-        
-        history_for_api = [ # Antes de adicionar a mensagem do usuário e a thinking message;
-            {"role": "assistant" if msg["author"] == "IA" else "user", 
-            "content": msg["text"]}
-            for msg in [c.data for c in self.chat_history_view.controls] if msg.get("author") in ["User", "IA"]
-        ]
-        
-        self._set_processing_state(True, clear_input=True)
-        user_message = {"id": time.time(), "author": "User", "text": user_text}
-        self._add_message_to_view(user_message)
-        logger.info('[DEBUG] Enviando mensagem do usuário ao Chat...')
-        self._scroll_to_last_message()
-
-        thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
-        self._add_message_to_view(thinking_message_data)
-        self._scroll_to_last_message()
-
-        # Inicia a geração da resposta da IA em uma thread, passando o histórico já preparado
-        threading.Thread(target=self._handle_ai_response, args=(document_context, history_for_api, user_text), daemon=True).start()
-
-    def _handle_ai_response(self, document_context: str, history_for_api: List[Dict[str, str]], user_question: str):
-        """
-        Gerencia a chamada ao orquestrador e o streaming da resposta para a UI.
-        """       
-        # Prepara parâmetros para a IA
-        settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
-        api_key = self.page.session.get(f"decrypted_api_key_{settings.get('llm_provider', DEFAULT_LLM_PROVIDER)}") 
-        
-        if not api_key:
-            error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
-            logger.error(error_msg)
-            self.page.run_thread(lambda: self._update_last_message_text(error_msg, append=False))
-            self.page.run_thread(lambda: self._set_processing_state(False))
-            return
-        
-        try:
-            model_name = settings.get('llm_model', DEFAULT_LLM_MODEL) 
-            response_generator = self.orchestrator.generate_response(
-                api_key=api_key,
-                model_name=model_name,
-                document_context=document_context,
-                instructions=self._get_active_system_prompt(),
-                history=history_for_api,
-                user_question=user_question,
-                loaded_llm_providers=self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or [],
-                temperature=settings.get('llm_temperature', DEFAULT_TEMPERATURE),
-                reasoning_mode=settings.get('reasoning_effort'),
-                verbosity_level=settings.get('verbosity_level')
-            )
-
-            for response_part in response_generator:
-                if response_part["type"] == "chunk":
-                    self.page.run_thread(lambda chunk=response_part["content"]: self._update_last_message_text(chunk, append=True))
-                    logger.info(f"[DEBUG] Chunk Msg LLM by model {model_name}: {response_part['content'][:160]}...")
-                elif response_part["type"] == "final_metrics":
-                    self.page.run_thread(lambda data=response_part["data"]: self._update_metrics_display(data, append=True))
-                elif response_part["type"] == "error":
-                    error_text = f"**Erro:** {response_part['content']}"
-                    self.page.run_thread(lambda: self._update_last_message_text(error_text, append=False))
-                    break
-        finally:
-            self.page.run_thread(lambda: self._set_processing_state(False))
-            self.page.run_thread(lambda: self._scroll_to_last_message())
-
-    def _set_processing_state(self, is_processing: bool, clear_input: bool = False):
-        if clear_input:
-            self.user_input_field.value = ""
-        
-        self.is_processing_response     = is_processing
-        self.user_input_field.disabled  = is_processing
-        self.send_button.disabled       = is_processing
-        self.user_input_field.update()
-        self.send_button.update()
-        if not is_processing:
-            self.user_input_field.focus()
-
-    def _get_active_system_prompt(self) -> str:
-        """
-        Retorna o texto do prompt de sistema ativo lendo diretamente da sessão.
-        A responsabilidade de carregar os prompts (do Firestore ou fallback)
-        é do ChatSettingsDrawer.
-        """
-        from src.flet_ui.settings_drawer import DEFAULT_PROMPTS
-        DEFAULT_KEY = "flexivel"
-
-        active_key = self.page.session.get(KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY) or DEFAULT_KEY
-
-        prompt_key_map = {
-            "estrito": KEY_SESSION_CHAT_PROMPT_STRICT,
-            "flexivel": KEY_SESSION_CHAT_PROMPT_FLEXIBLE,
-            "custom": KEY_SESSION_CHAT_PROMPT_CUSTOM,
-        }
-        
-        session_key = prompt_key_map.get(active_key)
-        if session_key:
-            instructions_in_session = self.page.session.get(session_key)
-            instructions_hardcoded = DEFAULT_PROMPTS.get(active_key, "")
-            
-            if instructions_in_session:
-                logger.info(f"Instruction_Prompt obtido da sessão: {instructions_in_session[:60]}...")
-            elif instructions_hardcoded:
-                logger.warning(f"Instruction_Prompt não encontrado na sessão. Utilizando Default_Prompt hardcoded: {instructions_hardcoded[:60]}...")
-            
-            return instructions_in_session or instructions_hardcoded
-            # TODO: if active_key=="custom" and not session.get -> buscar do json local ?
-        
-        # Fallback final se a chave for desconhecida
-        logger.warning(f"Instruction_Prompt sem chave mapeada! Utilizando fallback hardcoded: {DEFAULT_PROMPTS[DEFAULT_KEY][:60]}...")
-        return DEFAULT_PROMPTS[DEFAULT_KEY]
-
     def _update_metrics_display(self, metrics_data: dict, append: bool = True):
         """Atualiza o painel de métricas com os dados da última resposta."""
         if not append:
@@ -648,131 +775,7 @@ class ChatViewContent(ft.Column):
         if self.metrics_panel.page:
             self.metrics_panel.update()
 
-    def _handle_message_action(self, e: ft.ControlEvent, message_id: float):
-        """Handler central para ações do PopupMenuButton da mensagem."""
-        action = e.control.data
-        # all_messages_data = [c.data for c in self.chat_history_view.controls]
-        # message_text = next((msg["text"] for msg in reversed(all_messages_data) if msg.get('if') == message_id), "")
-        message_text = next((c.data["text"] for c in self.chat_history_view.controls if c.data.get('id') == message_id), "")
-
-        if action == "copy": self.page.set_clipboard(message_text)
-        elif action == "edit": self._handle_edit_message(message_id)
-        elif action == "delete": self._handle_delete_message(message_id)
-        elif action == "resume": self._handle_resume_from(message_id)
-        elif action == "rerun": self._handle_rerun(message_id)
-
-    def _handle_delete_message(self, message_id: float):
-        self.chat_history_view.controls = [c for c in self.chat_history_view.controls if c.data["id"] != message_id]
-        self._update_message_actions()
-        self.chat_history_view.update()
-        self._save_state_to_session()
-
-    def _handle_edit_message(self, message_id: float):
-        self.editing_message_id = message_id
-        self._rebuild_chat_display()
-
-    def _handle_save_edit(self, message_id: float, new_text: str):
-        for control in self.chat_history_view.controls:
-            if control.data["id"] == message_id:
-                control.data["text"] = new_text
-                break
-        self.editing_message_id = None
-        self._rebuild_chat_display()
-        self._save_state_to_session()
-
-    def _handle_cancel_edit(self, message_id: float):
-        self.editing_message_id = None
-        self._rebuild_chat_display()
-
-    def _handle_resume_from(self, message_id: float):
-        index = next((i for i, c in enumerate(self.chat_history_view.controls) if c.data["id"] == message_id), -1)
-        if index != -1:
-            self.chat_history_view.controls = self.chat_history_view.controls[:index + 1]
-            self._update_message_actions() # Apenas atualiza as ações, não precisa reconstruir
-            self._save_state_to_session()
-            self.page.run_thread(lambda: self._scroll_to_last_message())
-            
-    def _handle_rerun(self, message_id: float):
-        rerun_index = next((i for i, c in enumerate(self.chat_history_view.controls) if c.data.get("id") == message_id), -1)
-        if rerun_index == -1:
-            logger.error(f"Não foi possível encontrar a mensagem com id {message_id} para regenerar.")
-            return        
-        
-        rerun_control = self.chat_history_view.controls[rerun_index]
-        author = rerun_control.data.get("author")
-
-        if author == "IA":
-            # Caso 1: Regenerando uma resposta da IA
-            if rerun_index == 0: return # Não pode regenerar a primeira mensagem se for da IA
-            user_question = self.chat_history_view.controls[rerun_index - 1].data["text"]
-            history_controls = self.chat_history_view.controls[:rerun_index - 1]
-            self.chat_history_view.controls.pop(rerun_index) # Remove a resposta antiga da IA
-
-        elif author == "User":
-            # Caso 2: Gerando resposta para a última mensagem do usuário (após "Retomar daqui")
-            user_question = rerun_control.data["text"]
-            history_controls = self.chat_history_view.controls[:rerun_index]
-        else:
-            return # Não faz nada se a mensagem não for do usuário ou da IA
-
-        self._set_processing_state(True, clear_input=False)
-
-        # Prepara o histórico para a API        
-        history_for_api = [
-            {"role": "assistant" if c.data["author"] == "IA" else "user", "content": c.data["text"]}
-            for c in history_controls if c.data.get("author") in ["User", "IA"]
-        ]
-
-        thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
-        self._add_message_to_view(thinking_message_data)
-
-        document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
-        if not document_context:
-            show_snackbar(self.page, "Contexto do documento não encontrado para regenerar a resposta.", color=theme.COLOR_ERROR)
-            return
-
-        threading.Thread(target=self._handle_ai_response, args=(document_context, history_for_api, user_question), daemon=True).start()
     
-    def _handle_clear_chat(self, e: ft.ControlEvent):
-        def confirm_action():
-            self.chat_history_view.controls.clear()
-            self.file_list_panel.visible = False # 
-            self.metrics_panel.visible = False   # update no _show_initial_greeting.add_message
-            
-            # Limpa todas as chaves de sessão relacionadas ao chat
-            for key in [KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS,
-                        KEY_SESSION_CHAT_DOCUMENT_CONTEXT, KEY_SESSION_CHAT_RAW_PAGES_TEXT]:
-                if self.page.session.contains_key(key):
-                    self.page.session.remove(key)
-            
-            self._show_initial_greeting()
-        
-        show_confirmation_dialog(
-            self.page, title="Limpar Conversa",
-            content=ft.Text("Tem certeza que deseja abandonar esta conversa? Atualmente o histórico de chat não é recuperável."),
-            on_confirm=confirm_action
-        )
-
-    def _handle_toggle_settings_drawer(self, e: Optional[ft.ControlEvent] = None):
-        self._is_drawer_open = not self._is_drawer_open
-        self.settings_drawer_container.width = 320 if self._is_drawer_open else 0
-        
-        if self._is_drawer_open:
-            self.settings_drawer_container.border = ft.border.only(left=ft.border.BorderSide(2, theme.PRIMARY))
-            self.settings_button.bgcolor = bgcolor=ft.Colors.with_opacity(0.40, theme.COLOR_ERROR)
-        else:
-            self.settings_drawer_container.border = None
-            self.settings_button.bgcolor = None
-
-        self.settings_drawer_container.update()
-        self.settings_button.update()
-
-    def _handle_bubble_hover(self, e: ft.HoverEvent, toolbar: ft.Row, message_id: float):
-        """Mostra ou esconde a barra de ferramentas de ações da mensagem."""
-        if self.editing_message_id != message_id:
-            toolbar.visible = e.data == "true"
-            toolbar.update()
-
 def create_chat_view_content(page: ft.Page) -> ft.Control:
     """Função de fábrica para criar a view de Chat com Documentos."""
     logger.info("View Chat_Docs: Iniciando criação (nova estrutura).")
@@ -791,7 +794,6 @@ def create_chat_view_content(page: ft.Page) -> ft.Control:
 ## Fluxos:
 
 1) create_chat_view_content -> ChatViewContent -> _build_layout -> _restore_state_from_session
-
 
 _handle_upload_click 	-> _handle_files_uploaded   -> _extract_raw_context_from_files -> session.set(KEY_SESSION_CHAT_RAW_PAGES_TEXT,...) & session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT,...)
                                                     -> self.page.session.set(KEY_SESSION_CHAT_FILES, files)

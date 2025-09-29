@@ -1128,6 +1128,8 @@ class PDFDocumentAnalyzer:
             header = f"[Documento: {file_name} | Página: {page_num_display}]\n\n"
             page_text_with_header = header + original_page_text
 
+            # TODO: Mover esse header_info para o método self.extractor.extract_texts_from_pages
+
             page_tokens = count_tokens(page_text_with_header, model_name=model_name_for_tokens)
 
             # Adicionar tokens desta página ao total antes do truncamento

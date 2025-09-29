@@ -1,22 +1,70 @@
 
+________________________________________________________________________________________________________________________________________________
+
+# INFO: Persistência de Dados
+
+A aplicação utiliza um **modelo híbrido** para persistência de dados, combinando o uso de nuvem (Firebase) com o armazenamento local seguro para diferentes finalidades.
+
+Esta abordagem equilibra a centralização e escalabilidade da nuvem com a segurança e o desempenho do armazenamento local para dados sensíveis e operacionais.
+
+Abaixo está um resumo de como cada tipo de dado é armazenado:
+
+### 1. Armazenamento na Nuvem (Firebase)
+
+O Firebase atua como o backend principal para dados persistentes e compartilhados da aplicação.
+
+*   **Firebase Authentication**:
+    *   Gerencia as **contas de usuário** (email, hash de senha, UID, status de verificação).
+
+*   **Firestore (Banco de Dados NoSQL)**:
+    *   **Chaves de API dos usuários** (armazenadas de forma criptografada).
+    *   **Preferências do usuário** (ex: provedor e modelo LLM padrão).
+    *   **Templates de prompts** que podem ser atualizados remotamente.
+    *   **Métricas de uso e feedback** para análise de desempenho e precisão da IA.
+    *   **Configurações globais da aplicação** (ex: lista de provedores LLM disponíveis).
+
+*   **Cloud Storage**:
+    *   **Logs de uso e erros** enviados periodicamente para monitoramento e auditoria centralizada.
+
+### 2. Armazenamento Local (Máquina do Usuário)
+
+O armazenamento local é utilizado para dados sensíveis que garantem a segurança, arquivos operacionais e configurações específicas da máquina.
+
+*   **Keyring (Cofre de Credenciais do Sistema Operacional)**:
+    *   Armazena a **chave de criptografia principal (Fernet)**, que é usada para proteger outras credenciais.
+    *   Guarda as **credenciais de proxy** (usuário e senha, se o usuário optar por salvar).
+
+*   **Arquivo Criptografado (`%APPDATA%/DocsAnalyzerPF/firebase_service_key.enc`)**:
+    *   Armazena a **chave de serviço do Firebase Admin** de forma criptografada. Este arquivo é necessário para operações administrativas (como gerenciamento de usuários no painel Streamlit) e é protegido pela chave principal guardada no Keyring.
+
+*   **Arquivos Temporários**:
+    *   **`uploads_temp/`**: Diretório onde os arquivos PDF são temporariamente armazenados durante o upload no modo web, antes de serem processados.
+    *   **`assets/temp_docx_exports/`**: Usado para armazenar temporariamente os arquivos `.docx` gerados para download no modo web.
+
+*   **Arquivos de Log**:
+    *   **`logs/`**: Cada execução da aplicação gera um arquivo de log local para facilitar a depuração. Este diretório também serve como **backup** para logs que não puderam ser enviados para a nuvem.
+
+*   **Arquivos de Assets e Templates**:
+    *   **`assets/`**: Contém recursos da aplicação, como imagens e, crucialmente, os **templates `.docx`** que o usuário pode adicionar para a funcionalidade de exportação.
+
+*   **Banco de Dados Local (SQLite)**:
+    *   Para funcionalidades como a persistência do **histórico de conversas** do módulo "Chat com Documentos", será utilizado um banco de dados SQLite local. Esta abordagem garante que o conteúdo das conversas permaneça exclusivamente na máquina do usuário, permitindo o acesso offline e garantindo a privacidade dos dados.
+
+### 3. Armazenamento em Memória (Server-Side Cache)
+
+Além do armazenamento persistente, a aplicação utiliza um cache em memória no lado do servidor (`_SERVER_SIDE_CACHE` em `utils.py`) para dados de sessão que são muito grandes ou computacionalmente caros para serem recriados a cada interação. Este cache é volátil e seu conteúdo é perdido quando a aplicação é encerrada.
+
+*   **Dados de Sessão Pesados:** Armazena temporariamente o texto agregado de múltiplos PDFs, as respostas da IA, e outros objetos de dados grandes para evitar reprocessamentos e lentidão na interface.
+*   **Desempenho:** Por estar na memória RAM do servidor, o acesso a esses dados é quase instantâneo, garantindo uma experiência de usuário fluida.
+*   **Escalabilidade:** Esta abordagem funciona perfeitamente em um ambiente de servidor único (execução local ou em um único contêiner). Para escalar horizontalmente com múltiplos processos de servidor, este cache precisaria ser substituído por uma solução compartilhada, como Redis.
+
+Em resumo, o Firebase é o repositório central para dados da aplicação, o armazenamento local é crucial para a segurança, operação e persistência de dados do usuário (históricos de chat), e o cache em memória garante o desempenho para operações complexas durante a sessão.
+
 _________________________________________________________________________________________________________________________________________________
+
 # firebase_manager.py:
 
-> FirebaseManagerStorage está sendo usado para salvar logs de execução (txt), e arquivos-resultados (pck) de execuções encerradas (RPAFlowController._save_dados_bd).
-
-O uso de Lock garante que, caso os métodos de FirebaseManagerStorage sejam chamados simultaneamente por diferentes threads em outro ponto do código, 
-apenas uma thread execute as operações no Firebase Storage por vez. Isso previne condições de corrida e possíveis inconsistências.
-
-> FirebaseManager_rtdb está sendo usado para substituir dicionários_json que salvam pesquisas realizadas (dict_areas_assunto e dict_procs_conferidos).
-
-O Firebase Realtime Database já implementa mecanismos internos para garantir a consistência dos dados em operações concorrentes, 
-especialmente com transações (transaction) e listeners em tempo real.
-
-No entanto, se essa aplicação utilizasse múltiplas threads para chamadas simultâneas a métodos de FirebaseManager_rtdb, 
-poderia ser útil adicionar um Lock para evitar acessos concorrentes locais.
-_____________________________________________________________________________
-
-Em resumo, as principais diferenças entre Firebase Cloud Storage e Cloud Firestore são:
+Diferenças entre Firebase Cloud Storage e Cloud Firestore são:
 
 1.  **Tipo de Dados Armazenados:**
     *   **Storage:** Projetado para armazenar **arquivos grandes e binários** (objetos), como imagens, vídeos, áudios, PDFs, backups, etc. Pense nele como um sistema de arquivos na nuvem.
@@ -52,6 +100,7 @@ Em resumo, as principais diferenças entre Firebase Cloud Storage e Cloud Firest
 Ambos são frequentemente usados juntos em uma aplicação. Por exemplo, você pode armazenar os dados de um perfil de usuário no Firestore (nome, email) e a foto de perfil desse usuário no Storage, guardando apenas o link (URL) para a foto no documento do Firestore.
 
 _________________________________________________________________________________________________________________________________________________
+
 # pdf_processor.py:
 
 ### Modos de Filtragem de Páginas Relevantes:

@@ -59,6 +59,7 @@ logger.info(f"[DEBUG] Carregamento pesado dentro de NC_ANALYZE_VIEW em {perf_cou
 from src.utils import get_user_cache, clear_user_cache
 
 # Constantes para nomes de controles (facilita acesso) CTL = Control
+# TODO: Alterar para variáveis diretas na classe, em vez de usar dict.
 CTL_UPLOAD_BTN = "upload_button"
 CTL_PROCESS_BTN = "process_button"
 CTL_ANALYZE_BTN = "analyze_button"
@@ -1945,10 +1946,10 @@ class LLMStructuredResultDisplay(ft.Column):
 # --- Classes Internas para Gerenciamento ---
 class InternalFileListManager:
     """
-    Gerencia a lista de arquivos PDF selecionados na UI.
+    Gerencia a lista de arquivos PDF selecionados na GUI.
 
     Responsável por exibir os arquivos, permitir reordenar e remover itens,
-    e atualizar a UI e o estado da sessão de acordo.
+    e atualizar a GUI e o estado da sessão de acordo.
     """
     def __init__(self, page: ft.Page, gui_controls: Dict[str, ft.Control], parent_view: 'AnalyzePDFViewContent'):
         """
