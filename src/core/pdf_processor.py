@@ -136,6 +136,11 @@ class PdfPlumberExtractor(PDFTextExtractorStrategy):
                 for p_idx in indices_to_process:
                     page_pdf = pdf.pages[p_idx]
                     text = page_pdf.extract_text() or ""  # Garante que o texto não seja None
+
+                    file_name = os.path.basename(pdf_path)
+                    header = f"[Documento: {file_name} | Página: {p_idx + 1}]\n\n"
+                    text = header + text                    
+
                     content_by_page.append((p_idx, text))
             
             if check_inteligible:
@@ -192,6 +197,11 @@ class PyPdfExtractor(PDFTextExtractorStrategy):
             for p_idx in indices_to_process:
                 page_pdf = reader.pages[p_idx]
                 text = page_pdf.extract_text() or ""
+
+                file_name = os.path.basename(pdf_path)
+                header = f"[Documento: {file_name} | Página: {p_idx + 1}]\n\n"
+                text = header + text                    
+
                 content_by_page.append((p_idx, text))
             
             if check_inteligible:
@@ -247,6 +257,11 @@ class FitzExtractor(PDFTextExtractorStrategy):
           
             for p_idx in indices_to_process:
                 text = doc[p_idx].get_text() or ""
+
+                file_name = os.path.basename(pdf_path)
+                header = f"[Documento: {file_name} | Página: {p_idx + 1}]\n\n"
+                text = header + text                    
+
                 content_by_page.append((p_idx, text))
  
             if check_inteligible:
@@ -1120,17 +1135,14 @@ class PDFDocumentAnalyzer:
             page_data = processed_page_data[page_idx]
             original_page_text = page_data['text_stored']
 
-            # Extrai metadados para o cabeçalho
-            file_name = os.path.basename(page_data.get('original_pdf_path', ''))
-            page_num_display = page_data.get('page_index_in_file', -1) + 1
+            # # Extrai metadados para o cabeçalho -> Movido para self.extractor.extract_texts_from_pages
+            # file_name = os.path.basename(page_data.get('original_pdf_path', ''))
+            # page_num_display = page_data.get('page_index_in_file', -1) + 1
+            # # Constrói o cabeçalho e o adiciona ao texto
+            # header = f"[Documento: {file_name} | Página: {page_num_display}]\n\n"
+            # page_text_with_header = header + original_page_text
 
-            # Constrói o cabeçalho e o adiciona ao texto
-            header = f"[Documento: {file_name} | Página: {page_num_display}]\n\n"
-            page_text_with_header = header + original_page_text
-
-            # TODO: Mover esse header_info para o método self.extractor.extract_texts_from_pages
-
-            page_tokens = count_tokens(page_text_with_header, model_name=model_name_for_tokens)
+            page_tokens = count_tokens(original_page_text, model_name=model_name_for_tokens)
 
             # Adicionar tokens desta página ao total antes do truncamento
             # Isso acontece independentemente de a página ser totalmente incluída, parcialmente ou não.
@@ -1141,14 +1153,14 @@ class PDFDocumentAnalyzer:
                 continue
 
             if current_total_tokens_final + page_tokens <= token_limit:
-                texts_for_concatenation[page_idx] = page_text_with_header
+                texts_for_concatenation[page_idx] = original_page_text
                 current_total_tokens_final += page_tokens
             else:
                 remaining_token_budget = token_limit - current_total_tokens_final
                 if remaining_token_budget > 0:
                     
                     # Usar a função reduce_text_to_limit 
-                    partial_text = reduce_text_to_limit(page_text_with_header, remaining_token_budget, model_name=model_name_for_tokens)
+                    partial_text = reduce_text_to_limit(original_page_text, remaining_token_budget, model_name=model_name_for_tokens)
                     texts_for_concatenation[page_idx] = partial_text
                     
                     # Recalcular tokens do texto parcial para precisão

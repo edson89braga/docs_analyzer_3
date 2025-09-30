@@ -672,6 +672,11 @@ class AnalyzePDFViewContent(ft.Column):
             e (ft.ControlEvent): O evento de clique do botão.
         """
         logger.info("Botão 'Solicitar Análise' clicado.")
+        for ctrl in (CTL_FILE_LIST_PANEL, CTL_PROC_METADATA_PANEL):
+            if ctrl in self.gui_controls:
+                self.gui_controls[ctrl].controls[0].expanded = False
+                self.gui_controls[ctrl].update()
+
         if not self._files_processed:
             logger.debug("'Solicitar Análise' clicado, mas arquivos não processados. Redirecionando para 'process_and_analyze'.")
             # Se os arquivos não foram processados, o clique em "Analisar" deve, na verdade,
@@ -1030,8 +1035,6 @@ class AnalyzePDFViewContent(ft.Column):
             #content_area.controls.append(ft.Text("Nenhum metadado da LLM disponível.", italic=True))
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = False
         else:
-            self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = False
-            self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = False
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
             labels = [
                 ("input_tokens",         "Tokens de Entrada"),
@@ -2502,8 +2505,11 @@ class InternalAnalysisController:
             self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
             self.page.run_thread(self._update_status_callback,  f"Erro na consulta à LLM: {ex_llm}", True, True)
         finally:
+            self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = False
+            self.gui_controls[CTL_FILE_LIST_PANEL].update()
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
-            self.gui_controls[CTL_LLM_METADATA_PANEL].controls[0].expanded = True
+            # self.gui_controls[CTL_LLM_METADATA_PANEL].controls[0].expanded = True
+            # self.gui_controls[CTL_LLM_METADATA_PANEL].update()
             hide_loading_overlay(self.page)
             # A atualização da GUI já foi tratada dentro do try/except, não precisa aqui.
  

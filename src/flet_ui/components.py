@@ -781,7 +781,7 @@ class ManagedFilePicker:
                     
                     if self.on_upload_progress: self.on_upload_progress(file_name, 0.0)
                     
-                    self.file_picker.upload([ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)])
+                    self.file_picker.upload([ft.FilePickerUploadFile(id=file_name, name=file_name, upload_url=upload_url)])
                     
                     update_lock = self.page.data.get("global_update_lock")
                     if update_lock:

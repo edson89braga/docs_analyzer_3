@@ -15,6 +15,7 @@ from src.flet_ui.components import (
 )
 # Adiciona import do novo orquestrador e settings
 from src.core.chat_llm_orchestrator import ChatLLMOrchestrator
+from src.settings import FALLBACK_ANALYSIS_SETTINGS
 from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS, 
                           KEY_SESSION_LOADED_LLM_PROVIDERS, DEFAULT_LLM_PROVIDER,
                           DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE,
@@ -24,7 +25,8 @@ from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS,
                           KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY, KEY_SESSION_CHAT_PROMPT_STRICT,
                           KEY_SESSION_CHAT_PROMPT_FLEXIBLE, KEY_SESSION_CHAT_PROMPT_CUSTOM)
 
-from src.utils import get_user_cache
+from src.utils import get_user_cache, clear_user_cache
+from src.services.local_db_manager import LocalDBManager
 
 import logging
 logger = logging.getLogger(__name__)
@@ -33,8 +35,10 @@ class ChatViewContent(ft.Column):
     def __init__(self, page: ft.Page):
         super().__init__(expand=True, spacing=10)
         self.page = page
+        self.user_cache = get_user_cache(self.page)
 
         self.orchestrator = ChatLLMOrchestrator()
+        self.db_manager = LocalDBManager()
         
         # Estado da UI
         self.is_processing_response = False
@@ -169,7 +173,7 @@ class ChatViewContent(ft.Column):
         if messages:
             # Extrai os dados relevantes dos controles para serialização
             message_data = [c.data for c in self.chat_history_view.controls if hasattr(c, 'data')]
-            self.page.session.set(KEY_SESSION_CHAT_MESSAGES, message_data)
+            self.user_cache[KEY_SESSION_CHAT_MESSAGES] = message_data
 
         metrics_data = [c.data for c in self.metrics_content.controls if hasattr(c, 'data')]
         if metrics_data:
@@ -177,7 +181,7 @@ class ChatViewContent(ft.Column):
 
     def _restore_state_from_session(self):
         """Restaura o estado do chat a partir da sessão ao carregar a view."""
-        # Restaura arquivos
+        
         files = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
         if files:
             self._update_file_list_display(files)
@@ -187,7 +191,7 @@ class ChatViewContent(ft.Column):
             self.send_button.disabled = False
 
         # Restaura mensagens
-        messages = self.page.session.get(KEY_SESSION_CHAT_MESSAGES) or []
+        messages = self.user_cache.get(KEY_SESSION_CHAT_MESSAGES) or []
         if messages:
             self.chat_history_view.controls.clear()
             for msg_data in messages:
@@ -372,7 +376,7 @@ class ChatViewContent(ft.Column):
         if not user_text:
             return
         
-        document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
+        document_context = self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
 
         if not document_context:
             show_snackbar(self.page, "Aguarde a extração de texto ser concluída ou carregue um arquivo.", color=theme.COLOR_WARNING)
@@ -566,7 +570,7 @@ class ChatViewContent(ft.Column):
         thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
         self._add_message_to_view(thinking_message_data)
 
-        document_context = self.page.session.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
+        document_context = self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
         if not document_context:
             show_snackbar(self.page, "Contexto do documento não encontrado para regenerar a resposta.", color=theme.COLOR_ERROR)
             return
@@ -580,11 +584,13 @@ class ChatViewContent(ft.Column):
             self.metrics_panel.visible = False   # update no _show_initial_greeting.add_message
             
             # Limpa todas as chaves de sessão relacionadas ao chat
-            for key in [KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS,
-                        KEY_SESSION_CHAT_DOCUMENT_CONTEXT, KEY_SESSION_CHAT_RAW_PAGES_TEXT]:
+            for key in [KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_METRICS]:
                 if self.page.session.contains_key(key):
                     self.page.session.remove(key)
             
+            clear_user_cache(self.page)
+            self.user_cache = get_user_cache(self.page)
+                
             self._show_initial_greeting()
         
         show_confirmation_dialog(
@@ -615,10 +621,26 @@ class ChatViewContent(ft.Column):
 
     # --- Handlers de Ações ---
 
+    def _get_current_analysis_settings(self) -> Dict[str, Any]:
+        """
+        Busca as configurações de análise atuais da sessão, com fallback.
+        """
+        settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
+        if not isinstance(settings, dict):
+            return FALLBACK_ANALYSIS_SETTINGS.copy()
+        
+        # Garante que os tipos numéricos estejam corretos
+        current_settings = settings.copy()
+        try:
+            current_settings['llm_input_token_limit'] = int(current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']))
+        except (ValueError, TypeError):
+            current_settings['llm_input_token_limit'] = FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']
+        
+        return current_settings
+
     def _handle_upload_click(self, e: ft.ControlEvent):
         # Limpa o contexto antigo antes de carregar novos arquivos
-        if self.page.session.contains_key(KEY_SESSION_CHAT_DOCUMENT_CONTEXT):
-            self.page.session.remove(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
+        self.user_cache.pop(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, None)
         
         show_loading_overlay(self.page, "Abrindo seletor de arquivos...")
         
@@ -653,7 +675,7 @@ class ChatViewContent(ft.Column):
 
     def _handle_optimize_click(self, e: ft.ControlEvent):
         """Inicia o pré-processamento opcional dos documentos."""
-        raw_pages_text = self.page.session.get(KEY_SESSION_CHAT_RAW_PAGES_TEXT) or {}
+        raw_pages_text = self.user_cache.get(KEY_SESSION_CHAT_RAW_PAGES_TEXT) or {}
         if not raw_pages_text:
             show_snackbar(self.page, "Aguarde a extração inicial do texto antes de otimizar.", color=theme.COLOR_WARNING)
             return
@@ -685,7 +707,8 @@ class ChatViewContent(ft.Column):
             )
             
             # Usamos um limite de tokens alto para manter o contexto completo
-            token_limit = 180_000 # TODO: vincular parâmetro ao drawer "llm_token_limit_tf"
+            settings = self._get_current_analysis_settings()
+            token_limit = settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
             _, aggregated_text, _, _ = analyzer.group_texts_by_relevance_and_token_limit(
                 processed_data, relevant_indices, token_limit
             )
@@ -694,7 +717,7 @@ class ChatViewContent(ft.Column):
                 raise ValueError("Nenhum texto relevante foi extraído dos documentos.")
 
             # Salva o contexto na sessão
-            self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, aggregated_text)
+            self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = aggregated_text
 
             # Atualiza a UI na thread principal
             def update_ui_after_processing():
@@ -732,8 +755,8 @@ class ChatViewContent(ft.Column):
                 raw_pages_text_map[pdf_path] = pages
                 all_texts_concatenated.extend([text for _, text in pages])
 
-            self.page.session.set(KEY_SESSION_CHAT_RAW_PAGES_TEXT, raw_pages_text_map)
-            self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, " ".join(all_texts_concatenated))
+            self.user_cache[KEY_SESSION_CHAT_RAW_PAGES_TEXT] = raw_pages_text_map
+            self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = " ".join(all_texts_concatenated)            
             
             def update_ui():
                 hide_loading_overlay(self.page)

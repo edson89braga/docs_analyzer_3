@@ -1,7 +1,7 @@
 # src/flet_ui/settings_drawer.py
 import flet as ft
 from typing import Dict, Any, Optional, List
-
+from src.services.local_db_manager import LocalDBManager
 from src.flet_ui.components import show_snackbar, ManagedAlertDialog
 from src.flet_ui import theme
 from src.settings import (
@@ -426,8 +426,10 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
     DEFAULT_KEY = "flexivel"
     
     def __init__(self, page: ft.Page):
+        self.page = page
+        self.user_cache = get_user_cache(self.page) # chamar aqui antes de super()
         super().__init__(page)
-        self.user_cache = get_user_cache(self.page)
+        self.db_manager = LocalDBManager()
 
     def build_content(self):
         """
@@ -471,7 +473,14 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
         session_key = self.page.session.get(KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY) or self.DEFAULT_KEY
         cache_key = self.PROMPT_KEY_MAP.get(session_key)
         if not cache_key: return "" # Segurança
-        
+
+        if session_key == "custom":
+            # Para custom, tenta o cache primeiro, depois o DB
+            custom_prompt = self.user_cache.get(cache_key) or self.db_manager.get_custom_prompt("chat_custom")
+            if custom_prompt:
+                self.user_cache[cache_key] = custom_prompt # Garante que está em cache
+                return custom_prompt
+
         # O fallback aqui é uma segurança extra, mas _load_default... já deve ter populado
         prompt_text = self.user_cache.get(cache_key) or DEFAULT_PROMPTS[self.DEFAULT_KEY] or ""
         logger.info(f"[DEBUG] GetActivePrompt: Chave ativa='{session_key}' - '{cache_key}' -> Texto: '{prompt_text[:60]}...'")
@@ -566,7 +575,7 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
                 custom_text_to_save = prompt_editor_tf.value
                 self.user_cache[KEY_SESSION_CHAT_PROMPT_CUSTOM] = custom_text_to_save
                 logger.info(f"[DEBUG] Salvando texto customizado na sessão: '{custom_text_to_save[:60]}...'")
-                # TODO: Salvar prompt_custom em json local e ajustar recuperação no server_cache
+                self.db_manager.save_custom_prompt("chat_custom", custom_text_to_save)
             
             # Atualiza o campo principal na drawer
             self.gui_controls["instructions_prompt_tf"].value = self._get_active_prompt_text()
@@ -588,7 +597,8 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
             actions=[
                 ft.ElevatedButton("Cancelar", on_click=lambda e: dialog.close_programmatically("cancelled"), data="cancel"),
                 ft.ElevatedButton("Salvar", on_click=save_and_close, data="save"),
-            ]
+            ],
+            col = 6
         )
         dialog.show()
     
