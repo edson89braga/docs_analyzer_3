@@ -189,17 +189,19 @@ class AnalyzePDFViewContent(ft.Column):
 
         action_buttons_bar = ft.Row(
             [
-                self.gui_controls[CTL_UPLOAD_BTN],
-                self.gui_controls[CTL_PROCESS_BTN],
-                self.gui_controls[CTL_ANALYZE_BTN],
-                ft.Container(expand=True), # Espaçador
-                self.gui_controls[CTL_PROMPT_STRUCT_BTN],
-                self.gui_controls[CTL_RESTART_BTN],
-                self.gui_controls[CTL_EXPORT_BTN],
-                self.gui_controls[CTL_SETTINGS_BTN],
+                ft.Row([
+                    self.gui_controls[CTL_UPLOAD_BTN],
+                    self.gui_controls[CTL_PROCESS_BTN],
+                    self.gui_controls[CTL_ANALYZE_BTN]], wrap=True),
+                #ft.Container(expand=True), # Espaçador
+                ft.Row([
+                    self.gui_controls[CTL_PROMPT_STRUCT_BTN],
+                    self.gui_controls[CTL_RESTART_BTN],
+                    self.gui_controls[CTL_EXPORT_BTN],
+                    self.gui_controls[CTL_SETTINGS_BTN]], wrap=True)
             ],
-            alignment=ft.MainAxisAlignment.START,
-            spacing=10
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            wrap=True, width=self.page.width*0.9 # spacing=10
         )
 
         # --- 3. Layout de Conteúdo com Panels Expansíveis e Containers ---
@@ -506,7 +508,7 @@ class AnalyzePDFViewContent(ft.Column):
                 logger.info("Seleção de arquivos cancelada.")
             else:
                 logger.error(f"Falha no upload de '{file_name}': {path_or_msg}")
-
+            
         def batch_upload_complete_cb(batch_results: List[Dict[str, Any]]):
             """
             Callback executado quando o upload de um lote de arquivos é concluído.
@@ -546,7 +548,9 @@ class AnalyzePDFViewContent(ft.Column):
             else:
                 # Se todos os uploads falharam, apenas atualiza a UI sem resetar os dados
                 self._update_gui_from_state()
-                
+            
+            self.file_list_manager.expand_container()
+
             update_lock = self.page.data.get("global_update_lock")
             with update_lock:
                 self.page.update()
@@ -689,7 +693,6 @@ class AnalyzePDFViewContent(ft.Column):
             e (ft.ControlEvent): O evento de clique do botão.
         """
         logger.info("Botão 'Solicitar Análise' clicado.")
-        self.file_list_manager.collapse_container()
         self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = False
         self.gui_controls[CTL_PROC_METADATA_PANEL].update()
 

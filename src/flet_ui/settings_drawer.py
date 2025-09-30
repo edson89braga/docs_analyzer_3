@@ -428,8 +428,8 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
     def __init__(self, page: ft.Page):
         self.page = page
         self.user_cache = get_user_cache(self.page) # chamar aqui antes de super()
-        super().__init__(page)
         self.db_manager = LocalDBManager()
+        super().__init__(page)
 
     def build_content(self):
         """
@@ -602,8 +602,8 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
             title="Editar Prompt de Instruções",
             content=dialog_content,
             actions=[
-                ft.ElevatedButton("Cancelar", on_click=lambda e: dialog.close_programmatically("cancelled"), data="cancel"),
-                ft.ElevatedButton("Salvar", on_click=save_and_close, data="save"),
+                ft.ElevatedButton("Cancelar", width=100, on_click=lambda e: dialog.close_programmatically("cancelled"), data="cancel"),
+                ft.ElevatedButton("Salvar", width=100, on_click=save_and_close, data="save"),
             ],
         )
         dialog.show()

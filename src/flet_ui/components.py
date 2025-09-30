@@ -2010,6 +2010,8 @@ def wrapper_panel_1(int_content):
     if not isinstance(int_content, ft.ExpansionPanel):
         # Opcional: logar um aviso ou erro se o conteúdo não for o esperado
         logger.warning("wrapper_panel_1 recebeu um conteúdo que não é ft.ExpansionPanel.")
+    
+    int_content.bgcolor = ft.Colors.ON_INVERSE_SURFACE
 
     return ft.ExpansionPanelList(
         controls=[int_content],

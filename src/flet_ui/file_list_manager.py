@@ -43,10 +43,17 @@ class FileListManager(ft.Column):
             header=header_container,
             content=content_container,
             can_tap_header=True,
-            expanded=True,
+            expanded=False,
+            bgcolor = ft.Colors.ON_INVERSE_SURFACE
         )
 
-        self.panel_list = ft.ExpansionPanelList(controls=[expansion_panel])
+        self.panel_list = ft.ExpansionPanelList(
+            controls=[expansion_panel],
+            expand_icon_color=theme.PRIMARY,
+            divider_color=ft.Colors.TRANSPARENT, 
+            elevation=1,
+            expanded_header_padding=ft.padding.all(1),
+        )
         self.controls.append(self.panel_list)
 
     def update_display(self, files_ordered: Optional[List[Dict[str, Any]]] = None):
@@ -59,7 +66,7 @@ class FileListManager(ft.Column):
             self.visible = False
         else:
             self.visible = True
-            self.panel_list.controls[0].expanded = True
+            # self.panel_list.controls[0].expanded = True
             for idx, file_info in enumerate(_files):
                 file_name_display = ft.Text(
                     value=file_info.get('name', 'Nome Indisponível'),
@@ -116,4 +123,8 @@ class FileListManager(ft.Column):
     
     def collapse_container(self):
         self.panel_list.controls[0].expanded = False
+        self.panel_list.update()
+
+    def expand_container(self):
+        self.panel_list.controls[0].expanded = True
         self.panel_list.update()

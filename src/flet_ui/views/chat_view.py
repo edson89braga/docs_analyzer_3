@@ -16,7 +16,7 @@ from src.flet_ui.components import (
 )
 # Adiciona import do novo orquestrador e settings
 from src.core.chat_llm_orchestrator import ChatLLMOrchestrator
-from src.settings import FALLBACK_ANALYSIS_SETTINGS
+from src.settings import FALLBACK_ANALYSIS_SETTINGS, cotacao_dolar_to_real
 from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS, 
                           KEY_SESSION_LOADED_LLM_PROVIDERS, DEFAULT_LLM_PROVIDER,
                           DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE,
@@ -42,6 +42,7 @@ class ChatViewContent(ft.Column):
         self.db_manager = LocalDBManager()
         
         # Estado da UI
+        self.metrics_history: List[Dict[str, Any]] = []
         self.is_processing_response = False
         self.editing_message_id: Optional[float] = None
         self._is_drawer_open = False
@@ -58,12 +59,11 @@ class ChatViewContent(ft.Column):
                                                  tooltip="Filtra páginas irrelevantes para economizar tokens e melhorar o foco da IA.", width=width_btn_bar)
         self.anonymize_button = ft.ElevatedButton("Anonimizar Dados", icon=ft.Icons.PRIVACY_TIP_OUTLINED, on_click=self._handle_anonymize_click, 
                                                     disabled=True, tooltip="Identifica e oculta dados e entidades antes de enviar à IA.", width=width_btn_bar)
+        self.metrics_button = ft.TextButton(text="Tokens Input: 0", icon=ft.Icons.QUERY_STATS, on_click=self._show_metrics_dialog, 
+                                                tooltip="Ver detalhes do consumo de tokens", width=200)
+
         self.clear_chat_button = ft.IconButton(icon=ft.Icons.DELETE_SWEEP_OUTLINED, tooltip="Limpar Conversa", on_click=self._handle_clear_chat, disabled=True)
         self.settings_button = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, tooltip="Configurações", on_click=self._handle_toggle_settings_drawer)
-        
-            
-        self.metrics_content = ft.Column(spacing=2)
-        self.metrics_panel = self._create_panel("Métricas da Sessão", self.metrics_content, visible=False)
         
         self.chat_history_view = ft.ListView(expand=True, spacing=15, auto_scroll=False)
         
@@ -107,21 +107,6 @@ class ChatViewContent(ft.Column):
             managed_file_picker=self.managed_file_picker,
             on_list_changed=self._on_file_list_changed
         )
-
-    def _create_panel(self, title: str, content: ft.Control, visible: bool = False) -> ft.ExpansionPanelList:
-        """Cria um painel expansível padronizado, igual ao da nc_analyze_view."""
-        return ft.ExpansionPanelList(
-            controls=[
-                ft.ExpansionPanel(
-                    header=ft.ListTile(title=ft.Text(title, weight=ft.FontWeight.BOLD)), 
-                    content=content
-                )
-            ],
-            elevation=1,
-            divider_color=ft.Colors.TRANSPARENT,
-            expanded_header_padding=ft.padding.all(1),
-            visible=visible
-        )
     
     def _build_layout(self):
         """Constrói a estrutura visual da view de chat."""
@@ -130,16 +115,19 @@ class ChatViewContent(ft.Column):
                              text_align=ft.TextAlign.CENTER)
         action_buttons_bar = ft.Row(
             [
-                self.upload_button, 
-                self.process_button,
-                self.optimize_button,
-                self.anonymize_button,
-                ft.Container(expand=True),
-                self.clear_chat_button,
-                self.settings_button,
+                ft.Row([
+                    self.upload_button, 
+                    self.process_button,
+                    self.optimize_button,
+                    self.anonymize_button,
+                    self.metrics_button], wrap=True),
+                #ft.Row([ft.Container(expand=True)]),
+                ft.Row([
+                    self.clear_chat_button,
+                    self.settings_button], wrap=True)
             ],
-            alignment=ft.MainAxisAlignment.START,
-            spacing=10
+            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            wrap=True, width=self.page.width*0.9 # spacing=10
         )
         
         input_bar = ft.Row(
@@ -150,7 +138,6 @@ class ChatViewContent(ft.Column):
         main_content_column = ft.Column(
             [
                 self.file_list_manager,
-                self.metrics_panel,
                 ft.Divider(height=1),
                 ft.Container(content=self.chat_history_view, expand=True), # Permite que o ListView expanda
             ],
@@ -187,9 +174,7 @@ class ChatViewContent(ft.Column):
             message_data = [c.data for c in self.chat_history_view.controls if hasattr(c, 'data')]
             self.user_cache[KEY_SESSION_CHAT_MESSAGES] = message_data
 
-        metrics_data = [c.data for c in self.metrics_content.controls if hasattr(c, 'data')]
-        if metrics_data:
-            self.page.session.set(KEY_SESSION_CHAT_METRICS, metrics_data)
+        self.user_cache[KEY_SESSION_CHAT_METRICS] = self.metrics_history
 
     def _restore_state_from_session(self):
         """Restaura o estado do chat a partir da sessão ao carregar a view."""
@@ -211,9 +196,8 @@ class ChatViewContent(ft.Column):
             self._show_initial_greeting()
 
         # Restaura métricas
-        metrics = self.page.session.get(KEY_SESSION_CHAT_METRICS) or []
-        if metrics:
-            self._update_metrics_display(metrics[0], append=False) # Assumindo que métricas são um dict único
+        self.metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS) or []
+        self._update_metrics_summary_button()
 
         # self.page.update()
         self._update_button_states()
@@ -405,6 +389,7 @@ class ChatViewContent(ft.Column):
         logger.info('[DEBUG] Enviando mensagem do usuário ao Chat...')
         self._scroll_to_last_message()
 
+        self.file_list_manager.collapse_container()
         thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
         self._add_message_to_view(thinking_message_data)
         self._scroll_to_last_message()
@@ -447,7 +432,8 @@ class ChatViewContent(ft.Column):
                     self.page.run_thread(lambda chunk=response_part["content"]: self._update_last_message_text(chunk, append=True))
                     logger.info(f"[DEBUG] Chunk Msg LLM by model {model_name}: {response_part['content'][:160]}...")
                 elif response_part["type"] == "final_metrics":
-                    self.page.run_thread(lambda data=response_part["data"]: self._update_metrics_display(data, append=True))
+                    response_part["data"]["model_name"] = model_name
+                    self.page.run_thread(lambda data=response_part["data"]: self._append_and_update_metrics(data))
                 elif response_part["type"] == "error":
                     error_text = f"**Erro:** {response_part['content']}"
                     self.page.run_thread(lambda: self._update_last_message_text(error_text, append=False))
@@ -455,7 +441,6 @@ class ChatViewContent(ft.Column):
         finally:
             self.page.run_thread(lambda: self._set_processing_state(False))
             self.page.run_thread(lambda: self._scroll_to_last_message())
-            self.file_list_manager.collapse_container()
 
     def _set_processing_state(self, is_processing: bool, clear_input: bool = False):
         if clear_input:
@@ -478,20 +463,19 @@ class ChatViewContent(ft.Column):
         from src.flet_ui.settings_drawer import DEFAULT_PROMPTS
         DEFAULT_KEY = "flexivel"
 
-        active_key = self.page.session.get(KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY) or DEFAULT_KEY
-
         prompt_key_map = {
             "estrito": KEY_SESSION_CHAT_PROMPT_STRICT,
             "flexivel": KEY_SESSION_CHAT_PROMPT_FLEXIBLE,
             "custom": KEY_SESSION_CHAT_PROMPT_CUSTOM,
         }
         
+        active_key = self.page.session.get(KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY) or DEFAULT_KEY
         session_key = prompt_key_map.get(active_key)
         if session_key:
-            if not self.page.session.get(session_key):
+            if not self.user_cache.get(session_key):
                 self.settings_drawer_component.load_default_prompts_from_firestore_or_fallback()
 
-            instructions_in_session = self.page.session.get(session_key)
+            instructions_in_session = self.user_cache.get(session_key)
             instructions_hardcoded = DEFAULT_PROMPTS.get(active_key, "")
             
             if instructions_in_session:
@@ -500,7 +484,6 @@ class ChatViewContent(ft.Column):
                 logger.warning(f"Instruction_Prompt não encontrado na sessão. Utilizando Default_Prompt hardcoded: {instructions_hardcoded[:60]}...")
             
             return instructions_in_session or instructions_hardcoded
-            # TODO: if active_key=="custom" and not session.get -> buscar do sqlite local
         
         # Fallback final se a chave for desconhecida
         logger.warning(f"Instruction_Prompt sem chave mapeada! Utilizando fallback hardcoded: {DEFAULT_PROMPTS[DEFAULT_KEY][:60]}...")
@@ -594,20 +577,19 @@ class ChatViewContent(ft.Column):
     def _handle_clear_chat(self, e: ft.ControlEvent):
         def confirm_action():
             self.chat_history_view.controls.clear()
-            self.metrics_panel.visible = False   # update no _show_initial_greeting.add_message
-            
+            self.metrics_history.clear()
+            self._update_metrics_summary_button()
+
             # Limpa todas as chaves de sessão relacionadas ao chat
-            for key in [KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_METRICS]:
-                if self.page.session.contains_key(key):
-                    self.page.session.remove(key)
+            if self.page.session.contains_key(KEY_SESSION_CHAT_FILES):
+                self.page.session.remove(KEY_SESSION_CHAT_FILES)
             
             clear_user_cache(self.page)
             self.user_cache = get_user_cache(self.page)
                 
             self._show_initial_greeting()
-            self.file_list_manager.update_display() # Limpa a exibição da lista de arquivos
-            self._update_button_states()
-        
+            self._on_file_list_changed() # Aciona o reset completo da UI
+
         show_confirmation_dialog(
             self.page, title="Limpar Conversa",
             content=ft.Text("Tem certeza que deseja abandonar esta conversa? Atualmente o histórico de chat não é recuperável."),
@@ -699,6 +681,8 @@ class ChatViewContent(ft.Column):
             logger.info("Nenhum arquivo carregado.")
             show_snackbar(self.page, "Nenhum arquivo válido foi carregado.", color=theme.COLOR_WARNING)
             return
+        
+        self.file_list_manager.expand_container()
 
         self.page.session.set(KEY_SESSION_CHAT_FILES, successful_files)
         self.file_list_manager.update_display(successful_files)
@@ -746,7 +730,7 @@ class ChatViewContent(ft.Column):
         try:
 
             # Usa os textos pré-extraídos
-            files_info = self.page.session.get(KEY_SESSION_CHAT_FILES, [])
+            files_info = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
             pdf_paths_ordered = [f['path_or_message'] for f in files_info]
 
             # Reutiliza a lógica de pré-processamento do nc_analyzer
@@ -828,23 +812,85 @@ class ChatViewContent(ft.Column):
             color=theme.COLOR_WARNING
         )
 
-    def _update_metrics_display(self, metrics_data: dict, append: bool = True):
-        """Atualiza o painel de métricas com os dados da última resposta."""
-        if not append:
-            self.metrics_content.controls.clear()
-
-        new_metric_rows = [
-            ft.Row([ft.Text("Custo da Resposta:", weight=ft.FontWeight.BOLD), ft.Text(f"U$ {metrics_data.get('total_cost_usd', 0):.6f}")], data=metrics_data),
-            ft.Row([ft.Text("Tokens de Entrada:", weight=ft.FontWeight.BOLD), ft.Text(f"{metrics_data.get('input_tokens', 0)}")]),
-            ft.Row([ft.Text("Tokens de Cache:", weight=ft.FontWeight.BOLD), ft.Text(f"{metrics_data.get('cached_tokens', 0)}")]),
-            ft.Row([ft.Text("Tokens de Saída:", weight=ft.FontWeight.BOLD), ft.Text(f"{metrics_data.get('output_tokens', 0)}")]),
-        ]
-        self.metrics_content.controls.extend(new_metric_rows)
-        self.metrics_panel.visible = True
+    def _append_and_update_metrics(self, metrics_data: dict):
+        """Adiciona os dados da última resposta ao histórico de métricas e atualiza a UI."""
+        self.metrics_history.append(metrics_data)
         self._save_state_to_session()
-        if self.metrics_panel.page:
-            self.metrics_panel.update()
+        self._update_metrics_summary_button()
 
+    def _update_metrics_summary_button(self):
+        """Calcula o total de tokens de input e atualiza o botão na barra superior."""
+        total_input_tokens = sum(m.get('input_tokens', 0) for m in self.metrics_history)
+        self.metrics_button.text = f"Tokens Input: {total_input_tokens:,}".replace(",", ".")
+        if self.metrics_button.page:
+            self.metrics_button.update()
+
+    def _show_metrics_dialog(self, e: ft.ControlEvent):
+        """Exibe um diálogo com a tabela detalhada de uso de tokens."""
+        
+        total_input_tokens = sum(m.get('input_tokens', 0) for m in self.metrics_history)
+        if not total_input_tokens:
+            return
+                
+        total_cost_usd = 0
+        metric_rows = []
+        for metric in self.metrics_history:
+            cost_usd = metric.get('total_cost_usd', 0)
+            cost_brl = cost_usd * cotacao_dolar_to_real
+            total_cost_usd += cost_usd
+            metric_rows.append(
+                ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(metric.get('model_name', 'N/A'))),
+                    ft.DataCell(ft.Text(str(metric.get('input_tokens', 0)))),
+                    ft.DataCell(ft.Text(str(metric.get('cached_tokens', 0)))),
+                    ft.DataCell(ft.Text(str(metric.get('reasoning_tokens', 0)))),
+                    ft.DataCell(ft.Text(str(metric.get('output_tokens', 0)))),
+                    ft.DataCell(ft.Text(f"U$ {cost_usd:.6f}")),
+                    ft.DataCell(ft.Text(f"R$ {cost_brl:.6f}")),
+                ])
+            )
+
+        total_cost_brl = total_cost_usd * cotacao_dolar_to_real
+
+        dialog_content = ft.DataTable(
+            columns=[
+                ft.DataColumn(ft.Text("Modelo")),
+                ft.DataColumn(ft.Text("Input")),
+                ft.DataColumn(ft.Text("Cache")),
+                ft.DataColumn(ft.Text("Reasoning")),
+                ft.DataColumn(ft.Text("Output")),
+                ft.DataColumn(ft.Text("Custo (USD)")),
+                ft.DataColumn(ft.Text("Custo (BRL)")),
+            ],
+            rows=metric_rows,
+        )
+
+        footer_row = ft.DataRow(cells=[
+            ft.DataCell(ft.Text("Total estimado", weight=ft.FontWeight.BOLD)),
+            ft.DataCell(ft.Text("")), ft.DataCell(ft.Text("")), 
+            ft.DataCell(ft.Text("")), ft.DataCell(ft.Text("")),
+            ft.DataCell(ft.Text(f"U$ {total_cost_usd:.6f}", weight=ft.FontWeight.BOLD)),
+            ft.DataCell(ft.Text(f"R$ {total_cost_brl:.6f}", weight=ft.FontWeight.BOLD)),
+        ])
+
+        dialog_content.rows.append(footer_row)
+
+        metrics_dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Detalhamento de Consumo de Tokens por Requisição"),
+            content=ft.Container(content=dialog_content, height=self.page.height * 0.6),
+            actions=[ft.TextButton("Fechar", on_click=lambda _: self._close_dialog(metrics_dialog))],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+        
+        self.page.overlay.append(metrics_dialog)
+        metrics_dialog.open = True
+        self.page.update()
+
+    def _close_dialog(self, dialog: ft.AlertDialog):
+        dialog.open = False
+        self.page.update()
+        self.page.overlay.remove(dialog)
     
 def create_chat_view_content(page: ft.Page) -> ft.Control:
     """Função de fábrica para criar a view de Chat com Documentos."""
