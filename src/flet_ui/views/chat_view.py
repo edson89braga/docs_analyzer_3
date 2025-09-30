@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 from time import perf_counter
 
 from src.flet_ui import theme
+from src.flet_ui.file_list_manager import FileListManager
 from src.flet_ui.components import (
     show_confirmation_dialog,
     ManagedFilePicker,
@@ -45,19 +46,22 @@ class ChatViewContent(ft.Column):
         self.editing_message_id: Optional[float] = None
         self._is_drawer_open = False
 
+        width_btn_bar = 180
+
         # Controles da UI 
-        self.upload_button = ft.ElevatedButton("Carregar Arquivos", icon=ft.Icons.UPLOAD_FILE, on_click=self._handle_upload_click)
+        self.upload_button = ft.ElevatedButton("Carregar Arquivo(s)", icon=ft.Icons.UPLOAD_FILE_ROUNDED, 
+                                               on_click=self._handle_upload_click, width=width_btn_bar)
+        self.process_button = ft.ElevatedButton("Extrair Conteúdo", icon=ft.Icons.PLAY_CIRCLE_OUTLINE, 
+                                                on_click=self._handle_process_click, disabled=True, width=width_btn_bar,
+                                                tooltip="Extrai o texto dos documentos carregados para iniciar o chat.") 
         self.optimize_button = ft.ElevatedButton("Otimizar Páginas", icon=ft.Icons.FILTER_LIST, on_click=self._handle_optimize_click, disabled=True, 
-                                                 tooltip="Filtra páginas irrelevantes para economizar tokens e melhorar o foco da IA.")
+                                                 tooltip="Filtra páginas irrelevantes para economizar tokens e melhorar o foco da IA.", width=width_btn_bar)
         self.anonymize_button = ft.ElevatedButton("Anonimizar Dados", icon=ft.Icons.PRIVACY_TIP_OUTLINED, on_click=self._handle_anonymize_click, 
-                                                    disabled=True, tooltip="Identifica e oculta dados e entidades antes de enviar à IA.")
-        self.clear_chat_button = ft.IconButton(icon=ft.Icons.DELETE_SWEEP_OUTLINED, tooltip="Limpar Conversa", on_click=self._handle_clear_chat)
+                                                    disabled=True, tooltip="Identifica e oculta dados e entidades antes de enviar à IA.", width=width_btn_bar)
+        self.clear_chat_button = ft.IconButton(icon=ft.Icons.DELETE_SWEEP_OUTLINED, tooltip="Limpar Conversa", on_click=self._handle_clear_chat, disabled=True)
         self.settings_button = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, tooltip="Configurações", on_click=self._handle_toggle_settings_drawer)
         
-        
-        self.file_list_view = ft.ListView(expand=False, spacing=3)
-        self.file_list_panel = self._create_panel("Arquivos Carregados", self.file_list_view, visible=False)
-        
+            
         self.metrics_content = ft.Column(spacing=2)
         self.metrics_panel = self._create_panel("Métricas da Sessão", self.metrics_content, visible=False)
         
@@ -71,7 +75,8 @@ class ChatViewContent(ft.Column):
         )
         self.send_button = ft.IconButton(icon=ft.Icons.SEND_ROUNDED, tooltip="Enviar Mensagem", on_click=self._handle_send_message, disabled=True)
         
-        self.managed_file_picker = self._initialize_file_picker()
+        self._initialize_file_picker()
+        self.file_list_manager = self._initialize_file_list_manager()
         
         # Drawer de Configurações (agora um container lateral)
         from src.flet_ui.settings_drawer import ChatSettingsDrawer
@@ -83,24 +88,25 @@ class ChatViewContent(ft.Column):
         # self.messages: List[Dict[str, Any]] = []
         self._restore_state_from_session()
 
-    def _initialize_file_picker(self) -> ManagedFilePicker:
+    def _initialize_file_picker(self):
         """Inicializa e retorna uma instância do ManagedFilePicker."""
         global_picker = self.page.data.get("global_file_picker")
         if not global_picker:
             raise RuntimeError("FilePicker global não foi inicializado no app principal.")
 
-        return ManagedFilePicker(
+        self.managed_file_picker = ManagedFilePicker(
             page=self.page,
             upload_dir=UPLOAD_TEMP_DIR,
             allowed_extensions=["pdf"] # "txt", "docx", "csv", "xlsx"
         )
 
-    def _update_file_list_display(self, files: List[Dict[str, Any]]):
-        self.file_list_view.controls.clear()
-        for f in files:
-            self.file_list_view.controls.append(ft.ListTile(title=ft.Text(f["name"]), leading=ft.Icon(ft.Icons.DESCRIPTION_OUTLINED), dense=True))
-        self.file_list_panel.visible = True
-        # self.file_list_panel.update()
+    def _initialize_file_list_manager(self) -> FileListManager:
+        return FileListManager(
+            page=self.page,
+            session_key_files_ordered=KEY_SESSION_CHAT_FILES,
+            managed_file_picker=self.managed_file_picker,
+            on_list_changed=self._on_file_list_changed
+        )
 
     def _create_panel(self, title: str, content: ft.Control, visible: bool = False) -> ft.ExpansionPanelList:
         """Cria um painel expansível padronizado, igual ao da nc_analyze_view."""
@@ -119,16 +125,21 @@ class ChatViewContent(ft.Column):
     
     def _build_layout(self):
         """Constrói a estrutura visual da view de chat."""
-        top_bar = ft.Row(
+        title_bar = ft.Text("Chat com Documentos",
+                             style=ft.TextThemeStyle.HEADLINE_SMALL,
+                             text_align=ft.TextAlign.CENTER)
+        action_buttons_bar = ft.Row(
             [
                 self.upload_button, 
+                self.process_button,
                 self.optimize_button,
                 self.anonymize_button,
                 ft.Container(expand=True),
                 self.clear_chat_button,
                 self.settings_button,
             ],
-            alignment=ft.MainAxisAlignment.START
+            alignment=ft.MainAxisAlignment.START,
+            spacing=10
         )
         
         input_bar = ft.Row(
@@ -138,7 +149,7 @@ class ChatViewContent(ft.Column):
 
         main_content_column = ft.Column(
             [
-                self.file_list_panel,
+                self.file_list_manager,
                 self.metrics_panel,
                 ft.Divider(height=1),
                 ft.Container(content=self.chat_history_view, expand=True), # Permite que o ListView expanda
@@ -156,7 +167,8 @@ class ChatViewContent(ft.Column):
         )
 
         self.controls = [
-            top_bar,
+            title_bar,
+            action_buttons_bar,
             ft.Divider(height=1),
             main_layout_with_drawer, # Substitui a coluna de conteúdo direto
             ft.Divider(height=1),
@@ -184,11 +196,7 @@ class ChatViewContent(ft.Column):
         
         files = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
         if files:
-            self._update_file_list_display(files)
-            self.optimize_button.disabled = False
-            self.anonymize_button.disabled = False
-            self.user_input_field.disabled = False
-            self.send_button.disabled = False
+            self.file_list_manager.update_display(files)
 
         # Restaura mensagens
         messages = self.user_cache.get(KEY_SESSION_CHAT_MESSAGES) or []
@@ -207,7 +215,8 @@ class ChatViewContent(ft.Column):
         if metrics:
             self._update_metrics_display(metrics[0], append=False) # Assumindo que métricas são um dict único
 
-        self.page.update()
+        # self.page.update()
+        self._update_button_states()
 
     def _show_initial_greeting(self):
         """Adiciona uma mensagem inicial de boas-vindas ao chat."""
@@ -379,7 +388,8 @@ class ChatViewContent(ft.Column):
         document_context = self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
 
         if not document_context:
-            show_snackbar(self.page, "Aguarde a extração de texto ser concluída ou carregue um arquivo.", color=theme.COLOR_WARNING)
+            #show_snackbar(self.page, "Aguarde a extração de texto ser concluída ou carregue um arquivo.", color=theme.COLOR_WARNING)
+            show_snackbar(self.page, "Para iniciar o chat é necessário extrair o conteúdo do(s) documento(s) carregados.", color=theme.COLOR_WARNING)
             self.page.run_thread(lambda: self._set_processing_state(False))
             return
         
@@ -445,6 +455,7 @@ class ChatViewContent(ft.Column):
         finally:
             self.page.run_thread(lambda: self._set_processing_state(False))
             self.page.run_thread(lambda: self._scroll_to_last_message())
+            self.file_list_manager.collapse_container()
 
     def _set_processing_state(self, is_processing: bool, clear_input: bool = False):
         if clear_input:
@@ -477,6 +488,9 @@ class ChatViewContent(ft.Column):
         
         session_key = prompt_key_map.get(active_key)
         if session_key:
+            if not self.page.session.get(session_key):
+                self.settings_drawer_component.load_default_prompts_from_firestore_or_fallback()
+
             instructions_in_session = self.page.session.get(session_key)
             instructions_hardcoded = DEFAULT_PROMPTS.get(active_key, "")
             
@@ -580,7 +594,6 @@ class ChatViewContent(ft.Column):
     def _handle_clear_chat(self, e: ft.ControlEvent):
         def confirm_action():
             self.chat_history_view.controls.clear()
-            self.file_list_panel.visible = False # 
             self.metrics_panel.visible = False   # update no _show_initial_greeting.add_message
             
             # Limpa todas as chaves de sessão relacionadas ao chat
@@ -592,6 +605,8 @@ class ChatViewContent(ft.Column):
             self.user_cache = get_user_cache(self.page)
                 
             self._show_initial_greeting()
+            self.file_list_manager.update_display() # Limpa a exibição da lista de arquivos
+            self._update_button_states()
         
         show_confirmation_dialog(
             self.page, title="Limpar Conversa",
@@ -618,6 +633,34 @@ class ChatViewContent(ft.Column):
         if self.editing_message_id != message_id:
             toolbar.visible = e.data == "true"
             toolbar.update()
+
+    def _update_button_states(self):
+        """Centraliza a lógica de habilitação/desabilitação de botões e campos."""
+        has_files = bool(self.page.session.get(KEY_SESSION_CHAT_FILES))
+        has_context = bool(self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT))
+
+        # Botão de Processar: habilitado se há arquivos e o contexto ainda não foi extraído.
+        self.process_button.disabled = not has_files or has_context
+
+        # Botão de otimização: habilitado se o contexto já foi extraído.
+        self.optimize_button.disabled = not has_context
+        self.anonymize_button.disabled = not has_context
+
+        # Campos de Chat: habilitados desde o carregamento de arquivos.
+        self.clear_chat_button.disabled = not has_files
+        self.user_input_field.disabled = not has_files
+        self.send_button.disabled = not has_files # not has_context
+
+        if has_context:
+            self.process_button.text = "Conteúdo extraído"
+            self.process_button.icon = ft.Icons.CHECK_CIRCLE
+            show_snackbar(self.page, "Extração de texto concluída. Você já pode interagir com o chat.", color=theme.COLOR_SUCCESS)
+        else:
+            self.process_button.text = "Extrair Conteúdo"
+            self.process_button.icon = ft.Icons.PLAY_CIRCLE_OUTLINE
+
+        hide_loading_overlay(self.page)
+        self.page.update()
 
     # --- Handlers de Ações ---
 
@@ -658,20 +701,32 @@ class ChatViewContent(ft.Column):
             return
 
         self.page.session.set(KEY_SESSION_CHAT_FILES, successful_files)
-        self._update_file_list_display(successful_files)
+        self.file_list_manager.update_display(successful_files)
         
         logger.info(f"Carregados {len(successful_files)} arquivos: {successful_files}")
-        
-        self.optimize_button.disabled = False
-        self.anonymize_button.disabled = False
-        
-        show_snackbar(self.page, f"{len(successful_files)} documento(s) carregado(s). Otimização de páginas recomendada.", color=theme.COLOR_SUCCESS)
-        self.optimize_button.update()
-        self.anonymize_button.update()
+        self._update_button_states()
 
-        # Extração automática em background
+        show_snackbar(self.page, f"{len(successful_files)} documento(s) carregado(s). Clique em 'Extrair Conteúdo' para continuar.", color=theme.COLOR_SUCCESS)
+
+    def _on_file_list_changed(self):
+        """Callback do FileListManager para a view de Chat."""
+        self.user_cache.pop(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, None)
+        self.user_cache.pop(KEY_SESSION_CHAT_RAW_PAGES_TEXT, None)
+        logger.info("Contexto do chat invalidado devido à alteração na lista de arquivos.")
+        self.file_list_manager.update_display() # Apenas atualiza a própria UI
+        self._update_button_states() # Reavalia o estado dos botões
+
+    def _handle_process_click(self, e: ft.ControlEvent):
+        """Inicia a extração de texto dos arquivos carregados."""
+        files = self.page.session.get(KEY_SESSION_CHAT_FILES)
+        if not files:
+            show_snackbar(self.page, "Nenhum arquivo para processar.", color=theme.COLOR_WARNING)
+            return
+
         show_loading_overlay(self.page, "Extraindo texto dos documentos...")
-        threading.Thread(target=self._extract_raw_context_from_files, args=(successful_files,), daemon=True).start()
+        self.process_button.disabled = True
+        self.process_button.update()
+        threading.Thread(target=self._extract_raw_context_from_files, args=(files,), daemon=True).start()
 
     def _handle_optimize_click(self, e: ft.ControlEvent):
         """Inicia o pré-processamento opcional dos documentos."""
@@ -725,9 +780,8 @@ class ChatViewContent(ft.Column):
                 show_snackbar(self.page, f"{len(pdf_paths_ordered)} documento(s) processado(s) e pronto(s) para o chat.", color=theme.COLOR_SUCCESS)
                 self.optimize_button.icon = ft.Icons.CHECK_CIRCLE
                 self.optimize_button.text = "Páginas Otimizadas"
-                self.optimize_button.disabled = True
-                self.optimize_button.update()
-                show_snackbar(self.page, f"Documentos otimizados. O chat usará o conteúdo filtrado.", color=theme.COLOR_SUCCESS)                
+                self._update_button_states() # Atualiza todos os botões e a UI geral           
+                # show_snackbar(self.page, f"Documentos otimizados. O chat usará o conteúdo filtrado.", color=theme.COLOR_SUCCESS)     
 
             self.page.run_thread(update_ui_after_processing)
 
@@ -758,20 +812,13 @@ class ChatViewContent(ft.Column):
             self.user_cache[KEY_SESSION_CHAT_RAW_PAGES_TEXT] = raw_pages_text_map
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = " ".join(all_texts_concatenated)            
             
-            def update_ui():
-                hide_loading_overlay(self.page)
-                self.user_input_field.disabled = False
-                self.send_button.disabled = False
-                self.user_input_field.update()
-                self.send_button.update()
-                show_snackbar(self.page, "Extração de texto concluída. Você já pode interagir com o chat.", color=theme.COLOR_SUCCESS)
-            self.page.run_thread(update_ui)
+            self.page.run_thread(self._update_button_states)
 
         except Exception as e:
-            def update_ui_on_error():
+            def update_ui_on_error(e):
                 hide_loading_overlay(self.page)
                 show_snackbar(self.page, f"Erro ao extrair texto: {e}", color=theme.COLOR_ERROR)
-            self.page.run_thread(update_ui_on_error)
+            self.page.run_thread(update_ui_on_error(e))
 
     def _handle_anonymize_click(self, e: ft.ControlEvent):
         """Handler para o botão de anonimização (ainda não implementado)."""

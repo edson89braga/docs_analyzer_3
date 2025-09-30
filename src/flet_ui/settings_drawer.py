@@ -479,6 +479,7 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
             custom_prompt = self.user_cache.get(cache_key) or self.db_manager.get_custom_prompt("chat_custom")
             if custom_prompt:
                 self.user_cache[cache_key] = custom_prompt # Garante que está em cache
+                logger.info(f"[DEBUG] GetActivePrompt: Chave ativa='{session_key}' - '{cache_key}' -> Texto: '{custom_prompt[:60]}...'")
                 return custom_prompt
 
         # O fallback aqui é uma segurança extra, mas _load_default... já deve ter populado
@@ -491,7 +492,13 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
         Tenta carregar os prompts padrão do Firestore. Se falhar, usa os
         prompts hardcoded como fallback e os salva na sessão.
         """
-        logger.debug("Drawer: Tentando carregar prompts padrão do Firestore...")
+        # Verifica se já foram carregados para evitar chamadas de rede desnecessárias
+        if (KEY_SESSION_CHAT_PROMPT_STRICT in self.user_cache and
+            KEY_SESSION_CHAT_PROMPT_FLEXIBLE in self.user_cache):
+            logger.info("[DEBUG] Prompts padrão já estão no cache. Pulando carregamento.")
+            return
+
+        logger.info("[DEBUG] Tentando carregar prompts padrão do Firestore...")
         user_token = self.page.session.get("auth_id_token")
         if not user_token:
             logger.warning("Drawer: Token de usuário ausente, usando prompts de fallback.")
@@ -533,7 +540,7 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
         logger.info("[DEBUG] Abrindo diálogo de edição de prompt.")
 
         prompt_editor_tf = ft.TextField(
-            value=self._get_active_prompt_text(),
+            value=self._get_active_prompt_text(), width=self.page.width * 0.6,
             multiline=True, min_lines=10, max_lines=20, expand=True, border_radius=8
         )
 
@@ -598,7 +605,6 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
                 ft.ElevatedButton("Cancelar", on_click=lambda e: dialog.close_programmatically("cancelled"), data="cancel"),
                 ft.ElevatedButton("Salvar", on_click=save_and_close, data="save"),
             ],
-            col = 6
         )
         dialog.show()
     

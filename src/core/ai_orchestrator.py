@@ -552,8 +552,9 @@ def analyze_text_with_llm(
                 if model_name.startswith("gpt-4"):
                     data_to_api.update({"temperature": temperature})
 
+                logger.info('[DEBUG]: Requisitando à API da Openai...')
                 response = client_openai.responses.parse(**data_to_api)
-
+                logger.info('[DEBUG]: Requisição concluída.')
                 final_response = response.output_text
 
                 # Obter informações sobre o uso de tokens

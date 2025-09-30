@@ -136,8 +136,16 @@ class ChatLLMOrchestrator:
                 
             # Remove valores None (evita passar chaves com valor None)
             request_kwargs = {k: v for k, v in data_to_openai_api.items() if v is not None}
+            
+            request_kwargs_str = f"Model: {request_kwargs['model']}; stream: {request_kwargs['stream']};" 
+            if 'reasoning' in request_kwargs:
+                request_kwargs_str += f" Reasoning: {request_kwargs['reasoning']}; Text: {request_kwargs['text']};"
+            request_kwargs_str += f"\nInstructions: {request_kwargs['instructions'][:160]} \nInput items count: {len(input_items)}"
+            msgs = [f"{item['content'][:60]}..." for item in request_kwargs['input']]
+            msgs = "\n".join(msgs)
+            request_kwargs_str += f"\n{msgs}"
 
-            logger.info(f"[DEBUG] Enviando request para OpenAI com kwargs: \n{request_kwargs}")
+            logger.info(f"[DEBUG] Enviando request para OpenAI com kwargs: \n{request_kwargs_str}") # TODO: suprimir esse log
 
             start_time = time.perf_counter()
             try:

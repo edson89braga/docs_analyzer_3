@@ -22,6 +22,8 @@ from src.flet_ui.components import (
     CardWithHeader, show_confirmation_dialog, ReadOnlySelectableTextField,
 )
 
+from src.flet_ui.file_list_manager import FileListManager
+
 from src.flet_ui import theme
 
 from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR, TEMPLATES_DOCX_SUBDIR, cotacao_dolar_to_real,
@@ -68,9 +70,6 @@ CTL_RESTART_BTN = "restart_button"
 CTL_EXPORT_BTN = "export_button"
 CTL_SETTINGS_BTN = "settings_button"
 CTL_RESET_SETTINGS_BTN = "reset_settings_button"
-CTL_FILE_LIST_PANEL = "file_list_panel"
-CTL_FILE_LIST_PANEL_TITLE = "file_list_panel_title"
-CTL_FILE_LIST_VIEW = "file_list_view"
 CTL_PROC_METADATA_PANEL = "proc_metadata_panel"
 CTL_PROC_METADATA_PANEL_TITLE = "proc_metadata_panel_title"
 CTL_PROC_METADATA_CONTENT = "proc_metadata_content"
@@ -135,11 +134,12 @@ class AnalyzePDFViewContent(ft.Column):
         self._build_gui_structure()
         
         self.export_manager = InternalExportManager(self)
-        self.file_list_manager = InternalFileListManager(self.page, self.gui_controls, self)
         self.analysis_controller = InternalAnalysisController(self.page, self.gui_controls, self)
         self.feedback_workflow_manager = FeedbackWorkflowManager(self.page, self)
 
         self._initialize_file_picker()  # Inicia o self.managed_file_picker
+        self.file_list_manager = self._initialize_file_list_manager()
+
         self._setup_event_handlers()
 
         self.settings_drawer_component.load_settings_into_controls() # Carrega configurações em page.session
@@ -168,12 +168,12 @@ class AnalyzePDFViewContent(ft.Column):
 
         # --- 1. Título Fixo ---
         title_bar = ft.Text("Análise inicial de Notícias-Crime e Outros",
-                             style=ft.TextThemeStyle.HEADLINE_MEDIUM,
+                             style=ft.TextThemeStyle.HEADLINE_SMALL,
                              text_align=ft.TextAlign.CENTER)
 
         # --- 2. Barra de Botões Fixa ---
         self.gui_controls[CTL_UPLOAD_BTN] = ft.ElevatedButton("Carregar Arquivo(s)", icon=ft.Icons.UPLOAD_FILE_ROUNDED, width=width_btn_bar)
-        self.gui_controls[CTL_PROCESS_BTN] = ft.ElevatedButton("Processar Conteúdo", icon=ft.Icons.MODEL_TRAINING_ROUNDED, width=width_btn_bar)
+        self.gui_controls[CTL_PROCESS_BTN] = ft.ElevatedButton("Processar Conteúdo", icon=ft.Icons.PLAY_CIRCLE_OUTLINE, width=width_btn_bar) # MODEL_TRAINING_ROUNDED
         self.gui_controls[CTL_ANALYZE_BTN] = ft.ElevatedButton("Solicitar Análise", icon=ft.Icons.ONLINE_PREDICTION_ROUNDED, width=width_btn_bar)
         
         self.gui_controls[CTL_PROMPT_STRUCT_BTN] = ft.ElevatedButton("Prompt Estruturado", icon=ft.Icons.EDIT_NOTE_ROUNDED, width=width_btn_bar)
@@ -204,26 +204,9 @@ class AnalyzePDFViewContent(ft.Column):
 
         # --- 3. Layout de Conteúdo com Panels Expansíveis e Containers ---
         # Panel 1: Lista de Arquivos
-        self.gui_controls[CTL_FILE_LIST_PANEL_TITLE] = ft.Text("Nenhum arquivo carregado.", weight=ft.FontWeight.BOLD) # Título dinâmico
-        self.gui_controls[CTL_FILE_LIST_VIEW] = ft.ListView(expand=False, spacing=3) # height=0 Altura controlada dinamicamente
-        file_list_panel_content = ft.Container(
-            content=self.gui_controls[CTL_FILE_LIST_VIEW],
-            #border=ft.border.all(1, ft.Colors.OUTLINE_VARIANT), # Para debug padding=5,
-            expand=True, # Permite que a ListView use o espaço disponível no ExpansionPanel
-            #bgcolor = theme.PANEL_CONTENT_BGCOLOR
-        )
-        file_list_header_container = ft.Container(content=ft.Row([ft.Container(width=12), self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]]),
-                                               expand=True, alignment=ft.alignment.center, # ft.MainAxisAlignment.CENTER,
-                                               bgcolor=None) # theme.PANEL_HEADER_BGCOLOR)
-        self.gui_controls[CTL_FILE_LIST_PANEL] = ft.ExpansionPanel(
-            header=file_list_header_container,
-            content=file_list_panel_content,
-            can_tap_header=True, # Permite expandir/recolher clicando no header
-            expanded=True, # Começa expandido
-            #bgcolor = theme.PANEL_HEADER_BGCOLOR
-        )
-        self.gui_controls[CTL_FILE_LIST_PANEL] = wrapper_panel_1(self.gui_controls[CTL_FILE_LIST_PANEL]) # wrapper_panel_1 = ExpansionPanelList
-        self.gui_controls[CTL_FILE_LIST_PANEL].visible=False # visível após carregament de PDF(s)
+
+        # O FileListManager agora é um controle completo que será inserido no layout.
+        # A referência será criada em _initialize_file_list_manager.
 
         # Panel 2: Metadados do Processamento
         self.gui_controls[CTL_PROC_METADATA_PANEL_TITLE] = ft.Text("Metadados do Processamento", weight=ft.FontWeight.BOLD)
@@ -327,13 +310,17 @@ class AnalyzePDFViewContent(ft.Column):
         # Layout principal dos painéis e resultado
         main_content_column = ft.Column(
             [
-                self.gui_controls[CTL_FILE_LIST_PANEL],
+                # O FileListManager será inserido aqui dinamicamente
+                ft.Column(spacing=5, expand=True, horizontal_alignment=ft.CrossAxisAlignment.START),
+
                 self.gui_controls[CTL_PROC_METADATA_PANEL],
+
                 ft.Column([
                     self.llm_result_title,
                     self.gui_controls[CTL_LLM_AI_WARNING_BALLOON],
                     self.llm_result_container], expand=True, spacing=6,
                     ),
+
                 self.gui_controls[CTL_LLM_METADATA_PANEL]
             ],
             expand=True,
@@ -430,13 +417,43 @@ class AnalyzePDFViewContent(ft.Column):
         else:
             logger.debug("Referência ao FilePicker GLOBAL para exportação e upload armazenada.")
     
-        self.managed_file_picker = ManagedFilePicker(
+        if not hasattr(self, 'managed_file_picker'):
+            self.managed_file_picker = ManagedFilePicker(
+                page=self.page,
+                upload_dir=UPLOAD_TEMP_DIR,
+                allowed_extensions=["pdf"]
+            )
+            logger.debug("ManagedFilePicker para UPLOAD instanciado.")
+
+    def _initialize_file_list_manager(self) -> FileListManager:
+        """Cria e configura a instância do FileListManager."""
+        manager = FileListManager(
             page=self.page,
-            upload_dir =UPLOAD_TEMP_DIR,
-            allowed_extensions =["pdf"]
+            session_key_files_ordered=KEY_SESSION_PDF_FILES_ORDERED,
+            managed_file_picker=self.managed_file_picker,
+            on_list_changed=self._on_file_list_changed
         )
-        logger.debug("ManagedFilePicker para UPLOAD instanciado usando o picker global.")
-        
+        self._original_main_layout_container.controls[0].content.controls[0] = manager # Insere no layout: self._original_main_layout_container -> main_content_column
+        # self.controls[3].controls[0].controls[0] = manager 
+        return manager
+
+    def _on_file_list_changed(self):
+        """Callback chamado pelo FileListManager quando a lista de arquivos muda."""
+        # A ação primária é resetar os resultados, já que a fonte de dados mudou.
+        def primary_action():
+            self._reset_processing_and_llm_results()
+            self.page.update()
+
+        # Se houver uma análise LLM (que será invalidada), o fluxo de feedback é acionado.
+        # O contexto da ação é genérico, pois pode ser uma remoção ou reordenação.
+        if self.feedback_workflow_manager:
+            self.feedback_workflow_manager.request_feedback_and_proceed(
+                action_context_name="Modificar Lista de Arquivos",
+                primary_action_callable=primary_action,
+            )
+        else:
+            primary_action()
+
     def _setup_event_handlers(self):
         """
         Configura os handlers de eventos para os controles da UI.
@@ -672,10 +689,9 @@ class AnalyzePDFViewContent(ft.Column):
             e (ft.ControlEvent): O evento de clique do botão.
         """
         logger.info("Botão 'Solicitar Análise' clicado.")
-        for ctrl in (CTL_FILE_LIST_PANEL, CTL_PROC_METADATA_PANEL):
-            if ctrl in self.gui_controls:
-                self.gui_controls[ctrl].controls[0].expanded = False
-                self.gui_controls[ctrl].update()
+        self.file_list_manager.collapse_container()
+        self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = False
+        self.gui_controls[CTL_PROC_METADATA_PANEL].update()
 
         if not self._files_processed:
             logger.debug("'Solicitar Análise' clicado, mas arquivos não processados. Redirecionando para 'process_and_analyze'.")
@@ -1197,7 +1213,7 @@ class AnalyzePDFViewContent(ft.Column):
         self._analysis_requested = self.page.session.get("has_llm_response") or False
         
         # 2. Chama os métodos de atualização individuais
-        self.file_list_manager.update_selected_files_display()
+        self.file_list_manager.update_display()
         self._update_processing_metadata_display()
         self._update_llm_metadata_display()
 
@@ -1221,6 +1237,7 @@ class AnalyzePDFViewContent(ft.Column):
 
         # 5. Renderiza todas as alterações na página de uma só vez
         # threading.Timer(0.1, lambda: self.page.update()).start()
+        
         # Adquire o Lock global antes de chamar page.go()
         # update_lock = self.page.data.get("global_update_lock")
         # with update_lock:
@@ -1264,7 +1281,7 @@ class AnalyzePDFViewContent(ft.Column):
         if self.managed_file_picker:
             self.managed_file_picker.clear_upload_directory()
 
-        # Chama o método central para atualizar toda a UI para o estado limpo
+        # Chama o método central para atualizar toda a GUI para o estado limpo
         self._update_gui_from_state()
         #self._show_info_balloon_or_result(show_balloon=True)
 
@@ -1947,154 +1964,6 @@ class LLMStructuredResultDisplay(ft.Column):
             return None
 
 # --- Classes Internas para Gerenciamento ---
-class InternalFileListManager:
-    """
-    Gerencia a lista de arquivos PDF selecionados na GUI.
-
-    Responsável por exibir os arquivos, permitir reordenar e remover itens,
-    e atualizar a GUI e o estado da sessão de acordo.
-    """
-    def __init__(self, page: ft.Page, gui_controls: Dict[str, ft.Control], parent_view: 'AnalyzePDFViewContent'):
-        """
-        Inicializa o gerenciador da lista de arquivos.
-
-        Args:
-            page (ft.Page): A página Flet.
-            gui_controls (Dict[str, ft.Control]): Dicionário de controles da UI da view principal.
-            parent_view (AnalyzePDFViewContent): Referência à instância da view principal.
-        """
-        self.page = page
-        self.gui_controls = gui_controls
-        self.parent_view = parent_view
-
-    def update_selected_files_display(self, files_ordered: Optional[List[Dict[str, Any]]] = None):
-        """
-        Atualiza a exibição da lista de arquivos selecionados na UI.
-
-        Args:
-            files_ordered (Optional[List[Dict[str, Any]]]): Lista opcional de dicionários representando os arquivos.
-                                                            Se None, obtém a lista da sessão.
-        """
-        list_view = self.gui_controls[CTL_FILE_LIST_VIEW]
-        title_text = self.gui_controls[CTL_FILE_LIST_PANEL_TITLE]
-        list_view.controls.clear()
-        
-        _files = files_ordered if files_ordered is not None else self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
- 
-        if not isinstance(_files, list): _files = []
- 
-        if not _files:
-            title_text.value = "Nenhum arquivo carregado." # list_view.height = 0
-            self.gui_controls[CTL_FILE_LIST_PANEL].visible = False
-        else:
-            self.gui_controls[CTL_FILE_LIST_PANEL].visible = True
-            self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = True
-            for idx, file_info in enumerate(_files):
-                if not isinstance(file_info, dict):
-                    continue # Skip malformado
-                
-                file_name_display = ft.Text(
-                    value=file_info.get('name', 'Nome Indisponível'),
-                    overflow=ft.TextOverflow.ELLIPSIS, width=700, # expand=True
-                    #tooltip=file_info.get('name', 'Nome Indisponível'
-                )
-                action_buttons = ft.Row([
-                    ft.IconButton(ft.Icons.ARROW_UPWARD_ROUNDED, on_click=lambda _, i=idx: self._move_file_in_list(i, -1), disabled=(idx == 0), icon_size=18, padding=3, tooltip="Mover para Cima"),
-                    ft.IconButton(ft.Icons.ARROW_DOWNWARD_ROUNDED, on_click=lambda _, i=idx: self._move_file_in_list(i, 1), disabled=(idx == len(_files) - 1), icon_size=18, padding=3, tooltip="Mover para Baixo"),
-                    ft.IconButton(ft.Icons.DELETE_OUTLINE_ROUNDED, on_click=lambda _, i=idx: self._remove_file_from_list(i), icon_color=theme.COLOR_ERROR, icon_size=18, padding=3, tooltip="Remover Arquivo")
-                ], spacing=0, alignment=ft.MainAxisAlignment.START, width=110)
-                # Necessário definir width aqui devido concorrência de espaço indevido com file_name_text no ListTile
- 
-                list_tile = ft.ListTile(title=file_name_display,
-                                        leading=ft.Icon(ft.Icons.PICTURE_AS_PDF_ROUNDED),
-                                        trailing=action_buttons,)
-                                        # visual_density=ft.VisualDensity.COMPACT,) # Torna o ListTile um pouco mais compacto
-                                        # dense=True,) # Outra opção para compactar
-                
-                # Draggable/DragTarget (simplificado, verificar documentação Flet para melhor implementação)
-                # Para este exemplo, a reordenação será via botões. Drag-and-drop pode ser complexo aqui.
-                list_view.controls.append(list_tile)
- 
-            if len(_files) == 1:
-                title_text.value = f"Arquivo selecionado: {_files[0]['name']}"
-            else:
-                title_text.value = f"Arquivos selecionados: {_files[0]['name']} e Outros {len(_files)-1}"
-            #list_view.height = min(len(_files) * 55, 220) # Ajustar altura máxima
-        
-        # Comentado devido AssertionError: Text Control must be added to the page first
-        # if self.page:
-        #    title_text.update()
-        #    list_view.update()
-        
-        self.page.session.set(KEY_SESSION_CURRENT_BATCH_NAME, title_text.value) # Salva nome do lote
-        # A atualização dos botões será feita pela view principal
-
-    def _move_file_in_list(self, index: int, direction: int):
-        """
-        Move um arquivo na lista de arquivos selecionados.
-
-        Args:
-            index (int): O índice atual do arquivo a ser movido.
-            direction (int): A direção do movimento (-1 para cima, 1 para baixo).
-        """
-        current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
-        new_index = index + direction
-        if not (0 <= index < len(current_files) and 0 <= new_index < len(current_files)):
-            return
- 
-        def primary_move_action():
-            current_files.insert(new_index, current_files.pop(index))
-            self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
-            # Apenas reseta os resultados, a UI será atualizada pelo método de reset
-            self.parent_view._reset_processing_and_llm_results()
-            update_lock = self.page.data.get("global_update_lock")
-            with update_lock:
-                self.page.update()
-                    
-        if self.parent_view.feedback_workflow_manager:
-            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
-                action_context_name="Reordenar Arquivos",
-                primary_action_callable=primary_move_action,
-            )
-        else:
-            primary_move_action()
-        
-    def _remove_file_from_list(self, index: int):
-        """
-        Remove um arquivo da lista de arquivos selecionados.
-
-        Args:
-            index (int): O índice do arquivo a ser removido.
-        """
-        current_files = list(self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or [])
-        if not (0 <= index < len(current_files)):
-            return
-        
-        def primary_remove_action():
-            removed_file_info = current_files.pop(index)
-            self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
-            
-            if self.parent_view.managed_file_picker:
-                self.parent_view.managed_file_picker.clear_upload_state_for_file(removed_file_info['name'])
-            
-            self.update_selected_files_display(current_files)
-            if not current_files: # Se a lista ficou vazia
-                self.parent_view._clear_all_data_and_gui() # Limpa tudo
-            else: # Apenas reseta os resultados do processamento
-                self.parent_view._reset_processing_and_llm_results()
-            
-            update_lock = self.page.data.get("global_update_lock")
-            with update_lock:
-                self.page.update()
-
-        if self.parent_view.feedback_workflow_manager:
-            self.parent_view.feedback_workflow_manager.request_feedback_and_proceed(
-                action_context_name="Remover Arquivo da Lista",
-                primary_action_callable=primary_remove_action,
-            )
-        else:
-            primary_remove_action()
-
 class InternalAnalysisController:
     """
     Controla o fluxo de processamento de PDF e análise LLM.
@@ -2209,11 +2078,7 @@ class InternalAnalysisController:
         if pdf_extractor == 'PdfPlumber':
             self.pdf_analyzer.extractor = PdfPlumberExtractor()
             logger.debug("Alterando pdf_extractor para PdfPlumber!")
- 
-        decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
-        if decrypted_api_key:
-            logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
- 
+  
         try:
             start_time = perf_counter()
  
@@ -2231,7 +2096,10 @@ class InternalAnalysisController:
             ready_embeddings, tokens_embeddings = None, None
             calculated_embedding_cost_usd = 0
             if vectorization_model == "text-embedding-3-small":
-                if not decrypted_api_key:
+                decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
+                if decrypted_api_key:
+                    logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+                else:
                     decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
                     assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
  
@@ -2505,8 +2373,7 @@ class InternalAnalysisController:
             self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
             self.page.run_thread(self._update_status_callback,  f"Erro na consulta à LLM: {ex_llm}", True, True)
         finally:
-            self.gui_controls[CTL_FILE_LIST_PANEL].controls[0].expanded = False
-            self.gui_controls[CTL_FILE_LIST_PANEL].update()
+            self.parent_view.file_list_manager.collapse_container()
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
             # self.gui_controls[CTL_LLM_METADATA_PANEL].controls[0].expanded = True
             # self.gui_controls[CTL_LLM_METADATA_PANEL].update()
