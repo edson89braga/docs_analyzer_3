@@ -620,13 +620,15 @@ class ChatViewContent(ft.Column):
         """Centraliza a lógica de habilitação/desabilitação de botões e campos."""
         has_files = bool(self.page.session.get(KEY_SESSION_CHAT_FILES))
         has_context = bool(self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT))
+        has_otimized = False # TODO: implementar flag quando comandado o _preprocess_doc
 
         # Botão de Processar: habilitado se há arquivos e o contexto ainda não foi extraído.
         self.process_button.disabled = not has_files or has_context
 
-        # Botão de otimização: habilitado se o contexto já foi extraído.
-        self.optimize_button.disabled = not has_context
-        self.anonymize_button.disabled = not has_context
+        # Botão de otimização: habilitado se o contexto já foi extraído mas ainda não otimizado
+        self.optimize_button.disabled = not has_context or has_otimized
+        
+        # self.anonymize_button.disabled = not has_context # Ainda não habilitada a função
 
         # Campos de Chat: habilitados desde o carregamento de arquivos.
         self.clear_chat_button.disabled = not has_files
@@ -636,11 +638,17 @@ class ChatViewContent(ft.Column):
         if has_context:
             self.process_button.text = "Conteúdo extraído"
             self.process_button.icon = ft.Icons.CHECK_CIRCLE
-            show_snackbar(self.page, "Extração de texto concluída. Você já pode interagir com o chat.", color=theme.COLOR_SUCCESS)
         else:
             self.process_button.text = "Extrair Conteúdo"
             self.process_button.icon = ft.Icons.PLAY_CIRCLE_OUTLINE
 
+        if has_otimized:
+            self.optimize_button.text = "Páginas Otimizadas"
+            self.optimize_button.icon = ft.Icons.CHECK_CIRCLE
+        else:
+            self.optimize_button.text = "Otimizar Páginas"
+            self.optimize_button.icon = ft.Icons.FILTER_LIST
+            
         hide_loading_overlay(self.page)
         self.page.update()
 
@@ -762,10 +770,8 @@ class ChatViewContent(ft.Column):
             def update_ui_after_processing():
                 hide_loading_overlay(self.page)                
                 show_snackbar(self.page, f"{len(pdf_paths_ordered)} documento(s) processado(s) e pronto(s) para o chat.", color=theme.COLOR_SUCCESS)
-                self.optimize_button.icon = ft.Icons.CHECK_CIRCLE
-                self.optimize_button.text = "Páginas Otimizadas"
                 self._update_button_states() # Atualiza todos os botões e a UI geral           
-                # show_snackbar(self.page, f"Documentos otimizados. O chat usará o conteúdo filtrado.", color=theme.COLOR_SUCCESS)     
+                show_snackbar(self.page, f"Conteúdo otimizado (filtrado) a ser utilizado no Chat.", color=theme.COLOR_SUCCESS)     
 
             self.page.run_thread(update_ui_after_processing)
 
@@ -795,7 +801,7 @@ class ChatViewContent(ft.Column):
 
             self.user_cache[KEY_SESSION_CHAT_RAW_PAGES_TEXT] = raw_pages_text_map
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = " ".join(all_texts_concatenated)            
-            
+            self.page.run_thread(lambda: show_snackbar(self.page, "Extração de texto concluída.", color=theme.COLOR_SUCCESS))
             self.page.run_thread(self._update_button_states)
 
         except Exception as e:
@@ -878,7 +884,7 @@ class ChatViewContent(ft.Column):
         metrics_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Detalhamento de Consumo de Tokens por Requisição"),
-            content=ft.Container(content=dialog_content, height=self.page.height * 0.6),
+            content=ft.Container(content=dialog_content, height=self.page.height * 0.6, adaptive=True),
             actions=[ft.TextButton("Fechar", on_click=lambda _: self._close_dialog(metrics_dialog))],
             actions_alignment=ft.MainAxisAlignment.END,
         )

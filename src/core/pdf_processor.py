@@ -138,7 +138,7 @@ class PdfPlumberExtractor(PDFTextExtractorStrategy):
                     text = page_pdf.extract_text() or ""  # Garante que o texto não seja None
 
                     file_name = os.path.basename(pdf_path)
-                    header = f"[Documento: {file_name} | Página: {p_idx + 1}]\n\n"
+                    header = f"Cabeçalho: [Documento: {file_name} | Página: {p_idx + 1}]\n\n"
                     text = header + text                    
 
                     content_by_page.append((p_idx, text))
@@ -199,7 +199,7 @@ class PyPdfExtractor(PDFTextExtractorStrategy):
                 text = page_pdf.extract_text() or ""
 
                 file_name = os.path.basename(pdf_path)
-                header = f"[Documento: {file_name} | Página: {p_idx + 1}]\n\n"
+                header = f"Cabeçalho: [Documento: {file_name} | Página: {p_idx + 1}]\n\n"
                 text = header + text                    
 
                 content_by_page.append((p_idx, text))
@@ -259,7 +259,7 @@ class FitzExtractor(PDFTextExtractorStrategy):
                 text = doc[p_idx].get_text() or ""
 
                 file_name = os.path.basename(pdf_path)
-                header = f"[Documento: {file_name} | Página: {p_idx + 1}]\n\n"
+                header = f"Cabeçalho: [Documento: {file_name} | Página: {p_idx + 1}]\n\n"
                 text = header + text                    
 
                 content_by_page.append((p_idx, text))
@@ -1139,7 +1139,7 @@ class PDFDocumentAnalyzer:
             # file_name = os.path.basename(page_data.get('original_pdf_path', ''))
             # page_num_display = page_data.get('page_index_in_file', -1) + 1
             # # Constrói o cabeçalho e o adiciona ao texto
-            # header = f"[Documento: {file_name} | Página: {page_num_display}]\n\n"
+            # header = f"Cabeçalho: [Documento: {file_name} | Página: {page_num_display}]\n\n"
             # page_text_with_header = header + original_page_text
 
             page_tokens = count_tokens(original_page_text, model_name=model_name_for_tokens)

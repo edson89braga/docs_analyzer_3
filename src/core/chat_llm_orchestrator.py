@@ -20,6 +20,14 @@ from src.core.ai_orchestrator import calc_costs_llm_analysis
 from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 
 
+def find_prefix_match_len(str1: str, str2: str) -> int:
+    """Encontra o comprimento do prefixo comum mais longo entre duas strings."""
+    min_len = min(len(str1), len(str2))
+    for i in range(min_len):
+        if str1[i] != str2[i]:
+            return i
+    return min_len
+
 class ChatLLMOrchestrator:
     """
     Orquestra a conversa entre o usuário e o LLM, com base no contexto de um documento.
@@ -29,6 +37,13 @@ class ChatLLMOrchestrator:
         Inicializa o orquestrador de chat.
         """
         self.client: Optional[openai.OpenAI] = None
+        self.previous_response_id = None
+
+        self.last_request_debug_info = {
+            # "prompt_cache_key": None,
+            # "instructions_str": "",
+            "input_str": ""
+        }        
 
     def _initialize_client(self, api_key: str):
         """Inicializa o cliente OpenAI se necessário."""
@@ -45,14 +60,21 @@ class ChatLLMOrchestrator:
         self,
         document_context: str,
         history: List[Dict[str, str]],
-        user_question: str
+        user_question: str,
+        instructions: str = None
     ) -> List[Dict[str, str]]:
         """
         Constrói a lista de itens de entrada para a Responses API.
         """
         input_items = []
 
-        # Adiciona o contexto do documento e a confirmação inicial
+        if instructions is not None:
+            input_items.append({
+                "role": "system",
+                "content": instructions
+            })
+
+        # Adiciona o contexto do documento e a confirmação inicial. 
         input_items.append({
             "role": "user",
             "content": f"Considere o conteúdo transcrito abaixo como contexto para as perguntas que farei a seguir:\n\n"
@@ -67,7 +89,7 @@ class ChatLLMOrchestrator:
 
         # Adiciona o histórico da conversa
         input_items.extend(history)
-
+        
         # Adiciona a nova pergunta do usuário
         input_items.append({"role": "user", "content": user_question})
 
@@ -108,19 +130,64 @@ class ChatLLMOrchestrator:
             yield {"type": "error", "content": "Cliente OpenAI não inicializado."}
             return
 
-        input_items = self._build_input_items(document_context, history, user_question)
+        # Monta o prompt de instruções com o contexto estático
+        # instructions_with_context = (
+        #     "--- INÍCIO DE CONTEÚDO DE DOCUMENTO(S) PARA ANÁLISE ---\n"
+        #     f"{document_context}\n"
+        #     "--- FIM DO CONTEÚDO DO DOCUMENTO ---\n\n"
+        #     f"{instructions}\n\n"
+        #     "Com base no documento fornecido e nas instruções acima, responda às perguntas e interações a seguir."
+        # )
+
+        # Gera uma chave de cache estável baseada no conteúdo do documento.
+        # Isso ajuda a OpenAI a rotear requisições sobre o mesmo documento para o mesmo cache. 
+        # [Esta estratégia não funcionou]
+        # cache_key_hash = hashlib.sha256(document_context.encode('utf-8')).hexdigest()
+        # prompt_cache_key = f"doc_sha256_{cache_key_hash}"
+
+        if not self.previous_response_id:
+            input_items = self._build_input_items(document_context, history, user_question, instructions=instructions)
+        else:
+            # Com ativação do Previous_response_id e do Store, o input itens deve ser apenas a nova pergunta do usuário
+            input_items = [{"role": "user", "content": user_question}]
+
+        # --- DEBUG: Comparação de Prefixo ---            
+        # Análise mais profunda comparando o conteúdo real
+        # instructions_str = instructions_with_context
+        input_str = str(input_items)
+        
+        if self.last_request_debug_info["input_str"]:
+            # instr_match_len = find_prefix_match_len(self.last_request_debug_info["instructions_str"], instructions_str)
+            input_match_len = find_prefix_match_len(self.last_request_debug_info["input_str"], input_str)
+
+            # logger.info(f"[CACHE CHECK] Comprimento do prefixo correspondente em 'instructions': {instr_match_len} de {len(instructions_str)} caracteres.")
+            logger.info(f"[CACHE CHECK] Comprimento do prefixo correspondente em 'input': {input_match_len} de {len(input_str)} caracteres.")
+        else:
+            logger.info("[CACHE CHECK] Primeira requisição - sem comparação disponível.")
+
+        # Armazena as informações desta requisição para a próxima comparação
+        # self.last_request_debug_info["prompt_cache_key"] = prompt_cache_key
+        # self.last_request_debug_info["instructions_str"] = instructions_str 
+        self.last_request_debug_info["input_str"] = input_str
+        # --- FIM DEBUG ---
+
         full_response_content = ""
         final_usage_data = {}
         
         # Monta kwargs para a Requests API sem enviar parâmetros top-level inválidos
         data_to_openai_api = {
             "model": model_name,
+            # "instructions": instructions_with_context, 
+            # -> Movido para input_message (role: system) a fim de tentar ativar o cache ao descontinuar o uso do field instruction da api
             "input": input_items,
-            "instructions": instructions,
+            "previous_response_id": self.previous_response_id,
+            "truncation": "auto", 
             "temperature": temperature if model_name.startswith("gpt-4") else None,
+            "stream": False,
             # Stream desabilitado propositalmente devido restrição da conta OpenAI que exige uma autenticação extra para uso de stream nos modelos gpt-5;
             # Poderia deixar habilitado o stream para uso com modelos gpt-4, mas parece que o excesso de atualizações em chunks prejudicou a GUI flet;
-            "stream": False # model_name.startswith("gpt-4"),
+            "store": True 
+            # Store obrigatório True se usar previous_response_id
             # "store": False # Padrão é True. Se False, não armazena resposta do modelo para recuperação posterior; Prejudicaria o cache?
         }
         try: 
@@ -140,8 +207,8 @@ class ChatLLMOrchestrator:
             request_kwargs_str = f"Model: {request_kwargs['model']}; stream: {request_kwargs['stream']};" 
             if 'reasoning' in request_kwargs:
                 request_kwargs_str += f" Reasoning: {request_kwargs['reasoning']}; Text: {request_kwargs['text']};"
-            request_kwargs_str += f"\nInstructions: {request_kwargs['instructions'][:160]} \nInput items count: {len(input_items)}"
-            msgs = [f"{item['content'][:60]}..." for item in request_kwargs['input']]
+            # request_kwargs_str += f"\nInstructions: {request_kwargs['instructions'][:160]} \nInput items count: {len(input_items)}"
+            msgs = [f"{item['content'][:100]}..." for item in request_kwargs['input']]
             msgs = "\n".join(msgs)
             request_kwargs_str += f"\n{msgs}"
 
@@ -149,7 +216,6 @@ class ChatLLMOrchestrator:
 
             start_time = time.perf_counter()
             try:
-                
                 response = self.client.responses.create(**request_kwargs)
 
             except TypeError as te:
@@ -202,6 +268,12 @@ class ChatLLMOrchestrator:
                 # coleta métricas de uso se existirem
                 if getattr(response, "usage", None):
                     final_usage_data = response.usage.model_dump()
+
+                if getattr(response, "id", None):
+                    self.previous_response_id = response.id
+                    logger.info(f'[DEBUG] previous_response_id: {response.id}')
+                else:
+                    logger.info('[DEBUG] Resposta não contém "id" para previous_response_id.')
 
             total_time = round(time.perf_counter() - start_time, 2)
 
