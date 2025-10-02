@@ -67,6 +67,20 @@
 
 
 
+# chat_view.py
+
+## Fluxos:
+
+1) create_chat_view_content -> ChatViewContent -> _build_layout -> _restore_state_from_session
+
+_handle_upload_click 	-> _handle_files_uploaded   -> _extract_raw_context_from_files -> session.set(KEY_SESSION_CHAT_RAW_PAGES_TEXT,...) & session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT,...)
+                                                    -> self.page.session.set(KEY_SESSION_CHAT_FILES, files)
+
+_handle_optimize_click 	-> _preprocess_documents(KEY_SESSION_CHAT_RAW_PAGES_TEXT) -> self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, aggregated_text)
+
+_handle_send_message 	-> THREAD: _get_context_and_call_ai -> Se texto ainda não processado: _get_raw_document_context -> _handle_ai_response -> _set_processing_state(False)
+						-> _set_processing_state(True)
+
 # src/flet_ui/settings_drawer.py
 
 ## Variáveis config:

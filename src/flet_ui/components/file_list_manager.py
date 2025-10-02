@@ -128,3 +128,19 @@ class FileListManager(ft.Column):
     def expand_container(self):
         self.panel_list.controls[0].expanded = True
         self.panel_list.update()
+
+    def disable_interactions(self):
+        if self.file_list_view.page and self.file_list_view.uid:
+            for tile in self.file_list_view.controls:
+                # tile.leading.disabled = True
+                for btn in tile.trailing.controls:
+                    btn.disabled = True
+            self.file_list_view.update()
+    
+    def enable_interactions(self):
+        if self.file_list_view.page and self.file_list_view.uid:
+            for tile in self.file_list_view.controls:
+                # tile.leading.disabled = False
+                for btn in tile.trailing.controls:
+                    btn.disabled = False
+            self.file_list_view.update()

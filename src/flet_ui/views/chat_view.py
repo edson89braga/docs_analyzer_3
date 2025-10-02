@@ -6,6 +6,8 @@ from typing import List, Dict, Any, Optional
 from time import perf_counter
 from datetime import datetime
 
+from scipy import optimize
+
 from src.flet_ui import theme
 from src.flet_ui.components.file_list_manager import FileListManager
 from src.flet_ui.components.settings_drawer import ChatSettingsDrawer
@@ -27,6 +29,7 @@ from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS,
 
 from src.utils import get_user_cache, clear_user_cache
 from src.services.local_db_manager import LocalDBManager
+from src.services.firebase_client import FirebaseClientFirestore
 
 import logging
 logger = logging.getLogger(__name__)
@@ -38,6 +41,7 @@ KEY_SESSION_CHAT_DOCUMENT_CONTEXT = "chat_view_document_context"
 KEY_SESSION_CHAT_MESSAGES = "chat_view_messages"
 KEY_SESSION_CHAT_METRICS = "chat_view_metrics"
 KEY_SESSION_CHAT_HAS_OPTIMIZED = "chat_view_has_optimized"
+KEY_SESSION_CHAT_SESSION_ID = "chat_view_session_id"
 # ----------------------------------------------------------------
 
 
@@ -49,10 +53,12 @@ class ChatViewContent(ft.Column):
 
         self.orchestrator = ChatLLMOrchestrator()
         self.db_manager = LocalDBManager()
+        self.firestore_client = FirebaseClientFirestore()
         
         # Estado da UI
         self.metrics_history: List[Dict[str, Any]] = []
         self.last_used_prompt_text: Optional[str] = None
+        self.chat_session_id: Optional[str] = None
         self.is_processing_response = False
         self.editing_message_id: Optional[float] = None
         self._is_drawer_open = False
@@ -62,17 +68,20 @@ class ChatViewContent(ft.Column):
         # Controles da UI 
         self.upload_button = ft.ElevatedButton("Carregar Arquivo(s)", icon=ft.Icons.UPLOAD_FILE_ROUNDED, 
                                                on_click=self._handle_upload_click, width=width_btn_bar)
-        self.process_button = ft.ElevatedButton("Extrair Conteúdo", icon=ft.Icons.PLAY_CIRCLE_OUTLINE, 
-                                                on_click=self._handle_process_click, disabled=True, width=width_btn_bar,
+        self.extract_button = ft.ElevatedButton("Extrair Texto(s)", icon=ft.Icons.PLAY_CIRCLE_OUTLINE, 
+                                                on_click=self._handle_process_extract, disabled=True, width=width_btn_bar,
                                                 tooltip="Extrai o texto dos documentos carregados para iniciar o chat.") 
-        self.optimize_button = ft.ElevatedButton("Otimizar Páginas", icon=ft.Icons.FILTER_LIST, on_click=self._handle_optimize_click, disabled=True, 
+        self.optimize_button = ft.ElevatedButton("Otimizar Conteúdo", icon=ft.Icons.FILTER_LIST, on_click=self._handle_optimize_click, disabled=True, 
                                                  tooltip="Filtra páginas irrelevantes para economizar tokens e melhorar o foco da IA.", width=width_btn_bar)
         self.anonymize_button = ft.ElevatedButton("Anonimizar Dados", icon=ft.Icons.PRIVACY_TIP_OUTLINED, on_click=self._handle_anonymize_click, 
                                                     disabled=True, tooltip="Identifica e oculta dados e entidades antes de enviar à IA.", width=width_btn_bar)
-        self.metrics_button = ft.TextButton(text="Tokens Input: 0", icon=ft.Icons.QUERY_STATS, on_click=self._show_metrics_dialog, 
+        self.metrics_button = ft.TextButton(text="Total Tokens: 0", icon=ft.Icons.QUERY_STATS, on_click=self._show_metrics_dialog, 
                                                 tooltip="Ver detalhes do consumo de tokens", width=200)
 
-        self.clear_chat_button = ft.IconButton(icon=ft.Icons.DELETE_SWEEP_OUTLINED, tooltip="Limpar Conversa", on_click=self._handle_clear_chat, disabled=True)
+        self.clear_chat_button_1 = ft.IconButton(icon=ft.Icons.DELETE_SWEEP_OUTLINED, tooltip="Limpar Conversa e reiniciar", on_click=self._handle_clear_chat, disabled=True)
+        self.clear_chat_button_2 = ft.ElevatedButton(text="Encerrar Chat", icon=ft.Icons.DELETE_SWEEP_OUTLINED, tooltip="Limpar Conversa e reiniciar", on_click=self._handle_clear_chat, disabled=False)
+        self.clear_chat_button = ft.Container(content = self.clear_chat_button_1)
+        
         self.settings_button = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, tooltip="Configurações", on_click=self._handle_toggle_settings_drawer)
         
         self.chat_history_view = ft.ListView(expand=True, spacing=15, auto_scroll=False)
@@ -126,7 +135,7 @@ class ChatViewContent(ft.Column):
             [
                 ft.Row([
                     self.upload_button, 
-                    self.process_button,
+                    self.extract_button,
                     self.optimize_button,
                     self.anonymize_button,
                     self.metrics_button], wrap=True),
@@ -185,6 +194,12 @@ class ChatViewContent(ft.Column):
 
         self.user_cache[KEY_SESSION_CHAT_METRICS] = self.metrics_history
 
+    def _start_new_chat_session(self):
+        """Gera um novo ID de sessão de chat e o armazena."""
+        self.chat_session_id = f"chat_{int(time.time())}_{secrets.token_hex(4)}"
+        self.page.session.set(KEY_SESSION_CHAT_SESSION_ID, self.chat_session_id)
+        logger.info(f"Nova sessão de chat iniciada com ID: {self.chat_session_id}")
+
     def _restore_state_from_session(self):
         """Restaura o estado do chat a partir da sessão ao carregar a view."""
         
@@ -207,6 +222,11 @@ class ChatViewContent(ft.Column):
         # Restaura métricas
         self.metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS) or []
         self._update_metrics_summary_button()
+
+        # Restaura ou cria o ID da sessão de chat
+        self.chat_session_id = self.page.session.get(KEY_SESSION_CHAT_SESSION_ID)
+        if not self.chat_session_id:
+            self._start_new_chat_session()
 
         # self.page.update()
         self._update_button_states()
@@ -456,7 +476,7 @@ class ChatViewContent(ft.Column):
                 elif response_part["type"] == "final_metrics":
                     response_part["data"]["timestamp"] = datetime.now()                    
                     response_part["data"]["model_name"] = model_name
-                    self.page.run_thread(lambda data=response_part["data"]: self._append_and_update_metrics(data))
+                    self.page.run_thread(lambda data=response_part["data"]: self._log_and_update_request_metrics(data))
                 elif response_part["type"] == "error":
                     error_text = f"**Erro:** {response_part['content']}"
                     self.page.run_thread(lambda: self._update_last_message_text(error_text, append=False))
@@ -602,17 +622,21 @@ class ChatViewContent(ft.Column):
     
     def _handle_clear_chat(self, e: ft.ControlEvent):
         def confirm_action():
-            self.chat_history_view.controls.clear()
-            self.metrics_history.clear()
-            self.last_used_prompt_text = None # Reseta o prompt rastreado
-            self.orchestrator.reset_conversation_history() # Limpa o ID da resposta anterior
-            self._update_metrics_summary_button()
+            # Salva o resumo da sessão antes de limpar
+            self._log_session_summary_metric()            
 
             # Limpa todas as chaves de sessão relacionadas ao chat
             for key in (KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_HAS_OPTIMIZED):
                 if self.page.session.contains_key(key):
                     self.page.session.remove(key)
-            
+
+            self.chat_history_view.controls.clear()
+            self.metrics_history.clear()
+            self.last_used_prompt_text = None # Reseta o prompt rastreado
+            self._start_new_chat_session() # Inicia uma nova sessão de chat com novo ID
+            self.orchestrator.reset_conversation_history() # Limpa o ID da resposta anterior
+            self._update_metrics_summary_button()
+
             clear_user_cache(self.page)
             self.user_cache = get_user_cache(self.page)
                 
@@ -645,14 +669,30 @@ class ChatViewContent(ft.Column):
             toolbar.visible = e.data == "true"
             toolbar.update()
 
+    def _update_button_states_by_chat(self):
+        if self.metrics_history:
+            # Se há histórico de métricas: implica que o chat começou
+            self.upload_button.disabled = True
+            self.clear_chat_button.content = self.clear_chat_button_2 # ElevatedButton
+            self.file_list_manager.disable_interactions()
+        else:
+            self.upload_button.disabled = False
+            self.clear_chat_button.content = self.clear_chat_button_1 # Iconbutton
+            self.file_list_manager.enable_interactions()
+        
+        if self.upload_button.page:
+            self.page.update(self.upload_button, self.clear_chat_button)
+            
     def _update_button_states(self):
         """Centraliza a lógica de habilitação/desabilitação de botões e campos."""
         has_files = bool(self.page.session.get(KEY_SESSION_CHAT_FILES))
         has_context = bool(self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT))
         has_optimized = self.page.session.get(KEY_SESSION_CHAT_HAS_OPTIMIZED) or False
 
+        self._update_button_states_by_chat()
+
         # Botão de Processar: habilitado se há arquivos e o contexto ainda não foi extraído.
-        self.process_button.disabled = not has_files or has_context
+        self.extract_button.disabled = not has_files or has_context
 
         # Botão de otimização: habilitado se o contexto já foi extraído mas ainda não otimizado
         self.optimize_button.disabled = not has_context or has_optimized
@@ -660,22 +700,23 @@ class ChatViewContent(ft.Column):
         # self.anonymize_button.disabled = not has_context # Ainda não habilitada a função
 
         # Campos de Chat: habilitados desde o carregamento de arquivos.
-        self.clear_chat_button.disabled = not has_files
+        self.clear_chat_button.content.disabled = not has_files
+
         self.user_input_field.disabled = not has_files
         self.send_button.disabled = not has_files # not has_context
 
         if has_context:
-            self.process_button.text = "Conteúdo extraído"
-            self.process_button.icon = ft.Icons.CHECK_CIRCLE
+            self.extract_button.text = "Texto extraído"
+            self.extract_button.icon = ft.Icons.CHECK_CIRCLE
         else:
-            self.process_button.text = "Extrair Conteúdo"
-            self.process_button.icon = ft.Icons.PLAY_CIRCLE_OUTLINE
+            self.extract_button.text = "Extrair Texto(s)"
+            self.extract_button.icon = ft.Icons.PLAY_CIRCLE_OUTLINE
 
         if has_optimized:
-            self.optimize_button.text = "Páginas otimizadas"
+            self.optimize_button.text = "Conteúdo otimizado"
             self.optimize_button.icon = ft.Icons.CHECK_CIRCLE
         else:
-            self.optimize_button.text = "Otimizar Páginas"
+            self.optimize_button.text = "Otimizar Conteúdo"
             self.optimize_button.icon = ft.Icons.FILTER_LIST
             
         hide_loading_overlay(self.page)
@@ -727,35 +768,45 @@ class ChatViewContent(ft.Column):
         logger.info(f"Carregados {len(successful_files)} arquivos: {successful_files}")
         self._update_button_states()
 
-        show_snackbar(self.page, f"{len(successful_files)} documento(s) carregado(s). Clique em 'Extrair Conteúdo' para continuar.", color=theme.COLOR_SUCCESS)
+        show_snackbar(self.page, f"{len(successful_files)} documento(s) carregado(s). Clique em 'Extrair Texto' para continuar.", color=theme.COLOR_SUCCESS)
 
     def _on_file_list_changed(self):
         """Callback do FileListManager para a view de Chat."""
+        # Se a lista de arquivos mudar, o contexto extraído anteriormente é invalidado.
+        
+        # Caso já haja interação com LLM ativa, em vez de incluir aqui um confirmation_dialog para redirecinar para handle_clear_chat,
+        # Opto por tornar disabled os componentes que alteram a lista de arquivos, forçando o usuário a limpar a conversa primeiro.
+
         self.user_cache.pop(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, None)
         self.user_cache.pop(KEY_SESSION_CHAT_RAW_PAGES_TEXT, None)
-        self.page.session.remove(KEY_SESSION_CHAT_HAS_OPTIMIZED) # Invalida a otimização
+        if self.page.session.contains_key(KEY_SESSION_CHAT_HAS_OPTIMIZED):
+            self.page.session.remove(KEY_SESSION_CHAT_HAS_OPTIMIZED) # Invalida a otimização
         logger.info("Contexto do chat invalidado devido à alteração na lista de arquivos.")
         self.file_list_manager.update_display() # Apenas atualiza a própria UI
         self._update_button_states() # Reavalia o estado dos botões
 
-    def _handle_process_click(self, e: ft.ControlEvent):
+    def _handle_process_extract(self, e: ft.ControlEvent, optimize_too: bool = False):
         """Inicia a extração de texto dos arquivos carregados."""
         files = self.page.session.get(KEY_SESSION_CHAT_FILES)
         if not files:
             show_snackbar(self.page, "Nenhum arquivo para processar.", color=theme.COLOR_WARNING)
             return
 
+        # Se o chat já começou, esta ação não deve ser permitida; Mas em vez de incluir um return aqui, 
+        # opto por tornar disabled o botão de processar quando o chat já começou.
+
         show_loading_overlay(self.page, "Extraindo texto dos documentos...")
-        self.process_button.disabled = True
-        self.process_button.update()
-        threading.Thread(target=self._extract_raw_context_from_files, args=(files,), daemon=True).start()
+        threading.Thread(target=self._extract_raw_context_from_files, args=(files, optimize_too), daemon=True).start()
 
     def _handle_optimize_click(self, e: ft.ControlEvent):
         """Inicia o pré-processamento opcional dos documentos."""
         raw_pages_text = self.user_cache.get(KEY_SESSION_CHAT_RAW_PAGES_TEXT) or {}
         if not raw_pages_text:
-            show_snackbar(self.page, "Aguarde a extração inicial do texto antes de otimizar.", color=theme.COLOR_WARNING)
+            self._handle_process_extract(None, optimize_too=True)
+            #show_snackbar(self.page, "Aguarde a extração inicial do texto antes de otimizar.", color=theme.COLOR_WARNING)
             return
+        
+        # Aqui deve haver o mesmo bloqueio que temos em _handle_process_click.
 
         show_loading_overlay(self.page, "Otimizando páginas relevantes...")
         threading.Thread(target=self._preprocess_documents, args=(raw_pages_text,), daemon=True).start()
@@ -796,6 +847,7 @@ class ChatViewContent(ft.Column):
             # Salva o contexto na sessão
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = aggregated_text
             self.page.session.set(KEY_SESSION_CHAT_HAS_OPTIMIZED, True)
+            self._log_file_processing_metrics(optimized=True, total_pages=len(ordered_keys), relevant_pages=len(relevant_indices))
 
             # Atualiza a UI na thread principal
             def update_ui_after_processing():
@@ -810,10 +862,12 @@ class ChatViewContent(ft.Column):
             logger.error(f"Erro ao pré-processar documentos para o chat: {e}", exc_info=True)
             def update_ui_on_error(e: Exception):
                 hide_loading_overlay(self.page)
-                show_snackbar(self.page, f"Erro ao processar documentos: {e}", color=theme.COLOR_ERROR)
+                msg_error = f"Erro ao processar documentos: {e}"
+                logger.error(msg_error, exc_info=True)
+                show_snackbar(self.page, msg_error, color=theme.COLOR_ERROR)
             self.page.run_thread(update_ui_on_error(e))
 
-    def _extract_raw_context_from_files(self, files: List[Dict[str, Any]]):
+    def _extract_raw_context_from_files(self, files: List[Dict[str, Any]], optimize_too: bool = False):
         """
         Extrai e concatena o texto bruto de todas as páginas de todos os arquivos carregados.
         Este é o fallback para quando a otimização não é executada.
@@ -824,21 +878,29 @@ class ChatViewContent(ft.Column):
             raw_pages_text_map = {}
             all_texts_concatenated = []
 
+            total_pages_raw = 0
             for file_info in files:
                 pdf_path = file_info["path_or_message"]
                 pages = analyzer.extractor.extract_texts_from_pages(pdf_path)
+                total_pages_raw += len(pages)
                 raw_pages_text_map[pdf_path] = pages
                 all_texts_concatenated.extend([text for _, text in pages])
 
+            self._log_file_processing_metrics(optimized=False, total_pages=total_pages_raw)
             self.user_cache[KEY_SESSION_CHAT_RAW_PAGES_TEXT] = raw_pages_text_map
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = " ".join(all_texts_concatenated)            
             self.page.run_thread(lambda: show_snackbar(self.page, "Extração de texto concluída.", color=theme.COLOR_SUCCESS))
             self.page.run_thread(self._update_button_states)
 
+            if optimize_too:
+                self.page.run_thread(lambda: self._handle_optimize_click(None))
+
         except Exception as e:
             def update_ui_on_error(e):
                 hide_loading_overlay(self.page)
-                show_snackbar(self.page, f"Erro ao extrair texto: {e}", color=theme.COLOR_ERROR)
+                msg_error = f"Erro ao extrair texto: {e}"
+                logger.error(msg_error, exc_info=True)
+                show_snackbar(self.page, msg_error, color=theme.COLOR_ERROR)
             self.page.run_thread(update_ui_on_error(e))
 
     def _handle_anonymize_click(self, e: ft.ControlEvent):
@@ -849,16 +911,23 @@ class ChatViewContent(ft.Column):
             color=theme.COLOR_WARNING
         )
 
-    def _append_and_update_metrics(self, metrics_data: dict):
-        """Adiciona os dados da última resposta ao histórico de métricas e atualiza a UI."""
+    def _log_and_update_request_metrics(self, metrics_data: dict):
+        """
+        Adiciona os dados da última resposta ao histórico de métricas,
+        salva a métrica individual no Firestore e atualiza a UI.
+        """
         self.metrics_history.append(metrics_data)
+        self._update_button_states_by_chat()
         self._save_state_to_session()
         self._update_metrics_summary_button()
 
+        # Envia a métrica desta requisição específica para o Firestore
+        self._log_single_request_metric(metrics_data)        
+
     def _update_metrics_summary_button(self):
         """Calcula o total de tokens de input e atualiza o botão na barra superior."""
-        total_input_tokens = sum(m.get('input_tokens', 0) for m in self.metrics_history)
-        self.metrics_button.text = f"Tokens Input: {total_input_tokens:,}".replace(",", ".")
+        total_tokens = sum(m.get('total_tokens', 0) for m in self.metrics_history)
+        self.metrics_button.text = f"Total Tokens: {total_tokens:,}".replace(",", ".")
         if self.metrics_button.page:
             self.metrics_button.update()
 
@@ -881,9 +950,9 @@ class ChatViewContent(ft.Column):
                     ft.DataCell(ft.Text(timestamp.strftime("%d/%m/%Y - %H:%M:%S"))),
                     ft.DataCell(ft.Text(metric.get('model_name', 'N/A'))),
                     ft.DataCell(ft.Text(str(metric.get('input_tokens', 0)))),
-                    ft.DataCell(ft.Text(str(metric.get('cached_tokens', 0)))),
-                    ft.DataCell(ft.Text(str(metric.get('reasoning_tokens', 0)))),
+                    ft.DataCell(ft.Text('(' + str(metric.get('cached_tokens', 0)) + ')')),
                     ft.DataCell(ft.Text(str(metric.get('output_tokens', 0)))),
+                    ft.DataCell(ft.Text('(' + str(metric.get('reasoning_tokens', 0)) + ')')),
                     ft.DataCell(ft.Text(f"U$ {cost_usd:.6f}")),
                     ft.DataCell(ft.Text(f"R$ {cost_brl:.6f}")),
                 ])
@@ -897,8 +966,8 @@ class ChatViewContent(ft.Column):
                 ft.DataColumn(ft.Text("Modelo")),
                 ft.DataColumn(ft.Text("Input")),
                 ft.DataColumn(ft.Text("Cache")),
-                ft.DataColumn(ft.Text("Reasoning")),
                 ft.DataColumn(ft.Text("Output")),
+                ft.DataColumn(ft.Text("Reasoning")),
                 ft.DataColumn(ft.Text("Custo (USD)")),
                 ft.DataColumn(ft.Text("Custo (BRL)")),
             ],
@@ -919,7 +988,7 @@ class ChatViewContent(ft.Column):
         metrics_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Detalhamento de Consumo de Tokens por Requisição"),
-            content=ft.Column(content=dialog_content, height=self.page.height*0.2, scroll=ft.ScrollMode.ADAPTIVE),
+            content=ft.Column([dialog_content], height=self.page.height*0.6, scroll=ft.ScrollMode.ADAPTIVE),
             actions=[ft.TextButton("Fechar", on_click=lambda _: self._close_dialog(metrics_dialog))],
             actions_alignment=ft.MainAxisAlignment.END,
         )
@@ -934,6 +1003,100 @@ class ChatViewContent(ft.Column):
         self.page.overlay.remove(dialog)
     
 
+    # --- Métodos de Logging de Métricas ---
+    def _get_valid_user_context(self) -> Optional[tuple[str, str]]:
+        from src.flet_ui.app import check_and_refresh_token_if_needed
+        if not check_and_refresh_token_if_needed(self.page): return None
+        
+        user_token = self.page.session.get("auth_id_token")
+        user_id = self.page.session.get("auth_user_id")
+
+        if not user_token or not user_id:
+            logger.error("Contexto de usuário inválido para logging de métricas.")
+            return None
+        return user_token, user_id
+
+    def _log_file_processing_metrics(self, optimized: bool, total_pages: int, relevant_pages: Optional[int] = None):
+        context = self._get_valid_user_context()
+        if not context: return
+        user_token, user_id = context
+
+        files = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
+        filenames = [f.get('name', 'N/A') for f in files]
+        
+        processing_data = {
+            "was_optimized": optimized,
+            "total_pages_in_docs": total_pages
+        }        
+        if relevant_pages is not None:
+            processing_data["relevant_pages_after_optimization"] = relevant_pages
+
+        metric_payload = {
+            "chat_session_id": self.chat_session_id,
+            "start_timestamp": datetime.now().isoformat(),
+            "files_info": {
+                "count": len(filenames),
+                "names": filenames
+            },
+            "processing_info": processing_data
+        }
+        
+        doc_path = f"user_metrics/{user_id}/chat_sessions/{self.chat_session_id}"
+        self.firestore_client.set_document_data(user_token, doc_path, metric_payload) # Cria o documento
+
+    def _log_single_request_metric(self, request_metric: Dict[str, Any]):
+        context = self._get_valid_user_context()
+        if not context: return
+        user_token, user_id = context
+
+        request_timestamp = request_metric.get("timestamp", datetime.now())
+        request_id = f"req_{request_timestamp.strftime('%Y%m%d%H%M%S%f')}"
+
+        # Cria um dicionário aninhado. A chave 'requests' conterá um mapa,
+        # e estamos adicionando/atualizando um campo (request_id) dentro desse mapa.
+
+        metric_payload = {
+            "requests": {
+                request_id: {
+                    "timestamp": request_timestamp.isoformat(),
+                    "model_name": request_metric.get("model_name"),
+                    "input_tokens": request_metric.get("input_tokens"),
+                    "cached_tokens": request_metric.get("cached_tokens"),
+                    "output_tokens": request_metric.get("output_tokens"),
+                    "reasoning_tokens": request_metric.get("reasoning_tokens"),
+                    "total_cost_usd": request_metric.get("total_cost_usd"),
+                }
+            }
+        }
+        
+        doc_path = f"user_metrics/{user_id}/chat_sessions/{self.chat_session_id}"
+        self.firestore_client.set_document_data(user_token, doc_path, metric_payload, merge=True)
+
+    def _log_session_summary_metric(self):
+        context = self._get_valid_user_context()
+        if not context or not self.metrics_history: return
+        user_token, user_id = context
+
+        total_input = sum(m.get('input_tokens', 0) for m in self.metrics_history)
+        total_output = sum(m.get('output_tokens', 0) for m in self.metrics_history)
+        total_cost = sum(m.get('total_cost_usd', 0) for m in self.metrics_history)
+
+        summary_payload = {
+            "chat_session_id": self.chat_session_id,
+            "end_timestamp": datetime.now().isoformat(),
+            "summary": {
+                "total_requests": len(self.metrics_history),
+                "total_input_tokens": total_input,
+                "total_output_tokens": total_output,
+                "total_session_cost_usd": total_cost,
+            }
+        }
+        
+        doc_path = f"user_metrics/{user_id}/chat_sessions/{self.chat_session_id}"
+        
+        self.firestore_client.set_document_data(user_token, doc_path, summary_payload, merge=True)
+
+
 def create_chat_view_content(page: ft.Page) -> ft.Control:
     """Função de fábrica para criar a view de Chat com Documentos."""
     logger.info("View Chat_Docs: Iniciando criação (nova estrutura).")
@@ -946,20 +1109,4 @@ def create_chat_view_content(page: ft.Page) -> ft.Control:
     logger.info(f"[DEBUG] Create_analyze_pdf_content em {execution_time_p:.4f}s")
     
     return retorno
-
-
-'''
-## Fluxos:
-
-1) create_chat_view_content -> ChatViewContent -> _build_layout -> _restore_state_from_session
-
-_handle_upload_click 	-> _handle_files_uploaded   -> _extract_raw_context_from_files -> session.set(KEY_SESSION_CHAT_RAW_PAGES_TEXT,...) & session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT,...)
-                                                    -> self.page.session.set(KEY_SESSION_CHAT_FILES, files)
-
-_handle_optimize_click 	-> _preprocess_documents(KEY_SESSION_CHAT_RAW_PAGES_TEXT) -> self.page.session.set(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, aggregated_text)
-
-_handle_send_message 	-> THREAD: _get_context_and_call_ai -> Se texto ainda não processado: _get_raw_document_context -> _handle_ai_response -> _set_processing_state(False)
-						-> _set_processing_state(True)
-
-'''
 

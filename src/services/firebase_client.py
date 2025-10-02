@@ -731,7 +731,69 @@ class FirebaseClientFirestore:
         except Exception as e:
             logger.error(f"Erro ao salvar dados de feedback detalhado: {e}", exc_info=True)
         return False
-  
+
+    def _flatten_dict_for_update_mask(self, d: Dict[str, Any], parent_key: str = '') -> List[str]:
+        """
+        Converte um dicionário aninhado em uma lista de caminhos com notação de ponto
+        para ser usada no updateMask do Firestore.
+        Ex: {"a": {"b": 1}, "c": 2} -> ["a.b", "c"]
+        """
+        items = []
+        for k, v in d.items():
+            new_key = f"{parent_key}.{k}" if parent_key else k
+            # No Firestore, para mesclar um mapa, você aponta para o mapa pai.
+            # A recursão profunda não é necessária para o updateMask se você estiver mesclando o mapa inteiro.
+            # No entanto, para ser preciso e apenas atualizar o sub-campo, a recursão é correta.
+            if isinstance(v, dict) and v:
+                items.extend(self._flatten_dict_for_update_mask(v, new_key))
+            else:
+                items.append(new_key)
+        return items
+
+    def set_document_data(self, user_token: str, document_path: str, data: Dict[str, Any], merge: bool = False) -> bool:
+        """
+        Cria ou atualiza um documento no Firestore com os dados fornecidos.
+
+        Args:
+            user_token (str): Token de ID do Firebase do usuário.
+            document_path (str): Caminho completo do documento (ex: "collection/doc_id").
+            data (Dict[str, Any]): Dicionário com os dados a serem salvos.
+            merge (bool): Se True, mescla os dados com o documento existente.
+                          Se False (padrão), sobrescreve o documento.
+
+        Returns:
+            bool: True se a operação for bem-sucedida, False caso contrário.
+        """
+        if not all([user_token, document_path, data]):
+            logger.error("set_document_data: Argumentos inválidos (token, path ou data faltando).")
+            return False
+
+        firestore_payload = {"fields": {k: _to_firestore_value(v) for k, v in data.items()}}
+        
+        query_params = {}
+        if merge:
+            # Para mesclar, o Firestore REST API espera um updateMask com os nomes dos campos.
+            # Isso garante que apenas esses campos sejam alterados.
+            query_params["updateMask.fieldPaths"] = self._flatten_dict_for_update_mask(data)
+        logger.debug(f"Tentando salvar dados no Firestore: {document_path} (Merge: {merge})")
+        try:
+            # Usamos PATCH. Se o documento não existe, ele será criado.
+            # Se existe e merge=True, os campos serão atualizados.
+            # Se existe e merge=False, o documento será sobrescrito (sem updateMask).
+            self._make_firestore_request(
+                method="PATCH",
+                user_token=user_token,
+                document_path=document_path,
+                json_data=firestore_payload,
+                params=query_params if merge else None
+            )
+            logger.debug(f"Dados salvos com sucesso no Firestore: {document_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Falha ao salvar dados no Firestore ({document_path}): {e}")
+            return False
+
+
 class FbManagerAuth:
     """
     Gerencia a autenticação de usuários com o Firebase Authentication
