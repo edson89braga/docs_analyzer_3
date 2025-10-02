@@ -6,7 +6,7 @@ import flet as ft
 from typing import Optional
 
 from src.services.firebase_client import FbManagerAuth
-from src.flet_ui.components import (
+from src.flet_ui.components.components import (
     show_snackbar, 
     show_loading_overlay, 
     hide_loading_overlay,

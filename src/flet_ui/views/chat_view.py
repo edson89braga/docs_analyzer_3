@@ -7,8 +7,9 @@ from time import perf_counter
 from datetime import datetime
 
 from src.flet_ui import theme
-from src.flet_ui.file_list_manager import FileListManager
-from src.flet_ui.components import (
+from src.flet_ui.components.file_list_manager import FileListManager
+from src.flet_ui.components.settings_drawer import ChatSettingsDrawer
+from src.flet_ui.components.components import (
     show_confirmation_dialog,
     ManagedFilePicker,
     show_loading_overlay,
@@ -81,7 +82,6 @@ class ChatViewContent(ft.Column):
         self.file_list_manager = self._initialize_file_list_manager()
         
         # Drawer de Configurações (agora um container lateral)
-        from src.flet_ui.settings_drawer import ChatSettingsDrawer
         self.settings_drawer_component = ChatSettingsDrawer(self.page) # Usa o drawer específico do Chat
         self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0, animate=ft.Animation(300, ft.AnimationCurve.EASE_OUT_QUART))
         
@@ -203,6 +203,8 @@ class ChatViewContent(ft.Column):
 
         # self.page.update()
         self._update_button_states()
+
+    # --- Métodos relacionados ao containeir chat_history_view ---
 
     def _show_initial_greeting(self):
         """Adiciona uma mensagem inicial de boas-vindas ao chat."""
@@ -474,7 +476,7 @@ class ChatViewContent(ft.Column):
         A responsabilidade de carregar os prompts (do Firestore ou fallback)
         é do ChatSettingsDrawer.
         """
-        from src.flet_ui.settings_drawer import DEFAULT_PROMPTS
+        from src.flet_ui.components.settings_drawer import DEFAULT_PROMPTS
         DEFAULT_KEY = "flexivel"
 
         prompt_key_map = {
@@ -924,6 +926,7 @@ class ChatViewContent(ft.Column):
         self.page.update()
         self.page.overlay.remove(dialog)
     
+
 def create_chat_view_content(page: ft.Page) -> ft.Control:
     """Função de fábrica para criar a view de Chat com Documentos."""
     logger.info("View Chat_Docs: Iniciando criação (nova estrutura).")

@@ -244,7 +244,7 @@ Para mais detalhes, consulte:
         Args:
             e (ft.ControlEvent): Evento de controle que disparou a função.
         """
-        from src.flet_ui.components import show_snackbar
+        from src.flet_ui.components.components import show_snackbar
         show_snackbar(
             page,
             "Visualização do Histórico de Uso ainda não implementada.",
@@ -447,7 +447,7 @@ def create_footer(page: ft.Page) -> ft.BottomAppBar:
     )
 
 import threading
-from src.flet_ui.components import show_loading_overlay, hide_loading_overlay
+from src.flet_ui.components.components import show_loading_overlay, hide_loading_overlay
 from src.logger.cloud_logger_handler import ClientLogUploader
 
 def handle_logout(page: ft.Page) -> None:
@@ -519,7 +519,7 @@ def handle_logout(page: ft.Page) -> None:
         logger.debug("handle_logout chamado de uma thread de background. Agendando lógica na thread principal.")
         page.run_thread(_logout_logic)
 
-from src.flet_ui.components import show_snackbar, ValidatedTextField, ManagedAlertDialog
+from src.flet_ui.components.components import show_snackbar, ValidatedTextField, ManagedAlertDialog
 
 def show_proxy_settings_dialog(page: ft.Page) -> None:
     """

@@ -6,7 +6,7 @@ import time
 
 from src.services.firebase_client import FirebaseClientFirestore, _to_firestore_value, _from_firestore_value
 from src.services import credentials_manager
-from src.flet_ui.components import (
+from src.flet_ui.components.components import (
     show_snackbar,
     show_loading_overlay,
     hide_loading_overlay,

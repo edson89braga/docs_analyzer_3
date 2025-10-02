@@ -1,3 +1,4 @@
+# src\flet_ui\components\file_list_manager.py
 '''
 Componentes de UI Reutilizáveis: Contém classes ou funções que criam componentes customizados ou combinações de componentes Flet.
 '''

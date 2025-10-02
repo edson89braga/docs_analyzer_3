@@ -1,8 +1,8 @@
-# src/flet_ui/settings_drawer.py
+# src\flet_ui\components\settings_drawer.py
 import flet as ft
 from typing import Dict, Any, Optional, List
 from src.services.local_db_manager import LocalDBManager
-from src.flet_ui.components import show_snackbar, ManagedAlertDialog
+from src.flet_ui.components.components import show_snackbar, ManagedAlertDialog
 from src.flet_ui import theme
 from src.settings import (
 

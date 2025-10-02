@@ -8,7 +8,7 @@ from src.settings import PATH_IMAGE_LOGO_DEPARTAMENTO, APP_TITLE, APP_VERSION
 
 from src.services.firebase_client import FbManagerAuth # Ajuste o caminho se FbManagerAuth estiver em outro lugar
 #from src.flet_ui.layout import show_proxy_settings_dialog
-from src.flet_ui.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField
+from src.flet_ui.components.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField
 from src.flet_ui import theme # Para cores de erro, etc.
 from src.logger.logger import LoggerSetup
 

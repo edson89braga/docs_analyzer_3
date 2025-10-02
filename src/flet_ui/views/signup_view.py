@@ -5,7 +5,7 @@ from typing import Optional
 
 from src.settings import ALLOWED_EMAIL_DOMAINS
 from src.services.firebase_client import FbManagerAuth
-from src.flet_ui.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField
+from src.flet_ui.components.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField
 from src.flet_ui import theme
 
 import logging

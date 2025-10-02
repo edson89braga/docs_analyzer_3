@@ -1,5 +1,4 @@
 # src/flet_ui/views/nc_analyze_view.py
-
 import logging
 logger = logging.getLogger(__name__)
 
@@ -16,14 +15,14 @@ from enum import Enum
 #from pathlib import Path
 #from rich import print
 
-from src.flet_ui.components import (
+from src.flet_ui.components.components import (
     show_snackbar, show_loading_overlay, hide_loading_overlay,
     ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable,
     CardWithHeader, show_confirmation_dialog, ReadOnlySelectableTextField,
 )
 
-from src.flet_ui.file_list_manager import FileListManager
-
+from src.flet_ui.components.file_list_manager import FileListManager
+from src.flet_ui.components.settings_drawer import AnalyzeSettingsDrawer
 from src.flet_ui import theme
 
 from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR, TEMPLATES_DOCX_SUBDIR, cotacao_dolar_to_real,
@@ -331,7 +330,6 @@ class AnalyzePDFViewContent(ft.Column):
         )
 
         # --- Drawer de Configurações (Placeholder) ---
-        from src.flet_ui.settings_drawer import AnalyzeSettingsDrawer
         self.settings_drawer_component = AnalyzeSettingsDrawer(self.page)
         self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0)
         # self.settings_drawer_manager não é mais necessário

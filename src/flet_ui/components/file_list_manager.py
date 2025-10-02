@@ -1,11 +1,11 @@
-# src\flet_ui\file_list_manager.py
+# src\flet_ui\components\file_list_manager.py
 
 import logging
 from typing import List, Dict, Any, Optional, Callable, Tuple
 import flet as ft
 
 from src.flet_ui import theme
-from src.flet_ui.components import ManagedFilePicker
+from src.flet_ui.components.components import ManagedFilePicker
 
 logger = logging.getLogger(__name__)
 

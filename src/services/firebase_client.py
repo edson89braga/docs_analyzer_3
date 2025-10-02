@@ -1293,7 +1293,7 @@ class FbManagerAuth:
             if result.get("error") == "CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED":
                 # A UI deve ser notificada para forçar re-login
                 from src.flet_ui.layout import handle_logout # Import tardio
-                from src.flet_ui.components import show_snackbar # Import tardio
+                from src.flet_ui.components.components import show_snackbar # Import tardio
                 from src.flet_ui import theme # Import tardio
                 show_snackbar(page, "Sua sessão é muito antiga para esta ação. Por favor, faça login novamente.", color=theme.COLOR_ERROR, duration=7000)
                 handle_logout(page)
@@ -1342,7 +1342,7 @@ class FbManagerAuth:
             logger.error(f"Falha ao atualizar perfil: {result.get('error')} - {result.get('details', '')}")
             if result.get("error") == "CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED":
                 from src.flet_ui.layout import handle_logout
-                from src.flet_ui.components import show_snackbar
+                from src.flet_ui.components.components import show_snackbar
                 from src.flet_ui import theme
                 show_snackbar(page, "Sua sessão é muito antiga para esta ação. Por favor, faça login novamente.", color=theme.COLOR_ERROR, duration=7000)
                 handle_logout(page)
@@ -1375,7 +1375,7 @@ class FbManagerAuth:
             logger.error(f"Falha ao excluir conta: {result.get('error')} - {result.get('details', '')}")
             if result.get("error") == "CREDENTIAL_TOO_OLD_RELOGIN_REQUIRED":
                 from src.flet_ui.layout import handle_logout
-                from src.flet_ui.components import show_snackbar
+                from src.flet_ui.components.components import show_snackbar
                 from src.flet_ui import theme
                 show_snackbar(page, "Sua sessão é muito antiga para esta ação. Por favor, faça login novamente.", color=theme.COLOR_ERROR, duration=7000)
                 handle_logout(page)

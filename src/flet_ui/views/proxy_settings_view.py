@@ -5,7 +5,7 @@
 import flet as ft
 from typing import Optional
 
-from src.flet_ui.components import (
+from src.flet_ui.components.components import (
     show_snackbar,
     ValidatedTextField,
     CardWithHeader, 

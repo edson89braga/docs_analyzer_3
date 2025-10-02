@@ -1,6 +1,6 @@
 # src/flet_ui/views/knowledge_base_view.py (NOVO ARQUIVO)
 import flet as ft
-from src.flet_ui.components import show_snackbar
+from src.flet_ui.components.components import show_snackbar
 from src.flet_ui import theme # Para COLOR_WARNING
 
 from src.flet_ui.theme import COLOR_WARNING
