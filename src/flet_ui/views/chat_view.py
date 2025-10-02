@@ -1,7 +1,7 @@
 # src/flet_ui/views/chat_view.py
 from math import e
 import flet as ft
-import time, threading, os
+import time, threading, os, secrets
 from typing import List, Dict, Any, Optional
 from time import perf_counter
 from datetime import datetime
@@ -22,9 +22,6 @@ from src.settings import FALLBACK_ANALYSIS_SETTINGS, cotacao_dolar_to_real
 from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS, 
                           KEY_SESSION_LOADED_LLM_PROVIDERS, DEFAULT_LLM_PROVIDER,
                           DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE,
-                          KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_DOCUMENT_CONTEXT,
-                          KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS, KEY_SESSION_CHAT_HAS_OPTIMIZED,
-                          KEY_SESSION_CHAT_RAW_PAGES_TEXT, 
                           KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY, KEY_SESSION_CHAT_PROMPT_STRICT,
                           KEY_SESSION_CHAT_PROMPT_FLEXIBLE, KEY_SESSION_CHAT_PROMPT_CUSTOM)
 
@@ -33,6 +30,16 @@ from src.services.local_db_manager import LocalDBManager
 
 import logging
 logger = logging.getLogger(__name__)
+
+# --- Constantes de Chave de Sessão/Cache Local para CHAT_VIEW ---
+KEY_SESSION_CHAT_FILES = "chat_view_loaded_files"
+KEY_SESSION_CHAT_RAW_PAGES_TEXT = "chat_view_raw_pages_text"
+KEY_SESSION_CHAT_DOCUMENT_CONTEXT = "chat_view_document_context"
+KEY_SESSION_CHAT_MESSAGES = "chat_view_messages"
+KEY_SESSION_CHAT_METRICS = "chat_view_metrics"
+KEY_SESSION_CHAT_HAS_OPTIMIZED = "chat_view_has_optimized"
+# ----------------------------------------------------------------
+
 
 class ChatViewContent(ft.Column):
     def __init__(self, page: ft.Page):

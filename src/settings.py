@@ -164,30 +164,12 @@ def show_data_k(keyring):
 # --- Configurações de NC_ANALYZE_VIEW --------------------------------------------------------------------------
 # Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
 KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
-KEY_SESSION_PDF_FILES_ORDERED = "apv_pdf_files_ordered"
-KEY_SESSION_PROCESSING_METADATA = "apv_processing_metadata"
-KEY_SESSION_LLM_METADATA = "apv_llm_metadata"
-KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS = "apv_feedback_collected"  # Flag para indicar se o feedback já foi coletado.
-KEY_SESSION_LLM_REANALYSIS = "apv_llm_reanalysis_flag"
-
-# Dados a ficar em _SERVER_SIDE_CACHE:
-KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "apv_pdf_aggregated_text_info" # (str_pages, aggregated_text, tokens_antes, tokens_depois)
-KEY_SESSION_PDF_LLM_RESPONSE = "apv_pdf_llm_response"                                           # Resposta original da IA
-KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL = "apv_pdf_llm_response_actual"                             # Resposta na GUI (que pode ter sido editada pelo usuário) # LLMStructuredResultDisplay.get_current_form_data()
-KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK = "apv_llm_response_snapshot_for_feedback"   # Cópia da resposta original p/ fins de comparação com a respota editada pelo usuário.
 
 KEY_SESSION_PROMPTS_FINAL = "app_prompts_from_firestore_1"
 KEY_SESSION_PROMPTS_DICT = "app_prompts_from_firestore_2"
 KEY_SESSION_LIST_TO_PROMPTS = "app_list_to_prompts_from_firestore"
 
 # --- Configurações de CHAT_VIEW --------------------------------------------------------------------------
-
-KEY_SESSION_CHAT_FILES = "chat_view_loaded_files"
-KEY_SESSION_CHAT_RAW_PAGES_TEXT = "chat_view_raw_pages_text"
-KEY_SESSION_CHAT_DOCUMENT_CONTEXT = "chat_view_document_context"
-KEY_SESSION_CHAT_MESSAGES = "chat_view_messages"
-KEY_SESSION_CHAT_METRICS = "chat_view_metrics"
-KEY_SESSION_CHAT_HAS_OPTIMIZED = "chat_view_has_optimized"
 
 KEY_SESSION_CHAT_PROMPT_STRICT = "chat_prompt_strict"
 KEY_SESSION_CHAT_PROMPT_FLEXIBLE = "chat_prompt_flexible"

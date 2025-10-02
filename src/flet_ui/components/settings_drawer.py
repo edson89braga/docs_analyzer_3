@@ -5,7 +5,6 @@ from src.services.local_db_manager import LocalDBManager
 from src.flet_ui.components.components import show_snackbar, ManagedAlertDialog
 from src.flet_ui import theme
 from src.settings import (
-
     KEY_SESSION_ANALYSIS_SETTINGS,
     KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS,
     FALLBACK_ANALYSIS_SETTINGS,

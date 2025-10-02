@@ -31,9 +31,7 @@ from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR, 
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST,
                           PROMPTS_COLLECTION, PROMPTS_DOCUMENT_ID)
 
-from src.settings import (KEY_SESSION_CURRENT_BATCH_NAME, KEY_SESSION_PDF_FILES_ORDERED, KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA, 
-                          KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS, KEY_SESSION_LLM_REANALYSIS, KEY_SESSION_PDF_AGGREGATED_TEXT_INFO,
-                          KEY_SESSION_PDF_LLM_RESPONSE, KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL, KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK,
+from src.settings import (KEY_SESSION_CURRENT_BATCH_NAME, 
                           KEY_SESSION_PROMPTS_FINAL, KEY_SESSION_PROMPTS_DICT, KEY_SESSION_LIST_TO_PROMPTS)
 
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
@@ -58,6 +56,19 @@ firestore_client = FirebaseClientFirestore()
 logger.info(f"[DEBUG] Carregamento pesado dentro de NC_ANALYZE_VIEW em {perf_counter()-start_time:.4f}s")
 
 from src.utils import get_user_cache, clear_user_cache
+
+# --- Constantes de Chave de Sessão/Cache Local para NC_ANALYZE_VIEW ---
+KEY_SESSION_PDF_FILES_ORDERED = "apv_pdf_files_ordered"
+KEY_SESSION_PROCESSING_METADATA = "apv_processing_metadata"
+KEY_SESSION_LLM_METADATA = "apv_llm_metadata"
+KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS = "apv_feedback_collected"  # Flag para indicar se o feedback já foi coletado.
+KEY_SESSION_LLM_REANALYSIS = "apv_llm_reanalysis_flag"
+
+# Dados a ficar em _SERVER_SIDE_CACHE:
+KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "apv_pdf_aggregated_text_info" # (str_pages, aggregated_text, tokens_antes, tokens_depois)
+KEY_SESSION_PDF_LLM_RESPONSE = "apv_pdf_llm_response"                                           # Resposta original da IA
+KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL = "apv_pdf_llm_response_actual"                             # Resposta na GUI (que pode ter sido editada pelo usuário) # LLMStructuredResultDisplay.get_current_form_data()
+KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK = "apv_llm_response_snapshot_for_feedback"   # Cópia da resposta original p/ fins de comparação com a respota editada pelo usuário.
 
 # Constantes para nomes de controles (facilita acesso) CTL = Control
 # TODO: Alterar para variáveis diretas na classe, em vez de usar dict.
