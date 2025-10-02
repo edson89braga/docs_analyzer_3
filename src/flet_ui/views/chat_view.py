@@ -4,6 +4,7 @@ import flet as ft
 import time, threading, os
 from typing import List, Dict, Any, Optional
 from time import perf_counter
+from datetime import datetime
 
 from src.flet_ui import theme
 from src.flet_ui.file_list_manager import FileListManager
@@ -21,7 +22,7 @@ from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS,
                           KEY_SESSION_LOADED_LLM_PROVIDERS, DEFAULT_LLM_PROVIDER,
                           DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE,
                           KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_DOCUMENT_CONTEXT,
-                          KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS,
+                          KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS, KEY_SESSION_CHAT_HAS_OPTIMIZED,
                           KEY_SESSION_CHAT_RAW_PAGES_TEXT, 
                           KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY, KEY_SESSION_CHAT_PROMPT_STRICT,
                           KEY_SESSION_CHAT_PROMPT_FLEXIBLE, KEY_SESSION_CHAT_PROMPT_CUSTOM)
@@ -43,6 +44,7 @@ class ChatViewContent(ft.Column):
         
         # Estado da UI
         self.metrics_history: List[Dict[str, Any]] = []
+        self.last_used_prompt_text: Optional[str] = None
         self.is_processing_response = False
         self.editing_message_id: Optional[float] = None
         self._is_drawer_open = False
@@ -413,12 +415,23 @@ class ChatViewContent(ft.Column):
             return
         
         try:
+            # Pega as instruções atuais
+            instructions = self._get_active_system_prompt()
+
+            # Verifica se o prompt mudou desde a última chamada 
+            if self.last_used_prompt_text is None or self.last_used_prompt_text != instructions:
+                logger.info("Detectada mudança no prompt de sistema. Resetando histórico da conversa para a IA.")
+                self.orchestrator.reset_conversation_history()
+            
+            # Atualiza o último prompt usado para a próxima verificação
+            self.last_used_prompt_text = instructions
+
             model_name = settings.get('llm_model', DEFAULT_LLM_MODEL) 
             response_generator = self.orchestrator.generate_response(
                 api_key=api_key,
                 model_name=model_name,
                 document_context=document_context,
-                instructions=self._get_active_system_prompt(),
+                instructions=instructions,
                 history=history_for_api,
                 user_question=user_question,
                 loaded_llm_providers=self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or [],
@@ -432,6 +445,7 @@ class ChatViewContent(ft.Column):
                     self.page.run_thread(lambda chunk=response_part["content"]: self._update_last_message_text(chunk, append=True))
                     logger.info(f"[DEBUG] Chunk Msg LLM by model {model_name}: {response_part['content'][:160]}...")
                 elif response_part["type"] == "final_metrics":
+                    response_part["data"]["timestamp"] = datetime.now()                    
                     response_part["data"]["model_name"] = model_name
                     self.page.run_thread(lambda data=response_part["data"]: self._append_and_update_metrics(data))
                 elif response_part["type"] == "error":
@@ -529,6 +543,7 @@ class ChatViewContent(ft.Column):
         index = next((i for i, c in enumerate(self.chat_history_view.controls) if c.data["id"] == message_id), -1)
         if index != -1:
             self.chat_history_view.controls = self.chat_history_view.controls[:index + 1]
+            self.orchestrator.reset_conversation_history() # Força o reenvio do contexto
             self._update_message_actions() # Apenas atualiza as ações, não precisa reconstruir
             self._save_state_to_session()
             self.page.run_thread(lambda: self._scroll_to_last_message())
@@ -545,12 +560,14 @@ class ChatViewContent(ft.Column):
         if author == "IA":
             # Caso 1: Regenerando uma resposta da IA
             if rerun_index == 0: return # Não pode regenerar a primeira mensagem se for da IA
+            self.orchestrator.reset_conversation_history() # Força o reenvio do contexto
             user_question = self.chat_history_view.controls[rerun_index - 1].data["text"]
             history_controls = self.chat_history_view.controls[:rerun_index - 1]
             self.chat_history_view.controls.pop(rerun_index) # Remove a resposta antiga da IA
 
         elif author == "User":
             # Caso 2: Gerando resposta para a última mensagem do usuário (após "Retomar daqui")
+            self.orchestrator.reset_conversation_history() # Força o reenvio do contexto
             user_question = rerun_control.data["text"]
             history_controls = self.chat_history_view.controls[:rerun_index]
         else:
@@ -578,11 +595,14 @@ class ChatViewContent(ft.Column):
         def confirm_action():
             self.chat_history_view.controls.clear()
             self.metrics_history.clear()
+            self.last_used_prompt_text = None # Reseta o prompt rastreado
+            self.orchestrator.reset_conversation_history() # Limpa o ID da resposta anterior
             self._update_metrics_summary_button()
 
             # Limpa todas as chaves de sessão relacionadas ao chat
-            if self.page.session.contains_key(KEY_SESSION_CHAT_FILES):
-                self.page.session.remove(KEY_SESSION_CHAT_FILES)
+            for key in (KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_HAS_OPTIMIZED):
+                if self.page.session.contains_key(key):
+                    self.page.session.remove(key)
             
             clear_user_cache(self.page)
             self.user_cache = get_user_cache(self.page)
@@ -620,13 +640,13 @@ class ChatViewContent(ft.Column):
         """Centraliza a lógica de habilitação/desabilitação de botões e campos."""
         has_files = bool(self.page.session.get(KEY_SESSION_CHAT_FILES))
         has_context = bool(self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT))
-        has_otimized = False # TODO: implementar flag quando comandado o _preprocess_doc
+        has_optimized = self.page.session.get(KEY_SESSION_CHAT_HAS_OPTIMIZED) or False
 
         # Botão de Processar: habilitado se há arquivos e o contexto ainda não foi extraído.
         self.process_button.disabled = not has_files or has_context
 
         # Botão de otimização: habilitado se o contexto já foi extraído mas ainda não otimizado
-        self.optimize_button.disabled = not has_context or has_otimized
+        self.optimize_button.disabled = not has_context or has_optimized
         
         # self.anonymize_button.disabled = not has_context # Ainda não habilitada a função
 
@@ -642,8 +662,8 @@ class ChatViewContent(ft.Column):
             self.process_button.text = "Extrair Conteúdo"
             self.process_button.icon = ft.Icons.PLAY_CIRCLE_OUTLINE
 
-        if has_otimized:
-            self.optimize_button.text = "Páginas Otimizadas"
+        if has_optimized:
+            self.optimize_button.text = "Páginas otimizadas"
             self.optimize_button.icon = ft.Icons.CHECK_CIRCLE
         else:
             self.optimize_button.text = "Otimizar Páginas"
@@ -704,6 +724,7 @@ class ChatViewContent(ft.Column):
         """Callback do FileListManager para a view de Chat."""
         self.user_cache.pop(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, None)
         self.user_cache.pop(KEY_SESSION_CHAT_RAW_PAGES_TEXT, None)
+        self.page.session.remove(KEY_SESSION_CHAT_HAS_OPTIMIZED) # Invalida a otimização
         logger.info("Contexto do chat invalidado devido à alteração na lista de arquivos.")
         self.file_list_manager.update_display() # Apenas atualiza a própria UI
         self._update_button_states() # Reavalia o estado dos botões
@@ -765,6 +786,7 @@ class ChatViewContent(ft.Column):
 
             # Salva o contexto na sessão
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = aggregated_text
+            self.page.session.set(KEY_SESSION_CHAT_HAS_OPTIMIZED, True)
 
             # Atualiza a UI na thread principal
             def update_ui_after_processing():
@@ -840,12 +862,14 @@ class ChatViewContent(ft.Column):
                 
         total_cost_usd = 0
         metric_rows = []
-        for metric in self.metrics_history:
+        for metric in sorted(self.metrics_history, key=lambda x: x.get('timestamp'), reverse=True):
             cost_usd = metric.get('total_cost_usd', 0)
             cost_brl = cost_usd * cotacao_dolar_to_real
             total_cost_usd += cost_usd
+            timestamp = metric.get('timestamp', datetime.now())
             metric_rows.append(
                 ft.DataRow(cells=[
+                    ft.DataCell(ft.Text(timestamp.strftime("%d/%m/%Y - %H:%M:%S"))),
                     ft.DataCell(ft.Text(metric.get('model_name', 'N/A'))),
                     ft.DataCell(ft.Text(str(metric.get('input_tokens', 0)))),
                     ft.DataCell(ft.Text(str(metric.get('cached_tokens', 0)))),
@@ -860,6 +884,7 @@ class ChatViewContent(ft.Column):
 
         dialog_content = ft.DataTable(
             columns=[
+                ft.DataColumn(ft.Text("Data/Hora")),
                 ft.DataColumn(ft.Text("Modelo")),
                 ft.DataColumn(ft.Text("Input")),
                 ft.DataColumn(ft.Text("Cache")),
@@ -868,10 +893,11 @@ class ChatViewContent(ft.Column):
                 ft.DataColumn(ft.Text("Custo (USD)")),
                 ft.DataColumn(ft.Text("Custo (BRL)")),
             ],
-            rows=metric_rows,
+            rows=metric_rows, column_spacing=20,
         )
 
         footer_row = ft.DataRow(cells=[
+            ft.DataCell(ft.Text("")),
             ft.DataCell(ft.Text("Total estimado", weight=ft.FontWeight.BOLD)),
             ft.DataCell(ft.Text("")), ft.DataCell(ft.Text("")), 
             ft.DataCell(ft.Text("")), ft.DataCell(ft.Text("")),
@@ -884,7 +910,7 @@ class ChatViewContent(ft.Column):
         metrics_dialog = ft.AlertDialog(
             modal=True,
             title=ft.Text("Detalhamento de Consumo de Tokens por Requisição"),
-            content=ft.Container(content=dialog_content, height=self.page.height * 0.6, adaptive=True),
+            content=ft.Column(content=dialog_content, height=self.page.height*0.2, scroll=ft.ScrollMode.ADAPTIVE),
             actions=[ft.TextButton("Fechar", on_click=lambda _: self._close_dialog(metrics_dialog))],
             actions_alignment=ft.MainAxisAlignment.END,
         )

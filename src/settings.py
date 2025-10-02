@@ -187,6 +187,7 @@ KEY_SESSION_CHAT_RAW_PAGES_TEXT = "chat_view_raw_pages_text"
 KEY_SESSION_CHAT_DOCUMENT_CONTEXT = "chat_view_document_context"
 KEY_SESSION_CHAT_MESSAGES = "chat_view_messages"
 KEY_SESSION_CHAT_METRICS = "chat_view_metrics"
+KEY_SESSION_CHAT_HAS_OPTIMIZED = "chat_view_has_optimized"
 
 KEY_SESSION_CHAT_PROMPT_STRICT = "chat_prompt_strict"
 KEY_SESSION_CHAT_PROMPT_FLEXIBLE = "chat_prompt_flexible"

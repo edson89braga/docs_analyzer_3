@@ -20,14 +20,6 @@ from src.core.ai_orchestrator import calc_costs_llm_analysis
 from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 
 
-def find_prefix_match_len(str1: str, str2: str) -> int:
-    """Encontra o comprimento do prefixo comum mais longo entre duas strings."""
-    min_len = min(len(str1), len(str2))
-    for i in range(min_len):
-        if str1[i] != str2[i]:
-            return i
-    return min_len
-
 class ChatLLMOrchestrator:
     """
     Orquestra a conversa entre o usuário e o LLM, com base no contexto de um documento.
@@ -37,13 +29,7 @@ class ChatLLMOrchestrator:
         Inicializa o orquestrador de chat.
         """
         self.client: Optional[openai.OpenAI] = None
-        self.previous_response_id = None
-
-        self.last_request_debug_info = {
-            # "prompt_cache_key": None,
-            # "instructions_str": "",
-            "input_str": ""
-        }        
+        self.previous_response_id = None    
 
     def _initialize_client(self, api_key: str):
         """Inicializa o cliente OpenAI se necessário."""
@@ -130,46 +116,11 @@ class ChatLLMOrchestrator:
             yield {"type": "error", "content": "Cliente OpenAI não inicializado."}
             return
 
-        # Monta o prompt de instruções com o contexto estático
-        # instructions_with_context = (
-        #     "--- INÍCIO DE CONTEÚDO DE DOCUMENTO(S) PARA ANÁLISE ---\n"
-        #     f"{document_context}\n"
-        #     "--- FIM DO CONTEÚDO DO DOCUMENTO ---\n\n"
-        #     f"{instructions}\n\n"
-        #     "Com base no documento fornecido e nas instruções acima, responda às perguntas e interações a seguir."
-        # )
-
-        # Gera uma chave de cache estável baseada no conteúdo do documento.
-        # Isso ajuda a OpenAI a rotear requisições sobre o mesmo documento para o mesmo cache. 
-        # [Esta estratégia não funcionou]
-        # cache_key_hash = hashlib.sha256(document_context.encode('utf-8')).hexdigest()
-        # prompt_cache_key = f"doc_sha256_{cache_key_hash}"
-
         if not self.previous_response_id:
             input_items = self._build_input_items(document_context, history, user_question, instructions=instructions)
         else:
             # Com ativação do Previous_response_id e do Store, o input itens deve ser apenas a nova pergunta do usuário
             input_items = [{"role": "user", "content": user_question}]
-
-        # --- DEBUG: Comparação de Prefixo ---            
-        # Análise mais profunda comparando o conteúdo real
-        # instructions_str = instructions_with_context
-        input_str = str(input_items)
-        
-        if self.last_request_debug_info["input_str"]:
-            # instr_match_len = find_prefix_match_len(self.last_request_debug_info["instructions_str"], instructions_str)
-            input_match_len = find_prefix_match_len(self.last_request_debug_info["input_str"], input_str)
-
-            # logger.info(f"[CACHE CHECK] Comprimento do prefixo correspondente em 'instructions': {instr_match_len} de {len(instructions_str)} caracteres.")
-            logger.info(f"[CACHE CHECK] Comprimento do prefixo correspondente em 'input': {input_match_len} de {len(input_str)} caracteres.")
-        else:
-            logger.info("[CACHE CHECK] Primeira requisição - sem comparação disponível.")
-
-        # Armazena as informações desta requisição para a próxima comparação
-        # self.last_request_debug_info["prompt_cache_key"] = prompt_cache_key
-        # self.last_request_debug_info["instructions_str"] = instructions_str 
-        self.last_request_debug_info["input_str"] = input_str
-        # --- FIM DEBUG ---
 
         full_response_content = ""
         final_usage_data = {}
@@ -178,7 +129,7 @@ class ChatLLMOrchestrator:
         data_to_openai_api = {
             "model": model_name,
             # "instructions": instructions_with_context, 
-            # -> Movido para input_message (role: system) a fim de tentar ativar o cache ao descontinuar o uso do field instruction da api
+            # -> Movido para input_message (role: system) a fim de otimizar o cache ao descontinuar o uso do field instruction da api
             "input": input_items,
             "previous_response_id": self.previous_response_id,
             "truncation": "auto", 
@@ -312,4 +263,9 @@ class ChatLLMOrchestrator:
         except Exception as e:
             logger.error(f"Erro inesperado durante a geração da resposta do chat: {e}", exc_info=True)
             yield {"type": "error", "content": f"Ocorreu um erro inesperado ao se comunicar com a IA: {e}"}
+
+    def reset_conversation_history(self):
+        """Reseta o histórico da conversa, forçando o envio do contexto completo na próxima chamada."""
+        self.previous_response_id = None
+        logger.info("Histórico de conversa do orquestrador (previous_response_id) resetado.")
 
