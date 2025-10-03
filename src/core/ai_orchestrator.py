@@ -450,6 +450,7 @@ def _get_token_usage_info(dados_segmentados: List[Any], waited_cached_tokens: in
         "input_tokens":  0,
         "cached_tokens": 0,
         "output_tokens": 0,
+        "reasoning_tokens": 0,
         "total_tokens":  0,
     }
     
@@ -459,11 +460,13 @@ def _get_token_usage_info(dados_segmentados: List[Any], waited_cached_tokens: in
             "input_tokens":  cb.input_tokens,
             "cached_tokens": cb.input_tokens_details.cached_tokens,
             "output_tokens": cb.output_tokens,
+            "reasoning_tokens": cb.output_tokens_details.reasoning_tokens,
             "total_tokens":  cb.total_tokens,
         }
         token_usage_info["input_tokens"]  += tokens_info["input_tokens"]
         token_usage_info["cached_tokens"] += tokens_info["cached_tokens"]
         token_usage_info["output_tokens"] += tokens_info["output_tokens"]
+        token_usage_info["reasoning_tokens"] += tokens_info["reasoning_tokens"]
         token_usage_info["total_tokens"]  += tokens_info["total_tokens"]
 
     # Analisar proporção de cached_tokens em prompts:
@@ -563,6 +566,7 @@ def analyze_text_with_llm(
                         "input_tokens":  cb.input_tokens,
                         "cached_tokens": cb.input_tokens_details.cached_tokens,
                         "output_tokens": cb.output_tokens,
+                        "reasoning_tokens": cb.output_tokens_details.reasoning_tokens,
                         "total_tokens":  cb.total_tokens,
                         "successful_requests": 1,
                     }
@@ -639,6 +643,7 @@ def analyze_text_with_llm(
                     "input_tokens":  cb.prompt_tokens,
                     "cached_tokens": cb.prompt_tokens_cached,
                     "output_tokens": cb.completion_tokens,
+                    # "reasoning_tokens": cb.completion_tokens, # Não há detalhamento no callback do LangChain
                     "total_tokens":  cb.total_tokens,
                     "successful_requests": cb.successful_requests,
                     "total_cost_usd": cb.total_cost

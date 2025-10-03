@@ -305,14 +305,14 @@ def timing_decorator(calc_by_item=False):
         return wrapper
     return decorator
 
-def count_tokens(text: str, model_name: str = "gpt-3.5-turbo") -> int:
+def count_tokens(text: str, model_name: str = "gpt-4o") -> int:
     """
     Calcula o número de tokens em um texto usando tiktoken.
 
     Args:
         text (str): O texto a ser tokenizado.
         model_name (str, optional): O nome do modelo para obter o encoding correto.
-                                    Default é "gpt-3.5-turbo".
+                                    Default é "gpt-4o".
                                     Outros comuns: "gpt-4", "text-davinci-003".
                                     Se o modelo não for encontrado, tenta "cl100k_base".
 
@@ -335,7 +335,7 @@ def count_tokens(text: str, model_name: str = "gpt-3.5-turbo") -> int:
     token_integers = encoding.encode(text)
     return len(token_integers)
 
-def reduce_text_to_limit(text_full: str, token_limit: int, model_name: str = "gpt-3.5-turbo") -> str:
+def reduce_text_to_limit(text_full: str, token_limit: int, model_name: str = "gpt-4o") -> str:
     """
     Reduz o texto completo para caber no limite de tokens especificado,
     decodificando os tokens de volta para texto.
@@ -344,7 +344,7 @@ def reduce_text_to_limit(text_full: str, token_limit: int, model_name: str = "gp
         text_full (str): Texto completo a ser reduzido.
         token_limit (int): Limite máximo de tokens permitido para o texto reduzido.
         model_name (str, optional): O nome do modelo para obter o encoding correto.
-                                    Default é "gpt-3.5-turbo".
+                                    Default é "gpt-4o".
 
     Returns:
         str: Texto reduzido que (aproximadamente) cabe no limite de tokens,

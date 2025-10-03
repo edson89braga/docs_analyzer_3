@@ -279,7 +279,7 @@ from langdetect.lang_detect_exception import LangDetectException
 # Supondo que src.utils.count_tokens existe
 from src.utils import count_tokens as util_count_tokens
 
-model_name_for_tokens: str = "gpt-3.5-turbo" # Adicionado para consistência com count_tokens e reduce_text
+model_name_for_tokens: str = "gpt-4o" # "gpt-3.5-turbo" # Adicionado para consistência com count_tokens e reduce_text
 
 def function_preprocess_text_basic(text: str, clean_spaces=True, lowercase=False) -> str:
     """
@@ -357,7 +357,7 @@ def is_text_intelligible(text: str, cid_threshold: float = 0.7) -> bool:
         logger.debug("LangDetectException, texto considerado ininteligível.")
         return False
 
-def count_tokens(text: str, model_name: str) -> int:
+def count_tokens(text: str, model_name: str = model_name_for_tokens) -> int:
     """Wrapper para a função de contagem de tokens utilitária."""
     return util_count_tokens(text, model_name=model_name)
 
@@ -1097,7 +1097,7 @@ class PDFDocumentAnalyzer:
         processed_page_data: Dict[str, Dict[str, Any]], # Chave é global_page_key (str)
         relevant_page_ordered_indices: List[str], # Lista de global_page_key (str)
         token_limit: int,
-    ) -> Tuple[str, str, int, int]: 
+    ) -> Tuple[str, str, int, int, int]: 
         """
         Agrupa textos de páginas relevantes, respeitando um limite de tokens.
         Os textos são concatenados na ordem original das páginas,
@@ -1110,15 +1110,21 @@ class PDFDocumentAnalyzer:
             token_limit (int): Limite máximo de tokens para o texto acumulado.
             model_name_for_tokens (str, optional): Nome do modelo para contagem de tokens,
                                                    passado para count_tokens e reduce_text_to_limit.
-                                                   Default é "gpt-3.5-turbo".
+                                                   Default é "gpt-4o".
 
         Returns:
-            Tuple[str, str, int, int]: Tupla contendo:
+            Tuple[str, str, int, int, int]: Tupla contendo:
                 - intervalos de páginas consideradas.
                 - Texto acumulado das páginas selecionadas (e possivelmente truncadas).
+                - Total de tokens de Todas as páginas antes de qualquer filtro.
                 - Total de tokens das páginas selecionadas ANTES de qualquer truncamento.
                 - Total de tokens do texto acumulado FINAL (após truncamento, se houver).
         """
+
+        total_tokens_before_filter = sum(
+            page_data['number_tokens'] for page_data in processed_page_data.values()
+        )
+
         current_total_tokens_final = 0 # Total final
         total_tokens_before_truncation = 0 # Variável para rastrear tokens totais das páginas selecionadas antes do truncamento
         texts_for_concatenation = {}
@@ -1190,7 +1196,7 @@ class PDFDocumentAnalyzer:
         else:
             logger.debug(f"Índices relevantes NÃO integram os mesmos índices do texto final agregado.\n {set(keys_of_included_texts)-set(relevant_page_ordered_indices)}\n")
 
-        return keys_of_included_texts, accumulated_text, total_tokens_before_truncation, final_aggregated_tokens
+        return keys_of_included_texts, accumulated_text, total_tokens_before_filter, total_tokens_before_truncation, final_aggregated_tokens
 
 execution_time = perf_counter() - start_time
 logger.info(f"[DEBUG] Carregado PDF_PROCESSOR em {execution_time:.4f}s")

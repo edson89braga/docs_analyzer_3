@@ -591,12 +591,23 @@ class FirebaseClientFirestore:
             # Adicionar o timestamp do evento da LLM para referência no feedback_metric
             processing_metadata_to_log = {
                 "total_pages_processed": proc_meta_session.get("total_pages_processed"),
+                "total_tokens_before_filter": proc_meta_session.get("total_tokens_before_filter"),
+
                 "relevant_pages_global_keys_formatted": proc_meta_session.get("relevant_pages_global_keys_formatted"),
-                "unintelligible_pages_global_keys_formatted": proc_meta_session.get("unintelligible_pages_global_keys_formatted"),
+                "count_selected_relevant": proc_meta_session.get("count_selected_relevant"),
+                "total_tokens_before_truncation": proc_meta_session.get("total_tokens_before_truncation"),
+                "final_pages_global_keys_formatted": proc_meta_session.get("final_pages_global_keys_formatted"),
+                "count_selected_final": proc_meta_session.get("count_selected_final"),
                 "final_aggregated_tokens": proc_meta_session.get("final_aggregated_tokens"),
+                "supressed_tokens_percentage": proc_meta_session.get("supressed_tokens_percentage"),
+
+                "unintelligible_pages_global_keys_formatted": proc_meta_session.get("unintelligible_pages_global_keys_formatted"),
+                "count_discarded_unintelligible": proc_meta_session.get("count_discarded_unintelligible"),
+                "count_discarded_similarity": proc_meta_session.get("count_discarded_similarity"),
+                
                 "processing_time": proc_meta_session.get("processing_time")
             }
-            
+
             if tokens_embeddings_session:
                 processing_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0]
                 processing_metadata_to_log["vectorization_model"] = tokens_embeddings_session[1]      
@@ -609,6 +620,7 @@ class FirebaseClientFirestore:
                 "input_tokens": llm_meta_session.get("input_tokens"),
                 "cached_tokens": llm_meta_session.get("cached_tokens"),
                 "output_tokens": llm_meta_session.get("output_tokens"),
+                "reasoning_tokens": llm_meta_session.get("reasoning_tokens"),
                 "total_cost_usd": llm_meta_session.get("total_cost_usd"),
                 "llm_provider_used": llm_meta_session.get("llm_provider_used"),
                 "llm_model_used": llm_meta_session.get("llm_model_used"),
@@ -619,12 +631,7 @@ class FirebaseClientFirestore:
             # Remover chaves com valor None para não poluir o Firestore
             llm_analysis_metadata_to_log = {k: v for k, v in llm_analysis_metadata_to_log.items() if v is not None}
 
-            # 4. LLM Parsed Response Fields
-            llm_parsed_response_fields = {}
-            if fields_to_log:
-                for field_name in fields_to_log:
-                    if hasattr(llm_response_obj, field_name):
-                        llm_parsed_response_fields[field_name] = getattr(llm_response_obj, field_name)
+            # 4. LLM Parsed Response Fields: Descontinuado
 
             # 5. Analysis Settings Overrides
             analysis_settings_overrides = {}
@@ -650,7 +657,6 @@ class FirebaseClientFirestore:
                 "filenames_uploaded": filenames_uploaded,
                 "processing_metadata": processing_metadata_to_log,
                 "llm_analysis_metadata": llm_analysis_metadata_to_log,
-                "llm_parsed_response_fields": llm_parsed_response_fields,
                 "analysis_settings_overrides": analysis_settings_overrides
             }
 
@@ -692,11 +698,11 @@ class FirebaseClientFirestore:
             processed_feedback_fields = []
             for field_data in feedback_data_list:
                 field_copy = field_data.copy() # Trabalha com uma cópia
-                tipo_campo = field_copy.get("tipo_campo", "")
-                
-                if tipo_campo in ["textfield_multiline", "textfield_lista"]:
-                    field_copy.pop("valor_original_llm", None)
-                    field_copy.pop("valor_atual_ui", None)
+                #tipo_campo = field_copy.get("tipo_campo", "") 
+                #if tipo_campo in ["textfield_multiline", "textfield_lista"]:
+                # Agora, removemos sempre para evitar armazenar dados desnecessários
+                field_copy.pop("valor_original_llm", None)
+                field_copy.pop("valor_atual_ui", None)
                 field_copy.pop("foi_editado", None)
                 processed_feedback_fields.append(field_copy)
 

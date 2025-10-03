@@ -27,7 +27,7 @@ from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS,
                           KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY, KEY_SESSION_CHAT_PROMPT_STRICT,
                           KEY_SESSION_CHAT_PROMPT_FLEXIBLE, KEY_SESSION_CHAT_PROMPT_CUSTOM)
 
-from src.utils import format_seconds_to_min_sec, get_user_cache, clear_user_cache
+from src.utils import format_seconds_to_min_sec, get_user_cache, clear_user_cache, count_tokens
 from src.services.local_db_manager import LocalDBManager
 from src.services.firebase_client import FirebaseClientFirestore
 
@@ -783,8 +783,11 @@ class ChatViewContent(ft.Column):
 
         self.user_cache.pop(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, None)
         self.user_cache.pop(KEY_SESSION_CHAT_RAW_PAGES_TEXT, None)
-        if self.page.session.contains_key(KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_PROCESSING_METADATA):
-            self.page.session.remove(KEY_SESSION_CHAT_HAS_OPTIMIZED) # Invalida a otimização
+
+        for key in (KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_PROCESSING_METADATA):
+            if self.page.session.contains_key(key): # invalida otimização
+                self.page.session.remove(key)        
+
         logger.info("Contexto do chat invalidado devido à alteração na lista de arquivos.")
         self._update_processing_metadata_display()
         self.file_list_manager.update_display() # Apenas atualiza a própria UI
@@ -842,16 +845,30 @@ class ChatViewContent(ft.Column):
             # Usamos um limite de tokens alto para manter o contexto completo
             settings = self._get_current_analysis_settings()
             token_limit = settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
-            _, aggregated_text, _, final_tokens  = analyzer.group_texts_by_relevance_and_token_limit(
+            aggregated_info = analyzer.group_texts_by_relevance_and_token_limit(
                 processed_data, relevant_indices, token_limit
             )
+            pages_agg_indices, aggregated_text, tokens_antes_filtro, tokens_antes_trunc, final_tokens = aggregated_info 
+
+            supressed_tokens = tokens_antes_trunc - final_tokens
+            perc_supressed = (supressed_tokens / tokens_antes_trunc * 100) if tokens_antes_trunc > 0 else 0
 
             processing_metadata = {
-                "Modo": "Otimizado / Filtrado",
-                "Páginas Totais": len(ordered_keys),
-                "Páginas Relevantes": len(relevant_indices),
-                "Tokens para LLM": f"{final_tokens:,}".replace(",", ".")
-            }
+                "total_pages_processed": len(ordered_keys),
+                "total_tokens_before_filter": tokens_antes_filtro,
+                "relevant_pages_global_keys_formatted": analyzer.format_global_keys_for_display(relevant_indices),
+                "count_selected_relevant": len(relevant_indices),
+                "count_discarded_similarity": 0, # Placeholder, lógica não implementada nesta view
+                "unintelligible_pages_global_keys_formatted": "N/A", # Placeholder
+                "count_discarded_unintelligible": 0, # Placeholder
+                "total_tokens_before_truncation": tokens_antes_trunc,
+                "final_pages_global_keys_formatted": analyzer.format_global_keys_for_display(pages_agg_indices),
+                "count_selected_final": len(pages_agg_indices),
+                "final_aggregated_tokens": final_tokens, # f"{final_tokens:,}".replace(",", ".")
+                "supressed_tokens_percentage": perc_supressed,
+                "processing_time": "N/A", # O tempo total não é medido aqui
+                "calculated_embedding_cost_usd": 0 # Placeholder
+            }            
 
             self.page.session.set(KEY_SESSION_PROCESSING_METADATA, processing_metadata)
 
@@ -894,6 +911,7 @@ class ChatViewContent(ft.Column):
             all_texts_concatenated = []
 
             start_time_proc = perf_counter()
+            total_tokens_raw = 0
             total_pages_raw = 0
             for file_info in files:
                 pdf_path = file_info["path_or_message"]
@@ -901,11 +919,16 @@ class ChatViewContent(ft.Column):
                 total_pages_raw += len(pages)
                 raw_pages_text_map[pdf_path] = pages
                 all_texts_concatenated.extend([text for _, text in pages])
+                total_tokens_raw += sum(count_tokens(text) for _, text in pages)
 
             processing_metadata = {
-                "Modo": "Completo / Não otimizado",
-                "Total de Páginas": total_pages_raw,
-                "Tempo de Extração": format_seconds_to_min_sec(perf_counter() - start_time_proc),
+                "total_pages_processed": total_pages_raw,
+                "total_tokens_before_filter": total_tokens_raw,
+                "final_aggregated_tokens": total_tokens_raw,
+                "processing_time": format_seconds_to_min_sec(perf_counter() - start_time_proc),
+                # Campos não aplicáveis no modo "bruto"
+                "relevant_pages_global_keys_formatted": None,
+                "count_selected_relevant": None,
             }
             self.page.session.set(KEY_SESSION_PROCESSING_METADATA, processing_metadata)
             self.page.run_thread(self._update_processing_metadata_display, processing_metadata)
@@ -930,20 +953,55 @@ class ChatViewContent(ft.Column):
     def _update_processing_metadata_display(self, proc_meta: Dict[str, Any] = None):
         """Atualiza a exibição de metadados no FileListManager."""
         
-        data_to_display = proc_meta or self.page.session.get(KEY_SESSION_PROCESSING_METADATA)
+        metadata_to_display  = proc_meta or self.page.session.get(KEY_SESSION_PROCESSING_METADATA)
 
-        if not data_to_display:
+        if not metadata_to_display :
             self.file_list_manager.update_metadata_display(None)
             return
 
+        labels = {
+            "total_pages_processed":                "Páginas totais Processadas",
+            "relevant_pages_global_keys_formatted": "Páginas Relevantes consideradas",
+            "count_discarded_similarity":           "Páginas Irrelevantes por Similaridade",
+            "unintelligible_pages_global_keys_formatted":  "Páginas Descartadas (Ininteligíveis)",
+            "total_tokens_before_truncation":       "Tokens totais das Páginas Relevantes",
+            "final_pages_global_keys_formatted":    "Páginas Selecionadas até limite de tokens",
+            "final_aggregated_tokens":              "Tokens totais das Páginas Selecionadas",
+            "supressed_tokens_percentage":          "Percentual de Tokens Suprimidos",
+            "processing_time":                "Tempo de processamento",
+            "calculated_embedding_cost_usd":  "Custos de Embeddings",
+        }
+
         data_rows = []
-        for key, value in data_to_display.items():
-            data_rows.append((f"{key}:", str(value)))
+        for key, label_text in labels.items():
+            if key in metadata_to_display:
+                value = metadata_to_display.get(key)
+                display_value = str(value if value is not None else "N/A")
+
+                # Lógica de formatação mesclada
+                if key == "total_pages_processed":
+                    total_tokens = metadata_to_display.get("total_tokens_before_filter", 0)
+                    display_value = f"{value} ({total_tokens:,} tokens)".replace(",", ".")
+                elif key == "relevant_pages_global_keys_formatted" and metadata_to_display.get("count_selected_relevant") is not None:
+                    display_value = f"{metadata_to_display['count_selected_relevant']} : {display_value}"
+                elif key == "final_pages_global_keys_formatted" and metadata_to_display.get("count_selected_final") is not None:
+                    if value != metadata_to_display.get("relevant_pages_global_keys_formatted"):
+                        display_value = f"{metadata_to_display['count_selected_final']} : {display_value}"
+                    else:
+                        continue # Não mostrar se for igual às páginas relevantes
+                elif key == "supressed_tokens_percentage" and isinstance(value, (int, float)):
+                    display_value = f"{value:.2f}%" if value > 0 else "0.00%"
+                
+                # Não exibir campos irrelevantes ou com valor zero/vazio
+                if "count_" in key or value is None or value == 0 or value == "N/A" or value == "0.00%":
+                    continue
+
+                data_rows.append((f"{label_text}:", display_value))
 
         if data_rows:
             metadata_table = CompactKeyValueTable(
                 data=data_rows,
-                key_col_width=160,  # Ajuste a largura da coluna de chaves
+                key_col_width=290,  
                 value_col_width=None, 
                 row_spacing=4, col_spacing=8,      
                 default_text_size=14                
@@ -951,7 +1009,7 @@ class ChatViewContent(ft.Column):
             
             final_metadata_content = ft.Column([
                 ft.Container(height=5),
-                ft.Container(ft.Text("Dados do Processamento:", weight=ft.FontWeight.BOLD, size=14), padding=ft.padding.only(left=12)),
+                ft.Container(ft.Text("Dados do Processamento:", weight=ft.FontWeight.BOLD, size=14), padding=ft.padding.only(left=20)),
                 ft.Container(metadata_table, padding=ft.padding.only(left=30, top=10, bottom=10)),
             ])
             

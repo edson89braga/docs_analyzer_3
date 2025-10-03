@@ -304,6 +304,7 @@ class AnalyzePDFViewContent(ft.Column):
                              expand=True, alignment=ft.MainAxisAlignment.CENTER),
             content=self.gui_controls[CTL_LLM_METADATA_CONTENT],
             can_tap_header=True, expanded=False,
+            on_animation_end = lambda e: self.llm_result_container.scroll_to(offset=-1, duration=500),
             bgcolor = ft.Colors.ON_INVERSE_SURFACE
         )
         self.gui_controls[CTL_LLM_METADATA_PANEL] = wrapper_panel_1(self.gui_controls[CTL_LLM_METADATA_PANEL])
@@ -963,7 +964,7 @@ class AnalyzePDFViewContent(ft.Column):
             data_rows = []
  
             calculated_embedding_cost_usd = metadata_to_display.get("calculated_embedding_cost_usd")
-            for key in ordered_keys:
+            for key in ordered_keys: # A lista `ordered_keys` garante a ordem de exibição
                 if key in ["count_selected_relevant", "count_discarded_unintelligible", "count_selected_final"]:
                     continue
  
@@ -978,8 +979,11 @@ class AnalyzePDFViewContent(ft.Column):
                         calculated_embedding_cost_usd = 0
  
                     display_value = str(value if value is not None else "N/A")
- 
-                    if key == "supressed_tokens_percentage" and isinstance(value, (int, float)):
+
+                    if key == "total_pages_processed":
+                        total_tokens = metadata_to_display.get("total_tokens_before_filter", 0)
+                        display_value = f"{value} ({total_tokens:,} tokens)".replace(",", ".")
+                    elif key == "supressed_tokens_percentage" and isinstance(value, (int, float)):
                         value = 0 if value < 0 else value
                         display_value = f"{value:.2f}%"
                     elif key == "relevant_pages_global_keys_formatted" and value is not None:
@@ -1049,6 +1053,7 @@ class AnalyzePDFViewContent(ft.Column):
                 ("input_tokens",         "Tokens de Entrada"),
                 ("cached_tokens",        "Tokens em Cache"),
                 ("output_tokens",        "Tokens de Resposta"),
+                ("reasoning_tokens",     "Tokens de Reflexão"),
                 #"total_tokens",        "Total de Tokens Processados pela LLM",
                 ("total_cost_usd",       "Custo Estimado (USD)"),
                 ("total_cost_brl",       "Custo Estimado (BRL)"),
@@ -2139,23 +2144,24 @@ class InternalAnalysisController:
             self.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = aggregated_info
             self.page.session.set("has_analyzer_data", True)
             
-            pages_agg_indices, _, tokens_antes_agg, tokens_final_agg = aggregated_info
+            pages_agg_indices, _, tokens_antes_filtro, tokens_antes_trunc, tokens_final_agg = aggregated_info
             count_sel_final = len(pages_agg_indices)
             #pr-int('\n[DEBUG]:\n', pages_agg_indices, '\n\n')
- 
-            supressed_tokens = tokens_antes_agg - tokens_final_agg
-            perc_supressed = (supressed_tokens / tokens_antes_agg * 100) if tokens_antes_agg > 0 else 0
+            
+            supressed_tokens = tokens_antes_trunc - tokens_final_agg
+            perc_supressed = (supressed_tokens / tokens_antes_trunc * 100) if tokens_antes_trunc > 0 else 0
  
             total_processing_time = perf_counter() - start_time
             
             proc_meta_for_ui = {
                 "total_pages_processed": len(processed_page_data_combined),
+                "total_tokens_before_filter": tokens_antes_filtro,
                 "relevant_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(relevant_ordered_indices),
                 "count_selected_relevant": count_sel,
                 "unintelligible_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(unintelligible_indices),
                 "count_discarded_unintelligible": count_unint,
                 "count_discarded_similarity": count_similars,
-                "total_tokens_before_truncation": tokens_antes_agg,
+                "total_tokens_before_truncation": tokens_antes_trunc,
                 "final_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(pages_agg_indices),
                 "count_selected_final": count_sel_final,
                 "final_aggregated_tokens": tokens_final_agg,
@@ -2260,18 +2266,18 @@ class InternalAnalysisController:
         
         llm_response_obj = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
 
-        if llm_response_obj and isinstance(llm_response_obj, formatted_initial_analysis):
-            fields_to_log = [
-                "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
-                "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
-                "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re",
-                "materia_especial", "destinacao"
-            ]
-        else:
-            fields_to_log = []
+        # if llm_response_obj and isinstance(llm_response_obj, formatted_initial_analysis):
+        #     fields_to_log = [
+        #         "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
+        #         "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
+        #         "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re",
+        #         "materia_especial", "destinacao"
+        #     ]
+        # else:
+        #     fields_to_log = []
         
         return (user_id, user_token, filenames_uploaded, proc_meta_session, tokens_embeddings_session, llm_meta_session,
-            current_settings, default_settings, llm_response_obj, fields_to_log)
+            current_settings, default_settings, llm_response_obj)
     
     def _llm_analysis_thread_func(self, aggregated_text: str, batch_name: str, is_reanalysis: bool = False):
         """
