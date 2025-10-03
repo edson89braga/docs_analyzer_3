@@ -8,15 +8,15 @@ from datetime import datetime
 
 from scipy import optimize
 
+from src import app_cache
 from src.flet_ui import theme
 from src.flet_ui.components.file_list_manager import FileListManager
 from src.flet_ui.components.settings_drawer import ChatSettingsDrawer
 from src.flet_ui.components.components import (
     show_confirmation_dialog,
     ManagedFilePicker,
-    show_loading_overlay,
-    hide_loading_overlay,
-    show_snackbar
+    show_loading_overlay, hide_loading_overlay,
+    show_snackbar, CompactKeyValueTable
 )
 # Adiciona import do novo orquestrador e settings
 from src.core.chat_llm_orchestrator import ChatLLMOrchestrator
@@ -27,7 +27,7 @@ from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS,
                           KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY, KEY_SESSION_CHAT_PROMPT_STRICT,
                           KEY_SESSION_CHAT_PROMPT_FLEXIBLE, KEY_SESSION_CHAT_PROMPT_CUSTOM)
 
-from src.utils import get_user_cache, clear_user_cache
+from src.utils import format_seconds_to_min_sec, get_user_cache, clear_user_cache
 from src.services.local_db_manager import LocalDBManager
 from src.services.firebase_client import FirebaseClientFirestore
 
@@ -42,6 +42,7 @@ KEY_SESSION_CHAT_MESSAGES = "chat_view_messages"
 KEY_SESSION_CHAT_METRICS = "chat_view_metrics"
 KEY_SESSION_CHAT_HAS_OPTIMIZED = "chat_view_has_optimized"
 KEY_SESSION_CHAT_SESSION_ID = "chat_view_session_id"
+KEY_SESSION_PROCESSING_METADATA = "chat_view_processing_metadata"
 # ----------------------------------------------------------------
 
 
@@ -230,6 +231,7 @@ class ChatViewContent(ft.Column):
 
         # self.page.update()
         self._update_button_states()
+        self._update_processing_metadata_display()
 
     # --- Métodos relacionados ao containeir chat_history_view ---
 
@@ -624,11 +626,13 @@ class ChatViewContent(ft.Column):
         def confirm_action():
             # Salva o resumo da sessão antes de limpar
             self._log_session_summary_metric()            
-
             # Limpa todas as chaves de sessão relacionadas ao chat
-            for key in (KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_HAS_OPTIMIZED):
+            for key in (KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_PROCESSING_METADATA):
                 if self.page.session.contains_key(key):
                     self.page.session.remove(key)
+
+            clear_user_cache(self.page)
+            self.user_cache = get_user_cache(self.page)
 
             self.chat_history_view.controls.clear()
             self.metrics_history.clear()
@@ -636,10 +640,9 @@ class ChatViewContent(ft.Column):
             self._start_new_chat_session() # Inicia uma nova sessão de chat com novo ID
             self.orchestrator.reset_conversation_history() # Limpa o ID da resposta anterior
             self._update_metrics_summary_button()
-
-            clear_user_cache(self.page)
-            self.user_cache = get_user_cache(self.page)
                 
+            self._update_processing_metadata_display()
+
             self._show_initial_greeting()
             self._on_file_list_changed() # Aciona o reset completo da UI
 
@@ -694,8 +697,8 @@ class ChatViewContent(ft.Column):
         # Botão de Processar: habilitado se há arquivos e o contexto ainda não foi extraído.
         self.extract_button.disabled = not has_files or has_context
 
-        # Botão de otimização: habilitado se o contexto já foi extraído mas ainda não otimizado
-        self.optimize_button.disabled = not has_context or has_optimized
+        # Botão de otimização: habilitado se há arquivos e o contexto ainda não foi otimizado
+        self.optimize_button.disabled = not has_files or has_optimized
         
         # self.anonymize_button.disabled = not has_context # Ainda não habilitada a função
 
@@ -760,6 +763,7 @@ class ChatViewContent(ft.Column):
             show_snackbar(self.page, "Nenhum arquivo válido foi carregado.", color=theme.COLOR_WARNING)
             return
         
+        self._update_processing_metadata_display()
         self.file_list_manager.expand_container()
 
         self.page.session.set(KEY_SESSION_CHAT_FILES, successful_files)
@@ -773,15 +777,16 @@ class ChatViewContent(ft.Column):
     def _on_file_list_changed(self):
         """Callback do FileListManager para a view de Chat."""
         # Se a lista de arquivos mudar, o contexto extraído anteriormente é invalidado.
-        
+
         # Caso já haja interação com LLM ativa, em vez de incluir aqui um confirmation_dialog para redirecinar para handle_clear_chat,
         # Opto por tornar disabled os componentes que alteram a lista de arquivos, forçando o usuário a limpar a conversa primeiro.
 
         self.user_cache.pop(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, None)
         self.user_cache.pop(KEY_SESSION_CHAT_RAW_PAGES_TEXT, None)
-        if self.page.session.contains_key(KEY_SESSION_CHAT_HAS_OPTIMIZED):
+        if self.page.session.contains_key(KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_PROCESSING_METADATA):
             self.page.session.remove(KEY_SESSION_CHAT_HAS_OPTIMIZED) # Invalida a otimização
         logger.info("Contexto do chat invalidado devido à alteração na lista de arquivos.")
+        self._update_processing_metadata_display()
         self.file_list_manager.update_display() # Apenas atualiza a própria UI
         self._update_button_states() # Reavalia o estado dos botões
 
@@ -837,14 +842,24 @@ class ChatViewContent(ft.Column):
             # Usamos um limite de tokens alto para manter o contexto completo
             settings = self._get_current_analysis_settings()
             token_limit = settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
-            _, aggregated_text, _, _ = analyzer.group_texts_by_relevance_and_token_limit(
+            _, aggregated_text, _, final_tokens  = analyzer.group_texts_by_relevance_and_token_limit(
                 processed_data, relevant_indices, token_limit
             )
+
+            processing_metadata = {
+                "Modo": "Otimizado / Filtrado",
+                "Páginas Totais": len(ordered_keys),
+                "Páginas Relevantes": len(relevant_indices),
+                "Tokens para LLM": f"{final_tokens:,}".replace(",", ".")
+            }
+
+            self.page.session.set(KEY_SESSION_PROCESSING_METADATA, processing_metadata)
 
             if not aggregated_text.strip():
                 raise ValueError("Nenhum texto relevante foi extraído dos documentos.")
 
             # Salva o contexto na sessão
+            self.page.run_thread(self._update_processing_metadata_display, processing_metadata)
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = aggregated_text
             self.page.session.set(KEY_SESSION_CHAT_HAS_OPTIMIZED, True)
             self._log_file_processing_metrics(optimized=True, total_pages=len(ordered_keys), relevant_pages=len(relevant_indices))
@@ -878,6 +893,7 @@ class ChatViewContent(ft.Column):
             raw_pages_text_map = {}
             all_texts_concatenated = []
 
+            start_time_proc = perf_counter()
             total_pages_raw = 0
             for file_info in files:
                 pdf_path = file_info["path_or_message"]
@@ -885,6 +901,14 @@ class ChatViewContent(ft.Column):
                 total_pages_raw += len(pages)
                 raw_pages_text_map[pdf_path] = pages
                 all_texts_concatenated.extend([text for _, text in pages])
+
+            processing_metadata = {
+                "Modo": "Completo / Não otimizado",
+                "Total de Páginas": total_pages_raw,
+                "Tempo de Extração": format_seconds_to_min_sec(perf_counter() - start_time_proc),
+            }
+            self.page.session.set(KEY_SESSION_PROCESSING_METADATA, processing_metadata)
+            self.page.run_thread(self._update_processing_metadata_display, processing_metadata)
 
             self._log_file_processing_metrics(optimized=False, total_pages=total_pages_raw)
             self.user_cache[KEY_SESSION_CHAT_RAW_PAGES_TEXT] = raw_pages_text_map
@@ -902,6 +926,38 @@ class ChatViewContent(ft.Column):
                 logger.error(msg_error, exc_info=True)
                 show_snackbar(self.page, msg_error, color=theme.COLOR_ERROR)
             self.page.run_thread(update_ui_on_error(e))
+
+    def _update_processing_metadata_display(self, proc_meta: Dict[str, Any] = None):
+        """Atualiza a exibição de metadados no FileListManager."""
+        
+        data_to_display = proc_meta or self.page.session.get(KEY_SESSION_PROCESSING_METADATA)
+
+        if not data_to_display:
+            self.file_list_manager.update_metadata_display(None)
+            return
+
+        data_rows = []
+        for key, value in data_to_display.items():
+            data_rows.append((f"{key}:", str(value)))
+
+        if data_rows:
+            metadata_table = CompactKeyValueTable(
+                data=data_rows,
+                key_col_width=160,  # Ajuste a largura da coluna de chaves
+                value_col_width=None, 
+                row_spacing=4, col_spacing=8,      
+                default_text_size=14                
+            )
+            
+            final_metadata_content = ft.Column([
+                ft.Container(height=5),
+                ft.Container(ft.Text("Dados do Processamento:", weight=ft.FontWeight.BOLD, size=14), padding=ft.padding.only(left=12)),
+                ft.Container(metadata_table, padding=ft.padding.only(left=30, top=10, bottom=10)),
+            ])
+            
+            self.file_list_manager.update_metadata_display(final_metadata_content)
+        else:
+            self.file_list_manager.update_metadata_display(None)
 
     def _handle_anonymize_click(self, e: ft.ControlEvent):
         """Handler para o botão de anonimização (ainda não implementado)."""
@@ -1099,6 +1155,15 @@ class ChatViewContent(ft.Column):
 
 def create_chat_view_content(page: ft.Page) -> ft.Control:
     """Função de fábrica para criar a view de Chat com Documentos."""
+
+    # Aguarda o pré-carregamento dos módulos pesados ser concluído
+    if not app_cache.heavy_imports_loading_event.is_set():
+        logger.info("Aguardando conclusão do pré-carregamento de módulos...")
+        # Define um timeout para não travar a aplicação indefinidamente
+        app_cache.heavy_imports_loading_event.wait(timeout=180)
+    else:
+        logger.debug("Pré-carregamento de módulos já concluído.")
+
     logger.info("View Chat_Docs: Iniciando criação (nova estrutura).")
     
     # A verificação de user_cache com prompts_instructions é feita no building com DrawerSettings

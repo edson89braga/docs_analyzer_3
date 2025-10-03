@@ -15,6 +15,7 @@ from enum import Enum
 #from pathlib import Path
 #from rich import print
 
+from src import app_cache
 from src.flet_ui.components.components import (
     show_snackbar, show_loading_overlay, hide_loading_overlay,
     ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable,
@@ -80,9 +81,6 @@ CTL_RESTART_BTN = "restart_button"
 CTL_EXPORT_BTN = "export_button"
 CTL_SETTINGS_BTN = "settings_button"
 CTL_RESET_SETTINGS_BTN = "reset_settings_button"
-CTL_PROC_METADATA_PANEL = "proc_metadata_panel"
-CTL_PROC_METADATA_PANEL_TITLE = "proc_metadata_panel_title"
-CTL_PROC_METADATA_CONTENT = "proc_metadata_content"
 CTL_LLM_RESULT_TEXT = "llm_result_text"
 CTL_LLM_STRUCTURED_RESULT_DISPLAY = "llm_structured_result_display" # Novo
 CTL_LLM_STATUS_INFO = "llm_status_info"
@@ -221,16 +219,7 @@ class AnalyzePDFViewContent(ft.Column):
         # A referência será criada em _initialize_file_list_manager.
 
         # Panel 2: Metadados do Processamento
-        self.gui_controls[CTL_PROC_METADATA_PANEL_TITLE] = ft.Text("Metadados do Processamento", weight=ft.FontWeight.BOLD)
-        self.gui_controls[CTL_PROC_METADATA_CONTENT] = ft.Column(spacing=5, expand=True, horizontal_alignment=ft.CrossAxisAlignment.START) # Conteúdo será adicionado dinamicamente
-        self.gui_controls[CTL_PROC_METADATA_PANEL] = ft.ExpansionPanel(
-            header=ft.Column([ft.Row([ft.Container(width=12), self.gui_controls[CTL_PROC_METADATA_PANEL_TITLE]])], expand=True, alignment=ft.MainAxisAlignment.CENTER),
-            content=self.gui_controls[CTL_PROC_METADATA_CONTENT],
-            can_tap_header=True,
-            expanded=False
-        )
-        self.gui_controls[CTL_PROC_METADATA_PANEL] = wrapper_panel_1(self.gui_controls[CTL_PROC_METADATA_PANEL])
-        self.gui_controls[CTL_PROC_METADATA_PANEL].visible=False # visível após processamento de PDF(s)
+        # O painel de metadados do processamento foi migrado para dentro do FileListManager
 
         # Container 3: Resposta/Resultado da Análise
         self.llm_result_title = ft.Row([ft.Container(width=12),
@@ -311,10 +300,11 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_LLM_METADATA_PANEL_TITLE] = ft.Text("Metadados da Análise LLM", weight=ft.FontWeight.BOLD)
         self.gui_controls[CTL_LLM_METADATA_CONTENT] = ft.Column(spacing=5, expand=True, horizontal_alignment=ft.CrossAxisAlignment.START) # Conteúdo dinâmico
         self.gui_controls[CTL_LLM_METADATA_PANEL] = ft.ExpansionPanel(
-            header=ft.Column([ft.Row([ft.Container(width=12), self.gui_controls[CTL_LLM_METADATA_PANEL_TITLE]])], expand=True, alignment=ft.MainAxisAlignment.CENTER),
+            header=ft.Column([ft.Row([ft.Container(width=12), self.gui_controls[CTL_LLM_METADATA_PANEL_TITLE]])], 
+                             expand=True, alignment=ft.MainAxisAlignment.CENTER),
             content=self.gui_controls[CTL_LLM_METADATA_CONTENT],
-            can_tap_header=True,
-            expanded=False
+            can_tap_header=True, expanded=False,
+            bgcolor = ft.Colors.ON_INVERSE_SURFACE
         )
         self.gui_controls[CTL_LLM_METADATA_PANEL] = wrapper_panel_1(self.gui_controls[CTL_LLM_METADATA_PANEL])
         self.gui_controls[CTL_LLM_METADATA_PANEL].visible=False # visível após resposta da LLM
@@ -324,9 +314,6 @@ class AnalyzePDFViewContent(ft.Column):
             [
                 # O FileListManager será inserido aqui dinamicamente
                 ft.Column(spacing=5, expand=True, horizontal_alignment=ft.CrossAxisAlignment.START),
-
-                self.gui_controls[CTL_PROC_METADATA_PANEL],
-
                 ft.Column([
                     self.llm_result_title,
                     self.gui_controls[CTL_LLM_AI_WARNING_BALLOON],
@@ -346,7 +333,7 @@ class AnalyzePDFViewContent(ft.Column):
         # self.settings_drawer_manager não é mais necessário
 
         self._original_main_layout_container = ft.Row(
-            [ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=8)),
+            [ft.Container(main_content_column, expand=True, padding=ft.padding.only(right=8, bottom=5)),
              self.settings_drawer_container],
             expand=True, vertical_alignment=ft.CrossAxisAlignment.START
         )
@@ -702,8 +689,6 @@ class AnalyzePDFViewContent(ft.Column):
             e (ft.ControlEvent): O evento de clique do botão.
         """
         logger.info("Botão 'Solicitar Análise' clicado.")
-        self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = False
-        self.gui_controls[CTL_PROC_METADATA_PANEL].update()
 
         if not self._files_processed:
             logger.debug("'Solicitar Análise' clicado, mas arquivos não processados. Redirecionando para 'process_and_analyze'.")
@@ -951,15 +936,11 @@ class AnalyzePDFViewContent(ft.Column):
             proc_meta (Optional[Dict[str, Any]]): Dicionário opcional contendo os metadados a serem exibidos.
                                                   Se None, tenta obter da sessão.
         """
-        content_area = self.gui_controls[CTL_PROC_METADATA_CONTENT]
-        content_area.controls.clear()
         metadata_to_display = proc_meta or self.page.session.get(KEY_SESSION_PROCESSING_METADATA)
         
         if not metadata_to_display:
-            #content_area.controls.append(ft.Text("Nenhum metadado de processamento disponível.", italic=True))
-            self.gui_controls[CTL_PROC_METADATA_PANEL].visible = False
+            self.file_list_manager.update_metadata_display(None)
         else:
-            self.gui_controls[CTL_PROC_METADATA_PANEL].visible = True
             # Mapeamento de chaves para labels amigáveis
             labels = [
                 ("total_pages_processed",                        "Páginas totais Processadas"),
@@ -969,14 +950,14 @@ class AnalyzePDFViewContent(ft.Column):
                 ("unintelligible_pages_global_keys_formatted",   "Páginas Descartadas (Ininteligíveis)"),
                 #"count_discarded_unintelligible":               "Qtd. Páginas Descartadas (Ininteligíveis)",
                 ("total_tokens_before_truncation",               "Tokens totais das Páginas Relevantes"),
-                ("final_pages_global_keys_formatted",            "Páginas Selecionadas com limite de tokens"),
-                #"count_selected_final":                         "Qtd. Páginas Selecionadas com limite de tokens",
+                ("final_pages_global_keys_formatted",            "Páginas Selecionadas até limite de tokens"),
+                #"count_selected_final":                         "Qtd. Páginas Selecionadas até limite de tokens",
                 ("final_aggregated_tokens",                      "Tokens totais das Páginas Selecionadas"),
                 ("supressed_tokens_percentage",                  "Percentual de Tokens Suprimidos"),
                 ("processing_time",                              "Tempo de processamento"),
                 ("calculated_embedding_cost_usd",                "Custos de Embeddings")
             ]
-            
+
             ordered_keys = [key for key, _ in labels]
             labels = {k: v for k, v in labels}
             data_rows = []
@@ -1025,26 +1006,26 @@ class AnalyzePDFViewContent(ft.Column):
                     row_spacing=4,      # Espaçamento entre as "linhas"
                     col_spacing=8,      # Espaçamento entre chave e valor
                     default_text_size=14
-                    # Você pode passar key_style e value_style personalizados se desejar
                 )
-                content_area.controls.append(ft.Container(metadata_table, padding=ft.padding.only(left=30, bottom=10)))
- 
-            # Alerta OCR (mantido como estava, abaixo da tabela se houver)
-            if metadata_to_display.get("count_discarded_unintelligible", 0) > 0:
-                content_area.controls.append(ft.Container(height=1)) # Espaçador
-                content_area.controls.append(
+                final_metadata_content = ft.Column([
+                    ft.Container(height=5),
+                    ft.Container(ft.Text("Dados do Processamento:", weight=ft.FontWeight.BOLD, size=14), padding=ft.padding.only(left=20)),
+                    ft.Container(metadata_table, padding=ft.padding.only(left=30, top=10, bottom=10))
+                ])                
+
+                if metadata_to_display.get("count_discarded_unintelligible", 0) > 0:
+                    final_metadata_content.controls.append(
                     ft.Container(
                         ft.Row([
                             ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=theme.COLOR_WARNING),
                             ft.Text("Páginas ininteligíveis detectadas. Considere usar OCR nelas.",
                                     color=theme.COLOR_WARNING, weight=ft.FontWeight.BOLD)
                         ], spacing=5, alignment=ft.MainAxisAlignment.START),
-                        padding=ft.padding.only(left=20, bottom=10)
+                            padding=ft.padding.only(top=10, left=20, bottom=10)
+                        )
                     )
-                )
-        
-        if content_area.page and content_area.uid:
-            content_area.update()
+                self.file_list_manager.update_metadata_display(final_metadata_content)
+
         logger.debug("Procedido: _update_processing_metadata_display")
 
     def _update_llm_metadata_display(self, llm_meta: Optional[Dict[str, Any]] = None):
@@ -2206,8 +2187,6 @@ class InternalAnalysisController:
             self.page.run_thread(self._update_status_callback, f"Erro ao processar PDFs: {ex_proc}", True, True)
             self.parent_view._files_processed = False # Falhou
         finally:
-            self.gui_controls[CTL_PROC_METADATA_PANEL].visible = True
-            self.gui_controls[CTL_PROC_METADATA_PANEL].controls[0].expanded = True
             hide_loading_overlay(self.page)
             # Garante que, mesmo em erro, os botões sejam reavaliados.
             # Se a análise não prosseguir para a LLM, a atualização da UI já foi feita no try.
@@ -2371,7 +2350,7 @@ class InternalAnalysisController:
  
                 data_to_log = self._get_data_to_log()
                 if self.firestore_client.save_analysis_metrics(*data_to_log):
-                    #Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
+                    # Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
                     self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
  
             else:
@@ -3087,6 +3066,14 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     Returns:
         ft.Control: Uma instância de AnalyzePDFViewContent.
     """
+    # Aguarda o pré-carregamento dos módulos pesados ser concluído
+    if not app_cache.heavy_imports_loading_event.is_set():
+        logger.info("Aguardando conclusão do pré-carregamento de módulos...")
+        # Define um timeout para não travar a aplicação indefinidamente
+        app_cache.heavy_imports_loading_event.wait(timeout=180)
+    else:
+        logger.debug("Pré-carregamento de módulos já concluído.")
+
     logger.info("View Análise de PDF: Iniciando criação (nova estrutura).")
 
     # 1. Ponto de verificação e carregamento dos prompts

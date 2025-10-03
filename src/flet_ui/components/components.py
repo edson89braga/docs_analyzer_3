@@ -2017,8 +2017,8 @@ def wrapper_panel_1(int_content):
     return ft.ExpansionPanelList(
         controls=[int_content],
         expand_icon_color=theme.PRIMARY,
-        elevation=1,
         divider_color=ft.Colors.TRANSPARENT, # Sem divisores visíveis entre os painéis
+        elevation=1,
         expanded_header_padding=ft.padding.all(1),
         # animation_duration=300 # Opcional
     )

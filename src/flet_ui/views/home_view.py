@@ -199,7 +199,7 @@ def create_home_view2(page: ft.Page) -> ft.Control:
     )
     card2 = create_feature_card(
         page,
-        "Chat com PDF",
+        "Chat com Documentos",
         "Chat inteligente com documentos para obtenção de respostas contextuais.",
         ft.Icons.QUESTION_ANSWER_OUTLINED,
         "/chat_pdf"

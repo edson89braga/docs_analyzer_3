@@ -29,6 +29,7 @@ from .router import route_change_content_only
 from . import theme
 error_color = theme.COLOR_ERROR if hasattr(theme, 'COLOR_ERROR') else ft.Colors.RED
 
+from src import app_cache
 from src.services import credentials_manager
 from src.services.firebase_client import FbManagerAuth, FirebaseClientFirestore, _from_firestore_value
 from src.logger.logger import LoggerSetup
@@ -530,7 +531,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             _token_refresh_thread_stop_event.set()
         if _token_refresh_thread_instance and _token_refresh_thread_instance.is_alive():
             logger.debug("Aguardando thread de renovação de token finalizar...")
-            _token_refresh_thread_instance.join(timeout=5) # Espera um pouco
+            _token_refresh_thread_instance.join(timeout=6) # Espera um pouco
             if _token_refresh_thread_instance.is_alive():
                 logger.warning("Thread de renovação de token não finalizou a tempo.")
         
@@ -563,7 +564,29 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         # Ex: page.pubsub.send_all("settings_loaded")
     
     page.data["load_settings_func"] = threaded_load_settings
-    
+
+    def _preload_heavy_modules_in_background():
+        """
+        Executado em uma thread para pré-carregar módulos pesados e evitar
+        delay no primeiro acesso às views de análise.
+        """
+        preload_start_time = perf_counter()
+        logger.info("Thread de pré-carregamento de módulos pesados iniciada...")
+        try:
+            from src.core import ai_orchestrator, pdf_processor, doc_generator, chat_llm_orchestrator
+            from src.flet_ui.views import nc_analyze_view, chat_view
+
+            # A importação por si só já força o carregamento dos módulos e suas dependências.
+            # Não é necessário instanciar as classes aqui.
+
+            preload_time = perf_counter() - preload_start_time
+            logger.info(f"Pré-carregamento de módulos pesados concluído em {preload_time:.2f}s.")
+        except Exception as e:
+            logger.error(f"Erro durante o pré-carregamento de módulos: {e}", exc_info=True)
+        finally:
+            # Sinaliza que o processo terminou, com ou sem sucesso, para não bloquear as views indefinidamente.
+            app_cache.heavy_imports_loading_event.set()
+
     # --- Lógica de Inicialização Principal ---
     def initialize_app_flow():
         """
@@ -573,15 +596,21 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         e gerencia a navegação inicial com base no status de autenticação do usuário.
         Também inicia a thread de renovação proativa de token se o usuário estiver autenticado.
         """
+        # Tenta carregar a sessão do client_storage. Esta é a primeira etapa.
         load_auth_state_from_storage(page)
         logger.info(f"[DEBUG] {perf_counter() - app_start_time:.4f}s - Auth state carregado em main.")
-        
+
+        # Verifica se, após a tentativa de restauração ou um novo login, existe um token válido.
+        # Este é o ponto central que confirma uma sessão autenticada.        
         # Se autenticado, carrega as configurações em uma thread
         if page.session.contains_key("auth_id_token"):
             from src.utils import check_app_version
             check_app_version()
 
             logger.debug("Usuário autenticado. Disparando carregamento de settings em background.")
+            # Inicia o pré-carregamento dos módulos pesados em uma thread separada.
+            # Isso acontece tanto para sessões restauradas quanto para novos logins.
+            threading.Thread(target=_preload_heavy_modules_in_background, daemon=True).start()            
             threading.Thread(target=threaded_load_settings, args=(page,), daemon=True).start()
             
             # Inicia thread de renovação de token (isso já é non-blocking)

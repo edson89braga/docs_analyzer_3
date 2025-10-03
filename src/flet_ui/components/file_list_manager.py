@@ -32,12 +32,19 @@ class FileListManager(ft.Column):
 
         self.title_text = ft.Text("Nenhum arquivo carregado.", weight=ft.FontWeight.BOLD)
         self.file_list_view = ft.ListView(expand=False, spacing=3)
+        self.metadata_content = ft.Column(spacing=5, visible=False)
 
         header_container = ft.Container(
-            content=ft.Row([ft.Container(width=12), self.title_text]),
-            expand=True, alignment=ft.alignment.center
+            content=ft.Container(self.title_text, padding=ft.padding.only(left=20)),
+            expand=True, alignment=ft.alignment.center_left
         )
-        content_container = ft.Container(content=self.file_list_view, expand=True)
+        content_container = ft.Container(
+            content=ft.Column(
+                [self.file_list_view, self.metadata_content],
+                spacing=10
+            ),
+            expand=True
+        )
 
         expansion_panel = ft.ExpansionPanel(
             header=header_container,
@@ -64,6 +71,8 @@ class FileListManager(ft.Column):
         if not _files:
             self.title_text.value = "Nenhum arquivo carregado."
             self.visible = False
+            # Limpa metadados se a lista de arquivos estiver vazia
+            self.update_metadata_display(None)            
         else:
             self.visible = True
             # self.panel_list.controls[0].expanded = True
@@ -120,7 +129,20 @@ class FileListManager(ft.Column):
 
         if self.on_list_changed:
             self.on_list_changed()
-    
+
+    def update_metadata_display(self, metadata_control: Optional[ft.Control]):
+        """Atualiza a seção de metadados dentro do painel."""
+        self.metadata_content.controls.clear()
+        if metadata_control:
+            self.metadata_content.controls.append(ft.Divider(height=1))
+            self.metadata_content.controls.append(metadata_control)
+            self.metadata_content.visible = True
+        else:
+            self.metadata_content.visible = False
+
+        if self.page and self.uid:
+            self.metadata_content.update()
+
     def collapse_container(self):
         self.panel_list.controls[0].expanded = False
         self.panel_list.update()
