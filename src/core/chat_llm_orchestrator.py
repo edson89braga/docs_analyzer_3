@@ -19,7 +19,6 @@ from src.utils import with_proxy
 from src.core.ai_orchestrator import calc_costs_llm_analysis
 from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 
-
 class ChatLLMOrchestrator:
     """
     Orquestra a conversa entre o usuário e o LLM, com base no contexto de um documento.
@@ -29,7 +28,6 @@ class ChatLLMOrchestrator:
         Inicializa o orquestrador de chat.
         """
         self.client: Optional[openai.OpenAI] = None
-        self.previous_response_id = None    
 
     def _initialize_client(self, api_key: str):
         """Inicializa o cliente OpenAI se necessário."""
@@ -86,6 +84,7 @@ class ChatLLMOrchestrator:
         self,
         api_key: str,
         model_name: str,
+        previous_response_id: str,
         instructions: str,
         document_context: str,
         history: List[Dict[str, str]],
@@ -115,8 +114,10 @@ class ChatLLMOrchestrator:
         if not self.client:
             yield {"type": "error", "content": "Cliente OpenAI não inicializado."}
             return
+        
+        logger.info(f'[DEBUG CACHE] Previous_response_id: {previous_response_id}')
 
-        if not self.previous_response_id:
+        if not previous_response_id:
             input_items = self._build_input_items(document_context, history, user_question, instructions=instructions)
         else:
             # Com ativação do Previous_response_id e do Store, o input itens deve ser apenas a nova pergunta do usuário
@@ -131,7 +132,7 @@ class ChatLLMOrchestrator:
             # "instructions": instructions_with_context, 
             # -> Movido para input_message (role: system) a fim de otimizar o cache ao descontinuar o uso do field instruction da api
             "input": input_items,
-            "previous_response_id": self.previous_response_id,
+            "previous_response_id": previous_response_id,
             "truncation": "auto", 
             "temperature": temperature if model_name.startswith("gpt-4") else None,
             "stream": False,
@@ -221,10 +222,10 @@ class ChatLLMOrchestrator:
                     final_usage_data = response.usage.model_dump()
 
                 if getattr(response, "id", None):
-                    self.previous_response_id = response.id
-                    logger.info(f'[DEBUG] previous_response_id: {response.id}')
+                    previous_response_id = response.id
+                    logger.info(f'[DEBUG CACHE] New_response_id: {response.id}')
                 else:
-                    logger.info('[DEBUG] Resposta não contém "id" para previous_response_id.')
+                    logger.info('[DEBUG CACHE] Resposta não contém "id" para previous_response_id.')
 
             total_time = round(time.perf_counter() - start_time, 2)
 
@@ -237,7 +238,6 @@ class ChatLLMOrchestrator:
                     "reasoning_tokens": final_usage_data["output_tokens_details"]["reasoning_tokens"], 
                     "total_tokens":  final_usage_data.get("total_tokens", 0),
                 }
-
                 cost_usd = calc_costs_llm_analysis(
                     token_usage_info["input_tokens"],
                     token_usage_info["cached_tokens"],
@@ -247,7 +247,8 @@ class ChatLLMOrchestrator:
                     loaded_llm_providers
                 )
                 token_usage_info["total_cost_usd"] = cost_usd
-                
+                token_usage_info["previous_response_id"] = previous_response_id
+                                
                 logger.info(f"Resposta do chat recebida. Model: {model_name}; Tempo de resposta: {total_time}s; Métricas: {token_usage_info}")
                 yield {"type": "final_metrics", "data": token_usage_info}
             else:
@@ -264,8 +265,4 @@ class ChatLLMOrchestrator:
             logger.error(f"Erro inesperado durante a geração da resposta do chat: {e}", exc_info=True)
             yield {"type": "error", "content": f"Ocorreu um erro inesperado ao se comunicar com a IA: {e}"}
 
-    def reset_conversation_history(self):
-        """Reseta o histórico da conversa, forçando o envio do contexto completo na próxima chamada."""
-        self.previous_response_id = None
-        logger.info("Histórico de conversa do orquestrador (previous_response_id) resetado.")
 

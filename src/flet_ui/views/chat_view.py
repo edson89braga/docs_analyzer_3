@@ -1,7 +1,7 @@
 # src/flet_ui/views/chat_view.py
 from math import e
 import flet as ft
-import time, threading, os, secrets
+import time, threading, os, secrets, weakref
 from typing import List, Dict, Any, Optional
 from time import perf_counter
 from datetime import datetime
@@ -42,7 +42,9 @@ KEY_SESSION_CHAT_MESSAGES = "chat_view_messages"
 KEY_SESSION_CHAT_METRICS = "chat_view_metrics"
 KEY_SESSION_CHAT_HAS_OPTIMIZED = "chat_view_has_optimized"
 KEY_SESSION_CHAT_SESSION_ID = "chat_view_session_id"
-KEY_SESSION_PROCESSING_METADATA = "chat_view_processing_metadata"
+KEY_SESSION_CHAT_LAST_USED_PROMPT_TEXT = "chat_view_last_used_prompt_text"
+KEY_SESSION_CHAT_PROCESSING_METADATA = "chat_view_processing_metadata"
+KEY_SESSION_CHAT_PREVIOUS_RESPONSE_ID = "chat_view_previous_response_id"
 # ----------------------------------------------------------------
 
 
@@ -52,17 +54,18 @@ class ChatViewContent(ft.Column):
         self.page = page
         self.user_cache = get_user_cache(self.page)
 
-        self.orchestrator = ChatLLMOrchestrator()
         self.db_manager = LocalDBManager()
         self.firestore_client = FirebaseClientFirestore()
         
         # Estado da UI
         self.metrics_history: List[Dict[str, Any]] = []
-        self.last_used_prompt_text: Optional[str] = None
         self.chat_session_id: Optional[str] = None
         self.is_processing_response = False
         self.editing_message_id: Optional[float] = None
         self._is_drawer_open = False
+
+        # Associa o handler ao evento on_mount do próprio componente (que é um ft.Column)
+        self.on_mount = self._on_mount_handler
 
         width_btn_bar = 180
 
@@ -229,9 +232,10 @@ class ChatViewContent(ft.Column):
         if not self.chat_session_id:
             self._start_new_chat_session()
 
-        # self.page.update()
         self._update_button_states()
         self._update_processing_metadata_display()
+        self.page.update()
+        self._scroll_to_last_message()
 
     # --- Métodos relacionados ao containeir chat_history_view ---
 
@@ -389,10 +393,47 @@ class ChatViewContent(ft.Column):
                 )
 
     # --- Handlers e Lógica de Negócio ---
+    def _on_mount_handler(self):
+        """
+        Handler chamado quando a view é montada na página.
+        Ideal para ações que dependem da UI estar renderizada, como o scroll inicial.
+        """
+        logger.debug("ChatView montada. Executando scroll inicial para a última mensagem.")
+        # O timer é crucial para dar tempo ao cliente de renderizar o ListView.
+        threading.Timer(0.2, self._scroll_to_last_message).start()
 
     def _scroll_to_last_message(self):
         if self.chat_history_view.page:
             self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT)
+            self.chat_history_view.update()
+        else:
+            logger.warning("Tentativa de scroll no ListView falhou: a página não está disponível.")
+
+    def _get_context_class(self):
+        # Cria uma referência fraca para a instância da view
+        view_ref = weakref.ref(self)
+        
+        # Coleta todo o contexto necessário para a thread operar de forma independente
+        session_id = self.page.session_id
+        user_token = self.page.session.get("auth_id_token")
+        user_id = self.page.session.get("auth_user_id")
+        chat_session_id = self.chat_session_id        
+        
+        # Pega as instruções atuais
+        instructions = self._get_active_system_prompt()
+
+        # Verifica se o prompt mudou desde a última chamada 
+        last_used_prompt_text = self.user_cache.get(KEY_SESSION_CHAT_LAST_USED_PROMPT_TEXT)
+        if last_used_prompt_text is None or last_used_prompt_text != instructions:
+            logger.info("Detectada mudança no prompt de sistema. Resetando histórico da conversa para a IA.")
+            self.user_cache[KEY_SESSION_CHAT_PREVIOUS_RESPONSE_ID] = None
+
+        # Atualiza o último prompt usado para a próxima verificação
+        self.user_cache[KEY_SESSION_CHAT_LAST_USED_PROMPT_TEXT] = instructions
+        
+        previous_response_id = self.user_cache.get(KEY_SESSION_CHAT_PREVIOUS_RESPONSE_ID)
+
+        return view_ref, session_id, user_token, user_id, chat_session_id, previous_response_id, instructions
 
     def _handle_send_message(self, e: ft.ControlEvent):
         if self.is_processing_response: 
@@ -425,67 +466,129 @@ class ChatViewContent(ft.Column):
         self.file_list_manager.collapse_container()
         thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
         self._add_message_to_view(thinking_message_data)
+        thinking_message_id = thinking_message_data["id"]
+
         self._scroll_to_last_message()
 
-        # Inicia a geração da resposta da IA em uma thread, passando o histórico já preparado
-        threading.Thread(target=self._handle_ai_response, args=(document_context, history_for_api, user_text), daemon=True).start()
+        view_ref, session_id, user_token, user_id, chat_session_id, previous_response_id, instructions = self._get_context_class()
 
-    def _handle_ai_response(self, document_context: str, history_for_api: List[Dict[str, str]], user_question: str):
+        # Inicia a thread, passando a referência fraca e o contexto da sessão
+        threading.Thread(
+            target=ChatViewContent._handle_ai_response_thread,
+            args=(view_ref, session_id, user_token, user_id, chat_session_id, previous_response_id, instructions, thinking_message_id, document_context, history_for_api, user_text),
+            daemon=True
+        ).start()
+
+    @staticmethod
+    def _handle_ai_response_thread(view_ref: weakref.ReferenceType, session_id: str, 
+                                    user_token: str, user_id: str, chat_session_id: str,
+                                    previous_response_id: str, instructions:str, thinking_message_id: float, 
+                                    document_context: str, history_for_api: List[Dict[str, str]], user_question: str):
         """
         Gerencia a chamada ao orquestrador e o streaming da resposta para a UI.
         """       
         # Prepara parâmetros para a IA
-        settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
-        api_key = self.page.session.get(f"decrypted_api_key_{settings.get('llm_provider', DEFAULT_LLM_PROVIDER)}") 
+        view = view_ref()
+        if not view or not view.page:
+            logger.warning("Thread de IA: A view do chat não está mais disponível. A thread será encerrada.")
+            return
+
+        settings = view.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
+        api_key = view.page.session.get(f"decrypted_api_key_{settings.get('llm_provider', DEFAULT_LLM_PROVIDER)}") 
         
         if not api_key:
             error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
             logger.error(error_msg)
-            self.page.run_thread(lambda: self._update_last_message_text(error_msg, append=False))
-            self.page.run_thread(lambda: self._set_processing_state(False))
+            view = view_ref() # Re-verifica a referência
+            if view and view.page:
+                view.page.run_thread(lambda: view._update_last_message_text(error_msg, append=False))
+                view.page.run_thread(lambda: view._set_processing_state(False))
             return
-        
+
+        full_response_content = ""
+        final_usage_data = {}
+
         try:
-            # Pega as instruções atuais
-            instructions = self._get_active_system_prompt()
-
-            # Verifica se o prompt mudou desde a última chamada 
-            if self.last_used_prompt_text is None or self.last_used_prompt_text != instructions:
-                logger.info("Detectada mudança no prompt de sistema. Resetando histórico da conversa para a IA.")
-                self.orchestrator.reset_conversation_history()
-            
-            # Atualiza o último prompt usado para a próxima verificação
-            self.last_used_prompt_text = instructions
-
+            orchestrator_instance = ChatLLMOrchestrator() # Cria instância dentro da thread
             model_name = settings.get('llm_model', DEFAULT_LLM_MODEL) 
-            response_generator = self.orchestrator.generate_response(
+            response_generator = orchestrator_instance.generate_response(
                 api_key=api_key,
                 model_name=model_name,
-                document_context=document_context,
+                previous_response_id=previous_response_id,
                 instructions=instructions,
+                document_context=document_context,
                 history=history_for_api,
                 user_question=user_question,
-                loaded_llm_providers=self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or [],
+                loaded_llm_providers=view.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or [],
                 temperature=settings.get('llm_temperature', DEFAULT_TEMPERATURE),
                 reasoning_mode=settings.get('reasoning_effort'),
                 verbosity_level=settings.get('verbosity_level')
             )
 
             for response_part in response_generator:
+                # A cada iteração, verifica se a view ainda é válida
+                view = view_ref() # Re-verifica a referência
+                if not view or not view.page:
+                    logger.warning("Thread de IA: A view do chat não está mais disponível durante o streaming. Interrompendo updates de UI.")
+                    # Continua o loop para receber a resposta completa e salvar no cache, mas para de atualizar a UI
+
                 if response_part["type"] == "chunk":
-                    self.page.run_thread(lambda chunk=response_part["content"]: self._update_last_message_text(chunk, append=True))
-                    logger.info(f"[DEBUG] Chunk Msg LLM by model {model_name}: {response_part['content'][:160]}...")
+                    chunk = response_part["content"]
+                    full_response_content += chunk
+                    if view and view.page:
+                        view.page.run_thread(lambda c=chunk: view._update_last_message_text(c, append=True))
+
                 elif response_part["type"] == "final_metrics":
-                    response_part["data"]["timestamp"] = datetime.now()                    
-                    response_part["data"]["model_name"] = model_name
-                    self.page.run_thread(lambda data=response_part["data"]: self._log_and_update_request_metrics(data))
+                    final_usage_data = response_part["data"]
+                    final_usage_data["timestamp"] = datetime.now()
+                    final_usage_data["model_name"] = model_name
+
                 elif response_part["type"] == "error":
                     error_text = f"**Erro:** {response_part['content']}"
-                    self.page.run_thread(lambda: self._update_last_message_text(error_text, append=False))
+                    full_response_content = error_text
+                    if view and view.page:
+                        view.page.run_thread(lambda: view._update_last_message_text(error_text, append=False))
                     break
+
+            # Após o loop, salva o estado final diretamente no cache do servidor.
+            # Isso garante que a resposta seja salva mesmo que o usuário tenha navegado para outra view.
+            from src.utils import _SERVER_SIDE_CACHE
+            user_cache = _SERVER_SIDE_CACHE.get(session_id)
+            if user_cache:
+                # Atualiza o texto da mensagem "pensando" com a resposta completa
+                messages = user_cache.get(KEY_SESSION_CHAT_MESSAGES, [])
+                message_updated = False
+                for msg in reversed(messages):
+                    if msg.get("id") == thinking_message_id:
+                        msg["text"] = full_response_content
+                        message_updated = True
+                        break
+
+                if message_updated:
+                    user_cache[KEY_SESSION_CHAT_MESSAGES] = messages
+
+                # Adiciona as métricas finais
+                metrics = user_cache.get(KEY_SESSION_CHAT_METRICS, [])
+                if final_usage_data:
+                    metrics.append(final_usage_data)
+                    user_cache[KEY_SESSION_CHAT_PREVIOUS_RESPONSE_ID] = final_usage_data.get("previous_response_id")
+                    user_cache[KEY_SESSION_CHAT_METRICS] = metrics
+
+                logger.info("Thread de IA: Cache da sessão atualizado diretamente com a resposta completa.")
+            else:
+                logger.warning(f"Thread de IA: Cache da sessão para ID '{session_id}' não encontrado. A resposta completa não pôde ser salva.")
+
         finally:
-            self.page.run_thread(lambda: self._set_processing_state(False))
-            self.page.run_thread(lambda: self._scroll_to_last_message())
+            # Verificação final antes dos últimos updates
+            view = view_ref()
+            if view and view.page:
+                # Atualiza a UI com os dados das métricas que acabaram de ser salvas no cache
+                view.page.run_thread(lambda: view._log_and_update_request_metrics(final_usage_data))                
+                view.page.run_thread(lambda: view._set_processing_state(False))
+                view.page.run_thread(lambda: view._scroll_to_last_message())
+            else:
+                ChatViewContent._log_single_metric_to_firestore_static(user_token, user_id, chat_session_id, final_usage_data)
+                logger.info("Thread de IA: Finalizada, mas a view do chat já não estava mais ativa.")
 
     def _set_processing_state(self, is_processing: bool, clear_input: bool = False):
         if clear_input:
@@ -574,7 +677,7 @@ class ChatViewContent(ft.Column):
         index = next((i for i, c in enumerate(self.chat_history_view.controls) if c.data["id"] == message_id), -1)
         if index != -1:
             self.chat_history_view.controls = self.chat_history_view.controls[:index + 1]
-            self.orchestrator.reset_conversation_history() # Força o reenvio do contexto
+            self.user_cache.pop(KEY_SESSION_CHAT_PREVIOUS_RESPONSE_ID, None) # Força o reenvio do contexto
             self._update_message_actions() # Apenas atualiza as ações, não precisa reconstruir
             self._save_state_to_session()
             self.page.run_thread(lambda: self._scroll_to_last_message())
@@ -591,14 +694,14 @@ class ChatViewContent(ft.Column):
         if author == "IA":
             # Caso 1: Regenerando uma resposta da IA
             if rerun_index == 0: return # Não pode regenerar a primeira mensagem se for da IA
-            self.orchestrator.reset_conversation_history() # Força o reenvio do contexto
+            self.user_cache.pop(KEY_SESSION_CHAT_PREVIOUS_RESPONSE_ID, None) # Força o reenvio do contexto
             user_question = self.chat_history_view.controls[rerun_index - 1].data["text"]
             history_controls = self.chat_history_view.controls[:rerun_index - 1]
             self.chat_history_view.controls.pop(rerun_index) # Remove a resposta antiga da IA
 
         elif author == "User":
             # Caso 2: Gerando resposta para a última mensagem do usuário (após "Retomar daqui")
-            self.orchestrator.reset_conversation_history() # Força o reenvio do contexto
+            self.user_cache.pop(KEY_SESSION_CHAT_PREVIOUS_RESPONSE_ID, None) # Força o reenvio do contexto
             user_question = rerun_control.data["text"]
             history_controls = self.chat_history_view.controls[:rerun_index]
         else:
@@ -613,6 +716,7 @@ class ChatViewContent(ft.Column):
         ]
 
         thinking_message_data = {"id": time.time(), "author": "IA", "text": ""}
+        thinking_message_id = thinking_message_data["id"]
         self._add_message_to_view(thinking_message_data)
 
         document_context = self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
@@ -620,14 +724,21 @@ class ChatViewContent(ft.Column):
             show_snackbar(self.page, "Contexto do documento não encontrado para regenerar a resposta.", color=theme.COLOR_ERROR)
             return
 
-        threading.Thread(target=self._handle_ai_response, args=(document_context, history_for_api, user_question), daemon=True).start()
+        view_ref, session_id, user_token, user_id, chat_session_id, previous_response_id, instructions = self._get_context_class()
+
+        # Inicia a thread, passando a referência fraca e o contexto da sessão
+        threading.Thread(
+            target=ChatViewContent._handle_ai_response_thread,
+            args=(view_ref, session_id, user_token, user_id, chat_session_id, previous_response_id, instructions, thinking_message_id, document_context, history_for_api, user_question),
+            daemon=True
+        ).start()
     
     def _handle_clear_chat(self, e: ft.ControlEvent):
         def confirm_action():
             # Salva o resumo da sessão antes de limpar
             self._log_session_summary_metric()            
             # Limpa todas as chaves de sessão relacionadas ao chat
-            for key in (KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_PROCESSING_METADATA):
+            for key in (KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_CHAT_PROCESSING_METADATA):
                 if self.page.session.contains_key(key):
                     self.page.session.remove(key)
 
@@ -636,9 +747,7 @@ class ChatViewContent(ft.Column):
 
             self.chat_history_view.controls.clear()
             self.metrics_history.clear()
-            self.last_used_prompt_text = None # Reseta o prompt rastreado
             self._start_new_chat_session() # Inicia uma nova sessão de chat com novo ID
-            self.orchestrator.reset_conversation_history() # Limpa o ID da resposta anterior
             self._update_metrics_summary_button()
                 
             self._update_processing_metadata_display()
@@ -772,7 +881,7 @@ class ChatViewContent(ft.Column):
         logger.info(f"Carregados {len(successful_files)} arquivos: {successful_files}")
         self._update_button_states()
 
-        show_snackbar(self.page, f"{len(successful_files)} documento(s) carregado(s). Clique em 'Extrair Texto' para continuar.", color=theme.COLOR_SUCCESS)
+        show_snackbar(self.page, f"{len(successful_files)} documento(s) carregado(s). Clique em 'Extrair Texto' ou 'Otimizar Conteúdo' para continuar.", color=theme.COLOR_SUCCESS)
 
     def _on_file_list_changed(self):
         """Callback do FileListManager para a view de Chat."""
@@ -784,7 +893,7 @@ class ChatViewContent(ft.Column):
         self.user_cache.pop(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, None)
         self.user_cache.pop(KEY_SESSION_CHAT_RAW_PAGES_TEXT, None)
 
-        for key in (KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_PROCESSING_METADATA):
+        for key in (KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_CHAT_PROCESSING_METADATA):
             if self.page.session.contains_key(key): # invalida otimização
                 self.page.session.remove(key)        
 
@@ -870,7 +979,7 @@ class ChatViewContent(ft.Column):
                 "calculated_embedding_cost_usd": 0 # Placeholder
             }            
 
-            self.page.session.set(KEY_SESSION_PROCESSING_METADATA, processing_metadata)
+            self.page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, processing_metadata)
 
             if not aggregated_text.strip():
                 raise ValueError("Nenhum texto relevante foi extraído dos documentos.")
@@ -930,17 +1039,18 @@ class ChatViewContent(ft.Column):
                 "relevant_pages_global_keys_formatted": None,
                 "count_selected_relevant": None,
             }
-            self.page.session.set(KEY_SESSION_PROCESSING_METADATA, processing_metadata)
+            self.page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, processing_metadata)
             self.page.run_thread(self._update_processing_metadata_display, processing_metadata)
 
             self._log_file_processing_metrics(optimized=False, total_pages=total_pages_raw)
             self.user_cache[KEY_SESSION_CHAT_RAW_PAGES_TEXT] = raw_pages_text_map
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = " ".join(all_texts_concatenated)            
             self.page.run_thread(lambda: show_snackbar(self.page, "Extração de texto concluída.", color=theme.COLOR_SUCCESS))
-            self.page.run_thread(self._update_button_states)
 
             if optimize_too:
                 self.page.run_thread(lambda: self._handle_optimize_click(None))
+            else:
+                self.page.run_thread(self._update_button_states)
 
         except Exception as e:
             def update_ui_on_error(e):
@@ -953,7 +1063,7 @@ class ChatViewContent(ft.Column):
     def _update_processing_metadata_display(self, proc_meta: Dict[str, Any] = None):
         """Atualiza a exibição de metadados no FileListManager."""
         
-        metadata_to_display  = proc_meta or self.page.session.get(KEY_SESSION_PROCESSING_METADATA)
+        metadata_to_display  = proc_meta or self.page.session.get(KEY_SESSION_CHAT_PROCESSING_METADATA)
 
         if not metadata_to_display :
             self.file_list_manager.update_metadata_display(None)
@@ -1024,19 +1134,6 @@ class ChatViewContent(ft.Column):
             "A funcionalidade de anonimização de dados ainda não está disponível.",
             color=theme.COLOR_WARNING
         )
-
-    def _log_and_update_request_metrics(self, metrics_data: dict):
-        """
-        Adiciona os dados da última resposta ao histórico de métricas,
-        salva a métrica individual no Firestore e atualiza a UI.
-        """
-        self.metrics_history.append(metrics_data)
-        self._update_button_states_by_chat()
-        self._save_state_to_session()
-        self._update_metrics_summary_button()
-
-        # Envia a métrica desta requisição específica para o Firestore
-        self._log_single_request_metric(metrics_data)        
 
     def _update_metrics_summary_button(self):
         """Calcula o total de tokens de input e atualiza o botão na barra superior."""
@@ -1118,6 +1215,53 @@ class ChatViewContent(ft.Column):
     
 
     # --- Métodos de Logging de Métricas ---
+
+    def _log_and_update_request_metrics(self, metrics_data: dict):
+        """
+        Adiciona os dados da última resposta ao histórico de métricas,
+        salva a métrica individual no Firestore e atualiza a UI.
+        """
+        # self._save_state_to_session() # user_cache agora é salvo durante o handle_ai_response;
+        # self.metrics_history.append(metrics_data)
+        self.metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS) or []        
+        self._update_button_states_by_chat()
+        self._update_metrics_summary_button()
+
+        # Envia a métrica desta requisição específica para o Firestore
+        context = self._get_valid_user_context()
+        if not context: return
+        user_token, user_id = context
+        chat_session_id = self.chat_session_id
+        ChatViewContent._log_single_metric_to_firestore_static(user_token, user_id, chat_session_id, metrics_data)
+
+    @staticmethod
+    def _log_single_metric_to_firestore_static(user_token: str, user_id: str, chat_session_id: str, request_metric: Dict[str, Any]):
+        """Método estático para salvar uma única métrica no Firestore. Pode ser chamado pela thread."""
+        firestore_client = FirebaseClientFirestore() # Cria uma instância local
+
+        request_timestamp = request_metric.get("timestamp", datetime.now())
+        request_id = f"req_{request_timestamp.strftime('%Y%m%d%H%M%S%f')}"
+
+        # Cria um dicionário aninhado. A chave 'requests' conterá um mapa,
+        # e estamos adicionando/atualizando um campo (request_id) dentro desse mapa.
+
+        metric_payload = {
+            "requests": {
+                request_id: {
+                    "timestamp": request_timestamp.isoformat(),
+                    "model_name": request_metric.get("model_name"),
+                    "input_tokens": request_metric.get("input_tokens"),
+                    "cached_tokens": request_metric.get("cached_tokens"),
+                    "output_tokens": request_metric.get("output_tokens"),
+                    "reasoning_tokens": request_metric.get("reasoning_tokens"),
+                    "total_cost_usd": request_metric.get("total_cost_usd"),
+                }
+            }
+        }
+        
+        doc_path = f"user_metrics/{user_id}/chat_sessions/{chat_session_id}"
+        firestore_client.set_document_data(user_token, doc_path, metric_payload, merge=True)
+
     def _get_valid_user_context(self) -> Optional[tuple[str, str]]:
         from src.flet_ui.app import check_and_refresh_token_if_needed
         if not check_and_refresh_token_if_needed(self.page): return None
@@ -1157,34 +1301,6 @@ class ChatViewContent(ft.Column):
         
         doc_path = f"user_metrics/{user_id}/chat_sessions/{self.chat_session_id}"
         self.firestore_client.set_document_data(user_token, doc_path, metric_payload) # Cria o documento
-
-    def _log_single_request_metric(self, request_metric: Dict[str, Any]):
-        context = self._get_valid_user_context()
-        if not context: return
-        user_token, user_id = context
-
-        request_timestamp = request_metric.get("timestamp", datetime.now())
-        request_id = f"req_{request_timestamp.strftime('%Y%m%d%H%M%S%f')}"
-
-        # Cria um dicionário aninhado. A chave 'requests' conterá um mapa,
-        # e estamos adicionando/atualizando um campo (request_id) dentro desse mapa.
-
-        metric_payload = {
-            "requests": {
-                request_id: {
-                    "timestamp": request_timestamp.isoformat(),
-                    "model_name": request_metric.get("model_name"),
-                    "input_tokens": request_metric.get("input_tokens"),
-                    "cached_tokens": request_metric.get("cached_tokens"),
-                    "output_tokens": request_metric.get("output_tokens"),
-                    "reasoning_tokens": request_metric.get("reasoning_tokens"),
-                    "total_cost_usd": request_metric.get("total_cost_usd"),
-                }
-            }
-        }
-        
-        doc_path = f"user_metrics/{user_id}/chat_sessions/{self.chat_session_id}"
-        self.firestore_client.set_document_data(user_token, doc_path, metric_payload, merge=True)
 
     def _log_session_summary_metric(self):
         context = self._get_valid_user_context()
