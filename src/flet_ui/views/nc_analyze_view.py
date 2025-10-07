@@ -157,7 +157,14 @@ class AnalyzePDFViewContent(ft.Column):
         self._setup_event_handlers()
 
         self.settings_drawer_component.load_settings_into_controls() # Carrega configurações em page.session
-        self._update_gui_from_state() # Atualiza GUI a partir do estado interno
+        # self._update_gui_from_state() # -> Chamado no did_mount
+
+    def did_mount(self):
+        """
+        Chamado sempre que a view é montada, garantindo que a UI reflita o estado
+        mais recente da sessão, mesmo ao retornar de cache.
+        """
+        self._update_gui_from_state()
 
     def _remove_data_session(self, key: str):
         """

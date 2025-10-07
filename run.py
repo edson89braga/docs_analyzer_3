@@ -281,6 +281,8 @@ threading.Thread(target=load_to_utils, daemon=True).start()
 # ===============================================================================
 
 _ACTIVE_SESSION_ID = None
+_SHUTDOWN_TIMER = None
+SHUTDOWN_GRACE_PERIOD = 3  # Segundos de espera antes de desligar
 _SESSION_LOCK = threading.Lock()
 
 import flet as ft
@@ -303,12 +305,27 @@ if __name__ == "__main__":
     execution_time = perf_counter() - start_time
     logger.info(f"[DEBUG] Carregado RUN em {execution_time:.4f}s")
 
-    original_main = main
+    original_main_function = main
+
+    def shutdown_server(original_cleanup_logic):
+        """Função que de fato encerra o processo do servidor."""
+        logger.info(f"Janela de tolerância de {SHUTDOWN_GRACE_PERIOD}s expirou. Desligando o servidor.")
+        # Primeiro, executa a lógica de limpeza da sessão Flet.
+        if original_cleanup_logic:
+            original_cleanup_logic(None)
+        # Em seguida, encerra o processo.
+        os._exit(0)
 
     def main_singleton_wrapper(page: ft.Page):
-        global _ACTIVE_SESSION_ID
+        global _ACTIVE_SESSION_ID, _SHUTDOWN_TIMER
 
         with _SESSION_LOCK:
+            # Se uma nova conexão chega, cancela qualquer desligamento agendado.
+            if _SHUTDOWN_TIMER is not None:
+                _SHUTDOWN_TIMER.cancel()
+                _SHUTDOWN_TIMER = None
+                logger.info("Desligamento do servidor cancelado por nova conexão (refresh).")
+
             if _ACTIVE_SESSION_ID is not None:
                 # SESSÃO DUPLICADA: Limpa a página e exibe o aviso diretamente.
                 logger.warning(f"Sessão duplicada detectada ({page.session_id}). Exibindo página de aviso.")
@@ -321,21 +338,22 @@ if __name__ == "__main__":
             _ACTIVE_SESSION_ID = page.session_id
             logger.info(f"Sessão principal definida: {_ACTIVE_SESSION_ID}")
 
-        # O handler de desconexão que encerra o servidor é aplicado apenas à sessão mestra.
         original_on_disconnect = page.on_disconnect
         def master_session_disconnect(e):
-            global _ACTIVE_SESSION_ID
+            global _ACTIVE_SESSION_ID, _SHUTDOWN_TIMER
             with _SESSION_LOCK:
                 if page.session_id == _ACTIVE_SESSION_ID:
                     _ACTIVE_SESSION_ID = None
-                    logger.info(f"Sessão principal {page.session_id} desconectada. Encerrando servidor.")
-                    if original_on_disconnect:
-                        original_on_disconnect(e)
+                    logger.info(f"Sessão principal {page.session_id} desconectada. Agendando desligamento em {SHUTDOWN_GRACE_PERIOD}s.")
+                    # Agenda o desligamento em vez de encerrar imediatamente.
+                    # Passa a lógica de limpeza original para a função de desligamento.
+                    _SHUTDOWN_TIMER = threading.Timer(SHUTDOWN_GRACE_PERIOD, shutdown_server, args=[original_on_disconnect])
+                    _SHUTDOWN_TIMER.start()
         page.on_disconnect = master_session_disconnect
 
         
         # Apenas a sessão mestra executa a lógica principal da aplicação.
-        original_main(page)
+        original_main_function(page)
 
     # Configura e inicia a aplicação Flet
     ft.app(

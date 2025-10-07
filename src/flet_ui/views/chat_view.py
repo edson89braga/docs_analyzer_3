@@ -66,9 +66,6 @@ class ChatViewContent(ft.Column):
         self.editing_message_id: Optional[float] = None
         self._is_drawer_open = False
 
-        # Associa o handler ao evento on_mount do próprio componente (que é um ft.Column)
-        self.on_mount = self._on_mount_handler
-
         width_btn_bar = 180
 
         # Controles da UI 
@@ -118,8 +115,7 @@ class ChatViewContent(ft.Column):
         
         self._build_layout()
         
-        # self.messages: List[Dict[str, Any]] = []
-        self._restore_state_from_session()
+        # self._restore_state_from_session() -> chamado no did_mount
 
     def _initialize_file_picker(self):
         """Inicializa e retorna uma instância do ManagedFilePicker."""
@@ -422,14 +418,14 @@ class ChatViewContent(ft.Column):
                 )
 
     # --- Handlers e Lógica de Negócio ---
-    def _on_mount_handler(self):
+    def did_mount(self):
         """
-        Handler chamado quando a view é montada na página.
-        Ideal para ações que dependem da UI estar renderizada, como o scroll inicial.
+        Handler chamado toda vez que a view é montada na página (incluindo retornos de cache).
+        Ideal para restaurar e sincronizar o estado da UI com a sessão atual.
         """
-        logger.debug("ChatView montada. Executando scroll inicial para a última mensagem.")
-        # O timer é crucial para dar tempo ao cliente de renderizar o ListView.
-        threading.Timer(0.2, self._scroll_to_last_message).start() # Não funcionou
+        logger.debug("ChatView.did_mount: Restaurando estado da sessão e sincronizando UI.")
+        self._restore_state_from_session()
+        threading.Timer(0.1, self._scroll_to_last_message).start()
 
     def _scroll_to_last_message(self):
         if self.chat_history_view.page:

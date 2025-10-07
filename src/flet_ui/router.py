@@ -321,14 +321,31 @@ def route_change_content_only(
         final_content: Optional[ft.Control] = None
 
         try:
+            from src.utils import get_user_cache
+            user_cache = get_user_cache(page_ref)
+
+            # Garante que o sub-cache para views exista
+            if 'view_cache' not in user_cache:
+                user_cache['view_cache'] = {}
+            
+            # Tenta obter a view do cache
+            cached_view = user_cache['view_cache'].get(target_route)
+
+            if cached_view:
+                logger.info(f"[DEBUG] View para a rota '{target_route}' encontrada no cache. Reutilizando instância.")
+                final_content = cached_view  
+
             if content_creators:
                 creator_func = content_creators.get(target_route)
-                if creator_func:
+                if creator_func and not cached_view:
+                    logger.info(f"[DEBUG] Criando nova view para a rota '{target_route}'.")
                     final_content = creator_func(page_ref)
+                    user_cache['view_cache'][target_route] = final_content # Armazena no cache
                 else:
                     raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
             
-            elif view_module_map:
+            elif view_module_map and not cached_view:
+                logger.info(f"[DEBUG] Criando nova view para a rota '{target_route}' via import dinâmico.")
                 # --- LÓGICA DE IMPORTAÇÃO DINÂMICA ---
                 if target_route in view_module_map:
                     import importlib
@@ -339,10 +356,12 @@ def route_change_content_only(
                     creator_func = getattr(view_module, function_name)
                     
                     final_content = creator_func(page_ref)
+                    user_cache['view_cache'][target_route] = final_content # Armazena no cache
                 else:
                     raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
-                
-                logger.debug("Procedido: _load_and_set_view")
+            #else:
+            #logger.info(f"[DEBUG] Nenhum criador de conteúdo encontrado para a rota: {target_route}")
+            logger.debug("Procedido: _load_and_set_view")
             
 
         except Exception as e:

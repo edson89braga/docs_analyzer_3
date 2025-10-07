@@ -475,8 +475,12 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         time.sleep(1) 
 
         # Encerra o processo do servidor
-        logger.info("Encerrando o processo do servidor agora.")
-        os._exit(0)  # Força a saída imediata e limpa do processo Python
+        # logger.info("Encerrando o processo do servidor agora.")
+        # os._exit(0)  # Força a saída imediata e limpa do processo Python
+
+        # O encerramento do servidor agora é gerenciado pelo wrapper em run.py
+        # para permitir a janela de tolerância de refresh.
+        logger.info("Lógica de limpeza da sessão Flet concluída.")
 
     page.on_disconnect = on_disconnect
 
