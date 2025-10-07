@@ -1,5 +1,5 @@
 # run.py
-import logging
+import logging, threading
 logger = logging.getLogger(__name__)
 
 from time import perf_counter
@@ -246,7 +246,6 @@ def initialize_app():
 
 
 # ===============================================================================
-import threading
 from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR 
 from src import app_cache
 
@@ -280,9 +279,14 @@ threading.Thread(target=load_to_utils, daemon=True).start()
 
 
 # ===============================================================================
+
+_ACTIVE_SESSION_ID = None
+_SESSION_LOCK = threading.Lock()
+
 import flet as ft
 # Importa a função 'main' do módulo app dentro de flet_gui
 from src.flet_ui.app import main
+from src.flet_ui.views.others_view import create_session_taken_over_view
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
@@ -299,9 +303,43 @@ if __name__ == "__main__":
     execution_time = perf_counter() - start_time
     logger.info(f"[DEBUG] Carregado RUN em {execution_time:.4f}s")
 
+    original_main = main
+
+    def main_singleton_wrapper(page: ft.Page):
+        global _ACTIVE_SESSION_ID
+
+        with _SESSION_LOCK:
+            if _ACTIVE_SESSION_ID is not None:
+                # SESSÃO DUPLICADA: Limpa a página e exibe o aviso diretamente.
+                logger.warning(f"Sessão duplicada detectada ({page.session_id}). Exibindo página de aviso.")
+                page.clean()
+                page.add(create_session_taken_over_view(page))
+                page.update()
+                return  # Impede a execução da lógica principal.
+
+            # SESSÃO MESTRA: Define-se como ativa e continua o fluxo normal.
+            _ACTIVE_SESSION_ID = page.session_id
+            logger.info(f"Sessão principal definida: {_ACTIVE_SESSION_ID}")
+
+        # O handler de desconexão que encerra o servidor é aplicado apenas à sessão mestra.
+        original_on_disconnect = page.on_disconnect
+        def master_session_disconnect(e):
+            global _ACTIVE_SESSION_ID
+            with _SESSION_LOCK:
+                if page.session_id == _ACTIVE_SESSION_ID:
+                    _ACTIVE_SESSION_ID = None
+                    logger.info(f"Sessão principal {page.session_id} desconectada. Encerrando servidor.")
+                    if original_on_disconnect:
+                        original_on_disconnect(e)
+        page.on_disconnect = master_session_disconnect
+
+        
+        # Apenas a sessão mestra executa a lógica principal da aplicação.
+        original_main(page)
+
     # Configura e inicia a aplicação Flet
     ft.app(
-        target=main,                 # Função principal a ser executada
+        target=main_singleton_wrapper, # Usa o wrapper
         view=ft.AppView.WEB_BROWSER, # Executa como uma aplicação web no navegador padrão
         port=8550,                   # Porta em que a aplicação será servida (ex: http://localhost:8550)
         assets_dir=ASSETS_DIR, 

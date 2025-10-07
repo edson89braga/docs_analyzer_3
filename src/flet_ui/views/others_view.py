@@ -252,3 +252,35 @@ def create_roteiro_investigacoes_content(page: ft.Page) -> ft.Control:
         ft.Control: O conteúdo da view "Roteiros de Investigações".
     """
     return create_placeholder_content(page, "Roteiros de Investigações")
+
+
+def create_session_taken_over_view(page: ft.Page) -> ft.Control:
+    """
+    Cria uma view de aviso para sessões que foram substituídas por uma mais recente.
+    """
+    page.appbar = None
+    page.vertical_alignment = ft.MainAxisAlignment.CENTER
+    page.horizontal_alignment = ft.CrossAxisAlignment.CENTER
+
+    content = ft.Column(
+        [
+            ft.Icon(name=ft.Icons.WARNING_AMBER_ROUNDED, color=ft.Colors.AMBER, size=80),
+            ft.Text(
+                "Múltiplas Abas Detectadas",
+                style=ft.TextThemeStyle.HEADLINE_MEDIUM,
+                text_align=ft.TextAlign.CENTER,
+            ),
+            ft.Text(
+                "Uma nova instância da aplicação foi iniciada e se tornou a sessão ativa.\n"
+                "Esta aba foi desativada para evitar inconsistências.\n\n"
+                "Por favor, utilize apenas a aba mais recente.",
+                text_align=ft.TextAlign.CENTER,
+                size=16
+            ),
+        ],
+        spacing=20,
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        alignment=ft.MainAxisAlignment.CENTER,
+        expand=True,
+    )
+    return content

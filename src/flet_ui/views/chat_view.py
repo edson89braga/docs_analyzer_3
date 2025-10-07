@@ -61,7 +61,6 @@ class ChatViewContent(ft.Column):
         self.firestore_client = FirebaseClientFirestore()
         
         # Estado da UI
-        self.metrics_history: List[Dict[str, Any]] = []
         self.chat_session_id: Optional[str] = None
         self.is_processing_response = False
         self.editing_message_id: Optional[float] = None
@@ -199,8 +198,6 @@ class ChatViewContent(ft.Column):
             message_data = [c.data for c in self.chat_history_view.controls if hasattr(c, 'data')]
             self.user_cache[KEY_SESSION_CHAT_MESSAGES] = message_data
 
-        self.user_cache[KEY_SESSION_CHAT_METRICS] = self.metrics_history
-
     def _start_new_chat_session(self):
         """Gera um novo ID de sessão de chat e o armazena."""
         self.chat_session_id = f"chat_{int(time.time())}_{secrets.token_hex(4)}"
@@ -244,8 +241,8 @@ class ChatViewContent(ft.Column):
             self._show_initial_greeting()
 
         # Restaura métricas
-        self.metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS) or []
-        if not self.metrics_history:
+        metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS) 
+        if not metrics_history:
             self.file_list_manager.expand_container()
         self._update_metrics_summary_button()
 
@@ -772,7 +769,6 @@ class ChatViewContent(ft.Column):
             self.user_cache = get_user_cache(self.page)
 
             self.chat_history_view.controls.clear()
-            self.metrics_history.clear()
             self._start_new_chat_session() # Inicia uma nova sessão de chat com novo ID
             self._update_metrics_summary_button()
                 
@@ -808,7 +804,7 @@ class ChatViewContent(ft.Column):
             toolbar.update()
 
     def _update_button_states_by_chat(self):
-        if self.metrics_history:
+        if self.user_cache.get(KEY_SESSION_CHAT_METRICS):
             # Se há histórico de métricas: implica que o chat começou
             self.upload_button.disabled = True
             self.clear_chat_button.content = self.clear_chat_button_2 # ElevatedButton
@@ -1241,15 +1237,16 @@ class ChatViewContent(ft.Column):
 
     def _update_metrics_summary_button(self):
         """Calcula o total de tokens de input e atualiza o botão na barra superior."""
-        total_tokens = sum(m.get('total_tokens', 0) for m in self.metrics_history)
+        metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS, [])
+        total_tokens = sum(m.get('total_tokens', 0) for m in metrics_history)
         self.metrics_button.text = f"Total Tokens: {total_tokens:,}".replace(",", ".")
         if self.metrics_button.page:
             self.metrics_button.update()
 
     def _show_metrics_dialog(self, e: ft.ControlEvent):
         """Exibe um diálogo com a tabela detalhada de uso de tokens."""
-        
-        total_input_tokens = sum(m.get('input_tokens', 0) for m in self.metrics_history)
+        metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS, [])
+        total_input_tokens = sum(m.get('input_tokens', 0) for m in metrics_history)
         if not total_input_tokens:
             return
                 
@@ -1326,8 +1323,7 @@ class ChatViewContent(ft.Column):
         salva a métrica individual no Firestore e atualiza a UI.
         """
         # self._save_state_to_session() # user_cache agora é salvo durante o handle_ai_response;
-        # self.metrics_history.append(metrics_data)
-        self.metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS) or []        
+        # self.me_trics_history.append(metrics_data)      
         self._update_button_states_by_chat()
         self._update_metrics_summary_button()
 
@@ -1408,18 +1404,20 @@ class ChatViewContent(ft.Column):
 
     def _log_session_summary_metric(self):
         context = self._get_valid_user_context()
-        if not context or not self.metrics_history: return
+        metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS, [])
+        if not context or not metrics_history: 
+            return
         user_token, user_id = context
 
-        total_input = sum(m.get('input_tokens', 0) for m in self.metrics_history)
-        total_output = sum(m.get('output_tokens', 0) for m in self.metrics_history)
-        total_cost = sum(m.get('total_cost_usd', 0) for m in self.metrics_history)
+        total_input = sum(m.get('input_tokens', 0) for m in metrics_history)
+        total_output = sum(m.get('output_tokens', 0) for m in metrics_history)
+        total_cost = sum(m.get('total_cost_usd', 0) for m in metrics_history)
 
         summary_payload = {
             "chat_session_id": self.chat_session_id,
             "end_timestamp": datetime.now().isoformat(),
             "summary": {
-                "total_requests": len(self.metrics_history),
+                "total_requests": len(metrics_history),
                 "total_input_tokens": total_input,
                 "total_output_tokens": total_output,
                 "total_session_cost_usd": total_cost,

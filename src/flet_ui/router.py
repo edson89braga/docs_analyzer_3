@@ -57,6 +57,7 @@ _view_module_map = {
     "/wiki_rotinas": ("src.flet_ui.views.others_view", "create_wiki_rotinas_content"),
     "/correicao_processos": ("src.flet_ui.views.others_view", "create_correicao_processos_content"),
     "/roteiro_investigacoes": ("src.flet_ui.views.others_view", "create_roteiro_investigacoes_content"),
+    "/session-taken-over": ("src.flet_ui.views.others_view", "create_session_taken_over_view"),    
 }
 
 
@@ -66,9 +67,9 @@ _parameterized_content_creators: Dict[str, Callable[[ft.Page, Any], Any]] = {
 }
 
 # Rotas que são consideradas públicas (não exigem autenticação)
-PUBLIC_ROUTES = ["/login", "/signup"]
+PUBLIC_ROUTES = ["/login", "/signup", "/session-taken-over"]
 # Rotas que não devem exibir a NavigationRail (ex: login, signup)
-ROUTES_WITHOUT_NAV_RAIL = ["/login", "/signup"]
+ROUTES_WITHOUT_NAV_RAIL = ["/login", "/signup", "/session-taken-over"]
 
 # Função auxiliar para verificar se o usuário está autenticado
 def is_user_authenticated(page: ft.Page) -> bool:
@@ -194,120 +195,6 @@ def app_router(page: ft.Page, route: str):
     
     page.update()
 
-def OLD_route_change_content_only(
-    page: ft.Page,
-    app_bar: ft.AppBar,
-    navigation_rail: ft.NavigationRail,
-    content_container_for_main_layout: ft.Container,
-    route: str
-):
-    """
-    [DEPRECATED] Gerencia a navegação e a atualização do conteúdo principal da página.
-
-    Esta função é uma versão mais antiga da lógica de roteamento que atualiza
-    diretamente o conteúdo de um container na página, em vez de manipular a pilha de views.
-    Inclui lógica de autenticação e tratamento de rotas de arquivo.
-
-    Args:
-        page (ft.Page): A instância da página Flet.
-        app_bar (ft.AppBar): A barra de aplicativo principal.
-        navigation_rail (ft.NavigationRail): O componente de navegação lateral.
-        content_container_for_main_layout (ft.Container): O container onde o conteúdo principal será carregado.
-        route (str): A rota para a qual o aplicativo está navegando.
-    """
-    logger.info(f"Navegando para rota (OLD_content_only): '{route}'")
-
-    upload_dir_base_url_path = f"/{Path(UPLOAD_TEMP_DIR).name}/" # Ex: "/uploads_temp/"
-    if route.startswith(upload_dir_base_url_path):
-        logger.info(f"Router: Rota '{route}' parece ser um arquivo do diretório de upload. Deixando o Flet servir o arquivo.")
-        return
-
-    authenticated = is_user_authenticated(page)
-
-    # --- Lógica de Autenticação e Redirecionamento ---
-    if not authenticated and route not in PUBLIC_ROUTES:
-        logger.warning(f"Usuário não autenticado tentando acessar '{route}'. Redirecionando para /login.")
-        page.go("/login")
-        return
-    if authenticated and route in PUBLIC_ROUTES:
-        logger.info(f"Usuário já autenticado na página '{route}'. Redirecionando para /home.")
-        page.go("/home")
-        return
-
-    # --- Seleção do Criador de Conteúdo ---
-    current_content_creator: Optional[Callable] = None
-    route_params: Optional[Any] = None
-    if route in _content_creators:
-        current_content_creator = _content_creators[route]
-    # ... (lógica para rotas parametrizadas, se houver) ...
-
-    # --- Limpeza e Preparação da Página ---
-    page.controls.clear() # Limpa quaisquer controles anteriores da página
-    generated_content = None # Conteúdo a ser adicionado à página ou ao container
-
-    # --- Geração do Conteúdo Principal ---
-    if current_content_creator:
-        try:
-            if route_params:
-                generated_content = current_content_creator(page, *route_params)
-            else:
-                generated_content = current_content_creator(page)
-        except Exception as e:
-            logger.error(f"Erro ao criar conteúdo para rota '{route}': {e}", exc_info=True)
-            generated_content = ft.Column([ # Conteúdo de erro
-                ft.Icon(ft.Icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
-                ft.Text(f"Erro ao carregar: {route}", size=20), ft.Text(f"{e}", selectable=True),
-            ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True)
-    else:
-        logger.warning(f"Nenhum criador de conteúdo encontrado para a rota: {route}")
-        generated_content = ft.Column([ # Conteúdo de rota não encontrada
-            ft.Icon(ft.Icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
-            ft.Text(f"Página não encontrada: {route}", size=24),
-            ft.ElevatedButton("Voltar ao Início", on_click=lambda _: page.go("/home"))
-        ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER, expand=True)
-
-    # --- Configuração do Layout da Página (AppBar, NavRail, Conteúdo) ---
-    if route in ROUTES_WITHOUT_NAV_RAIL: # Ex: /login, /signup - Tela Cheia
-        logger.debug(f"Rota '{route}' é de tela cheia.")
-        page.appbar = None # Sem AppBar
-        # page.navigation_rail = None # NavigationRail não é um atributo direto de page
-        if generated_content:
-            page.add(generated_content) # Adiciona o conteúdo de login/signup diretamente
-        else: # Segurança, caso generated_content seja None por algum erro não capturado
-            page.add(ft.Text("Erro: Conteúdo da página de tela cheia não pôde ser gerado.", color=COLOR_ERROR))
-    else: # Rotas que usam o layout principal com AppBar e NavigationRail
-        logger.debug(f"Rota '{route}' usa layout principal.")
-        page.appbar = app_bar # Define a AppBar global
-        page.appbar.visible = True
-        navigation_rail.visible = True # Garante que a NavRail esteja visível
-
-        # Atualiza o índice da NavigationRail
-        current_nav_index = _find_nav_index_for_route(route)
-        if navigation_rail.selected_index != current_nav_index:
-            navigation_rail.selected_index = current_nav_index
-        
-        # Define o conteúdo no container do layout principal
-        if generated_content:
-            content_container_for_main_layout.content = generated_content
-        else: # Segurança
-            content_container_for_main_layout.content = ft.Text("Erro: Conteúdo principal não pôde ser gerado.", color=COLOR_ERROR)
-        
-        content_container_for_main_layout.padding = PADDING_L # Padding padrão
-
-        # Adiciona o layout principal (Row com NavRail e content_container) à página
-        page.add(
-            ft.Row(
-                [
-                    navigation_rail,
-                    ft.VerticalDivider(width=1),
-                    content_container_for_main_layout
-                ],
-                expand=True,
-            )
-        )
-
-    page.update() # Atualiza a página inteira com a nova estrutura e conteúdo
-
 def route_change_content_only(
     page: ft.Page,
     app_bar: ft.AppBar,
@@ -353,7 +240,8 @@ def route_change_content_only(
             logger.warning(f"Usuário não autenticado tentando acessar '{route}'. Redirecionando para /login.")
             page.go("/login")
             return
-        if authenticated and route in PUBLIC_ROUTES:
+        # Redireciona para /home APENAS se um usuário autenticado tentar acessar as páginas de login/signup.
+        if authenticated and route in ["/login", "/signup"]:
             logger.info(f"Usuário já autenticado na página '{route}'. Redirecionando para /home.")
             page.go("/home")
             return
