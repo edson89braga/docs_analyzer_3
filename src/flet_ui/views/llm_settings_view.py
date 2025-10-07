@@ -1,5 +1,6 @@
 # src/flet_ui/views/llm_settings_view.py
 
+from gc import disable
 import flet as ft
 from typing import Optional, List, Dict, Any
 import time
@@ -20,8 +21,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # --- Constantes para Firestore ---
-from src.settings import (USER_LLM_PREFERENCES_COLLECTION,
-                          KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_USER_LLM_PREFERENCES, KEY_SESSION_LOADED_LLM_PROVIDERS, FALLBACK_ANALYSIS_SETTINGS)
+from src.settings import (KEY_SESSION_LOADED_LLM_PROVIDERS, FALLBACK_ANALYSIS_SETTINGS)
 
 
 class LLMConfigCard(CardWithHeader):
@@ -390,6 +390,11 @@ class LLMSettingsViewContent(ft.Column):
                 size=14, color=ft.Colors.with_opacity(0.8, ft.Colors.ON_SURFACE), text_align=ft.TextAlign.CENTER
             ),
             ft.Divider(height=10),
+            
+            ft.Text("Chaves de API por Provedor", style=ft.TextThemeStyle.TITLE_MEDIUM, text_align=ft.TextAlign.CENTER),
+            self.cards_container,
+            ft.Divider(height=12),
+
             CardWithHeader(
                 title="Preferências Padrão de Análise",
                 content=ft.Column(
@@ -401,12 +406,9 @@ class LLMSettingsViewContent(ft.Column):
                 ),
                 header_bgcolor=ft.Colors.with_opacity(0.05, theme.PRIMARY),
                 card_elevation=1,
-                width = WIDTH_CONTAINER_CONFIGS
+                width = WIDTH_CONTAINER_CONFIGS,
+                disabled = True
             ),
-            ft.Divider(height=12,
-            ),
-            ft.Text("Chaves de API por Provedor", style=ft.TextThemeStyle.TITLE_MEDIUM, text_align=ft.TextAlign.CENTER),
-            self.cards_container,
             # Botão para adicionar novo provedor (funcionalidade futura, gerenciada pelo Admin)
             # ft.ElevatedButton("Adicionar Novo Provedor LLM (Admin)", icon=ft.Icons.ADD_CIRCLE_OUTLINE, disabled=True)
         ]
@@ -429,7 +431,7 @@ class LLMSettingsViewContent(ft.Column):
             Dict[str, Any]: Um dicionário contendo as preferências do usuário,
                             como o provedor e modelo padrão.
         """
-        return self.page.session.get(KEY_SESSION_USER_LLM_PREFERENCES) or {}
+        return self.page.session.get('KEY_SESSION_USER_LLM_PREFERENCES') or {}
     
     def _update_status_preferences_display(self):
         """
@@ -710,7 +712,7 @@ class LLMSettingsViewContent(ft.Column):
             "default_model_id": selected_model,
             "updated_at": time.time()
         }
-        pref_doc_path = f"{USER_LLM_PREFERENCES_COLLECTION}/{user_id}"
+        pref_doc_path = f"{'USER_LLM_PREFERENCES_COLLECTION'}/{user_id}"
         firestore_payload = {"fields": {k: _to_firestore_value(v) for k, v in new_preferences.items()}}
 
         show_loading_overlay(self.page, "Salvando suas preferências LLM...")
@@ -720,12 +722,12 @@ class LLMSettingsViewContent(ft.Column):
             )
             hide_loading_overlay(self.page)
             
-            self.page.session.set(KEY_SESSION_USER_LLM_PREFERENCES, new_preferences)
+            self.page.session.set('KEY_SESSION_USER_LLM_PREFERENCES', new_preferences)
             
-            current_analysis_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
+            current_analysis_settings = self.page.session.get('KEY_SESSION_ANALYSIS_SETTINGS') or FALLBACK_ANALYSIS_SETTINGS.copy()
             current_analysis_settings["llm_provider"] = selected_provider
             current_analysis_settings["llm_model"] = selected_model
-            self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, current_analysis_settings)
+            self.page.session.set('KEY_SESSION_ANALYSIS_SETTINGS', current_analysis_settings)
             logger.info(f"Preferências de LLM salvas e aplicadas à sessão atual para usuário {user_id}: {new_preferences}")
 
             self.save_preferences_button.disabled = True

@@ -20,14 +20,17 @@ from src.flet_ui.components.components import (
 )
 # Adiciona import do novo orquestrador e settings
 from src.core.chat_llm_orchestrator import ChatLLMOrchestrator
-from src.settings import FALLBACK_ANALYSIS_SETTINGS, cotacao_dolar_to_real
-from src.settings import (UPLOAD_TEMP_DIR, KEY_SESSION_ANALYSIS_SETTINGS, 
+from src.settings import (FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_CHAT_SETTINGS, 
+                            KEY_SESSION_MODEL_EMBEDDINGS_LIST, KEY_SESSION_TOKENS_EMBEDDINGS)
+from src.settings import (UPLOAD_TEMP_DIR, cotacao_dolar_to_real,
                           KEY_SESSION_LOADED_LLM_PROVIDERS, DEFAULT_LLM_PROVIDER,
                           DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE,
                           KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY, KEY_SESSION_CHAT_PROMPT_STRICT,
-                          KEY_SESSION_CHAT_PROMPT_FLEXIBLE, KEY_SESSION_CHAT_PROMPT_CUSTOM)
+                          KEY_SESSION_CHAT_PROMPT_FLEXIBLE, KEY_SESSION_CHAT_PROMPT_CUSTOM,
+                          KEY_SESSION_SHARED_FILES_ORDERED, KEY_SESSION_SHARED_DOCUMENT_CONTEXT,
+                          KEY_SESSION_SHARED_PROCESSING_METADATA)
 
-from src.utils import format_seconds_to_min_sec, get_user_cache, clear_user_cache, count_tokens
+from src.utils import format_seconds_to_min_sec, get_user_cache, count_tokens
 from src.services.local_db_manager import LocalDBManager
 from src.services.firebase_client import FirebaseClientFirestore
 
@@ -40,7 +43,7 @@ KEY_SESSION_CHAT_RAW_PAGES_TEXT = "chat_view_raw_pages_text"
 KEY_SESSION_CHAT_DOCUMENT_CONTEXT = "chat_view_document_context"
 KEY_SESSION_CHAT_MESSAGES = "chat_view_messages"
 KEY_SESSION_CHAT_METRICS = "chat_view_metrics"
-KEY_SESSION_CHAT_HAS_OPTIMIZED = "chat_view_has_optimized"
+KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED = "chat_view_has_optimized"
 KEY_SESSION_CHAT_SESSION_ID = "chat_view_session_id"
 KEY_SESSION_CHAT_LAST_USED_PROMPT_TEXT = "chat_view_last_used_prompt_text"
 KEY_SESSION_CHAT_PROCESSING_METADATA = "chat_view_processing_metadata"
@@ -102,7 +105,7 @@ class ChatViewContent(ft.Column):
         self.file_list_manager = self._initialize_file_list_manager()
         
         # Drawer de Configurações (agora um container lateral)
-        self.settings_drawer_component = ChatSettingsDrawer(self.page) # Usa o drawer específico do Chat
+        self.settings_drawer_component = ChatSettingsDrawer(self.page, session_key=KEY_SESSION_CHAT_SETTINGS) # Usa o drawer específico do Chat
         self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0, animate=ft.Animation(300, ft.AnimationCurve.EASE_OUT_QUART))
         
         self._build_layout()
@@ -206,10 +209,27 @@ class ChatViewContent(ft.Column):
 
     def _restore_state_from_session(self):
         """Restaura o estado do chat a partir da sessão ao carregar a view."""
-        
-        files = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
-        if files:
-            self.file_list_manager.update_display(files)
+        # Lógica de carregamento: Prioriza a chave da view, depois a compartilhada.
+        files = self.page.session.get(KEY_SESSION_CHAT_FILES)
+        if not files:
+            shared_files = self.page.session.get(KEY_SESSION_SHARED_FILES_ORDERED)
+            if shared_files:
+                self.page.session.set(KEY_SESSION_CHAT_FILES, shared_files)
+                logger.info("ChatView: Contexto de arquivos carregado da sessão compartilhada.")
+
+        if not self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT):
+            shared_context = self.user_cache.get(KEY_SESSION_SHARED_DOCUMENT_CONTEXT)
+            if shared_context:
+                self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = shared_context
+                logger.info("ChatView: Contexto de texto carregado da sessão compartilhada.")
+
+        if not self.page.session.get(KEY_SESSION_CHAT_PROCESSING_METADATA):
+            shared_metadata = self.page.session.get(KEY_SESSION_SHARED_PROCESSING_METADATA)
+            if shared_metadata:
+                self.page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, shared_metadata)
+                logger.info("ChatView: Metadados de processamento carregados da sessão compartilhada.")
+
+        self.file_list_manager.update_display()
 
         # Restaura mensagens
         messages = self.user_cache.get(KEY_SESSION_CHAT_MESSAGES) or []
@@ -225,6 +245,8 @@ class ChatViewContent(ft.Column):
 
         # Restaura métricas
         self.metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS) or []
+        if not self.metrics_history:
+            self.file_list_manager.expand_container()
         self._update_metrics_summary_button()
 
         # Restaura ou cria o ID da sessão de chat
@@ -234,7 +256,6 @@ class ChatViewContent(ft.Column):
 
         self._update_button_states()
         self._update_processing_metadata_display()
-        self.page.update()
         self._scroll_to_last_message()
 
     # --- Métodos relacionados ao containeir chat_history_view ---
@@ -400,14 +421,13 @@ class ChatViewContent(ft.Column):
         """
         logger.debug("ChatView montada. Executando scroll inicial para a última mensagem.")
         # O timer é crucial para dar tempo ao cliente de renderizar o ListView.
-        threading.Timer(0.2, self._scroll_to_last_message).start()
+        threading.Timer(0.2, self._scroll_to_last_message).start() # Não funcionou
 
     def _scroll_to_last_message(self):
         if self.chat_history_view.page:
             self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT)
             self.chat_history_view.update()
-        else:
-            logger.warning("Tentativa de scroll no ListView falhou: a página não está disponível.")
+        # else:logger.warning("Tentativa de scroll no ListView falhou: a página não está disponível.")
 
     def _get_context_class(self):
         # Cria uma referência fraca para a instância da view
@@ -493,7 +513,7 @@ class ChatViewContent(ft.Column):
             logger.warning("Thread de IA: A view do chat não está mais disponível. A thread será encerrada.")
             return
 
-        settings = view.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
+        settings = view.page.session.get(KEY_SESSION_CHAT_SETTINGS) or {}
         api_key = view.page.session.get(f"decrypted_api_key_{settings.get('llm_provider', DEFAULT_LLM_PROVIDER)}") 
         
         if not api_key:
@@ -738,11 +758,17 @@ class ChatViewContent(ft.Column):
             # Salva o resumo da sessão antes de limpar
             self._log_session_summary_metric()            
             # Limpa todas as chaves de sessão relacionadas ao chat
-            for key in (KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_CHAT_PROCESSING_METADATA):
+            for key in (KEY_SESSION_CHAT_FILES, KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED, KEY_SESSION_CHAT_PROCESSING_METADATA, 
+                        KEY_SESSION_SHARED_FILES_ORDERED, KEY_SESSION_SHARED_PROCESSING_METADATA):
                 if self.page.session.contains_key(key):
                     self.page.session.remove(key)
 
-            clear_user_cache(self.page)
+            cache_to_clear = [KEY_SESSION_CHAT_MESSAGES, KEY_SESSION_CHAT_METRICS, KEY_SESSION_CHAT_RAW_PAGES_TEXT,
+                              KEY_SESSION_CHAT_DOCUMENT_CONTEXT,KEY_SESSION_SHARED_DOCUMENT_CONTEXT,KEY_SESSION_CHAT_PREVIOUS_RESPONSE_ID,
+                              KEY_SESSION_CHAT_LAST_USED_PROMPT_TEXT]
+            for _key in cache_to_clear:
+                self.user_cache.pop(_key, None)
+
             self.user_cache = get_user_cache(self.page)
 
             self.chat_history_view.controls.clear()
@@ -799,7 +825,11 @@ class ChatViewContent(ft.Column):
         """Centraliza a lógica de habilitação/desabilitação de botões e campos."""
         has_files = bool(self.page.session.get(KEY_SESSION_CHAT_FILES))
         has_context = bool(self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT))
-        has_optimized = self.page.session.get(KEY_SESSION_CHAT_HAS_OPTIMIZED) or False
+        has_optimized = self.page.session.get(KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED) or False
+        if not has_optimized:
+            # confere se houve otimização na sessão compartilhada
+            processing_metada = self.page.session.get(KEY_SESSION_CHAT_PROCESSING_METADATA)
+            has_optimized = processing_metada and "relevant_pages_global_keys_formatted" in processing_metada
 
         self._update_button_states_by_chat()
 
@@ -837,14 +867,12 @@ class ChatViewContent(ft.Column):
     # --- Handlers de Ações ---
 
     def _get_current_analysis_settings(self) -> Dict[str, Any]:
-        """
-        Busca as configurações de análise atuais da sessão, com fallback.
-        """
-        settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
-        if not isinstance(settings, dict):
+        """Busca as configurações de análise específicas para a view de Chat."""
+        settings = self.page.session.get(KEY_SESSION_CHAT_SETTINGS)
+        if not settings or not isinstance(settings, dict):
+            logger.warning("Configurações de 'chat' não encontradas na sessão. Usando fallbacks.")
             return FALLBACK_ANALYSIS_SETTINGS.copy()
-        
-        # Garante que os tipos numéricos estejam corretos
+
         current_settings = settings.copy()
         try:
             current_settings['llm_input_token_limit'] = int(current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']))
@@ -856,6 +884,7 @@ class ChatViewContent(ft.Column):
     def _handle_upload_click(self, e: ft.ControlEvent):
         # Limpa o contexto antigo antes de carregar novos arquivos
         self.user_cache.pop(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, None)
+        self.user_cache.pop(KEY_SESSION_SHARED_DOCUMENT_CONTEXT, None)
         
         show_loading_overlay(self.page, "Abrindo seletor de arquivos...")
         
@@ -876,6 +905,7 @@ class ChatViewContent(ft.Column):
         self.file_list_manager.expand_container()
 
         self.page.session.set(KEY_SESSION_CHAT_FILES, successful_files)
+        self.page.session.set(KEY_SESSION_SHARED_FILES_ORDERED, successful_files)
         self.file_list_manager.update_display(successful_files)
         
         logger.info(f"Carregados {len(successful_files)} arquivos: {successful_files}")
@@ -892,8 +922,9 @@ class ChatViewContent(ft.Column):
 
         self.user_cache.pop(KEY_SESSION_CHAT_DOCUMENT_CONTEXT, None)
         self.user_cache.pop(KEY_SESSION_CHAT_RAW_PAGES_TEXT, None)
+        self.user_cache.pop(KEY_SESSION_SHARED_DOCUMENT_CONTEXT, None)
 
-        for key in (KEY_SESSION_CHAT_HAS_OPTIMIZED, KEY_SESSION_CHAT_PROCESSING_METADATA):
+        for key in (KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED, KEY_SESSION_CHAT_PROCESSING_METADATA, KEY_SESSION_SHARED_PROCESSING_METADATA):
             if self.page.session.contains_key(key): # invalida otimização
                 self.page.session.remove(key)        
 
@@ -939,20 +970,68 @@ class ChatViewContent(ft.Column):
             files_info = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
             pdf_paths_ordered = [f['path_or_message'] for f in files_info]
 
+            settings = self._get_current_analysis_settings()
+            # pdf_extractor = # Utiliza o padrão; assim como mode_main_filter e mode_filter_similar
+            provider = settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
+            vectorization_model = settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
+            similarity_threshold = settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
+
             # Reutiliza a lógica de pré-processamento do nc_analyzer
             from src.core.pdf_processor import PDFDocumentAnalyzer
             analyzer = PDFDocumentAnalyzer()
+            
+            start_time = perf_counter()
 
             # Pipeline de análise de PDF
             # processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores = analyzer.analyze_pdf_documents(pdf_paths)
-            processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores = analyzer.analyze_pre_extracted_texts(pre_extracted_texts, pdf_paths_ordered)
+            processed_data, ordered_keys, all_texts_list = analyzer.analyze_pre_extracted_texts(pre_extracted_texts, pdf_paths_ordered)
 
-            relevant_indices, _, _ = analyzer.filter_and_classify_pages(
-                processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores
+            if not processed_data:
+                raise ValueError("Nenhum texto foi extraído dos documentos.")
+
+            # --- embedding proccess ---
+            ready_embeddings, tokens_embeddings = None, None
+            calculated_embedding_cost_usd = 0
+            if vectorization_model == "text-embedding-3-small":
+
+                decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
+                if decrypted_api_key:
+                    logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+                else:
+                    error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
+                    logger.error(error_msg)
+                    hide_loading_overlay(self.page)
+                    show_snackbar(self.page, error_msg, color=theme.COLOR_ERROR)
+                    return
+                
+                import src.core.ai_orchestrator as ai_orchestrator
+                loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
+
+                ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
+                                                                                     all_texts_list, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
+                
+                emb_vectors, tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list, 
+                                                                                                model_embedding=vectorization_model, 
+                                                                                                ready_embeddings=ready_embeddings)
+            else:
+                emb_vectors, tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list)
+            
+             
+            if tokens_embeddings:
+                self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
+                logger.debug(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
+            else:
+                if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
+                    self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
+                    logger.debug("Tokens de embedding removidos da sessão (não retornados pela análise).")
+
+            # --- ----       
+
+            relevant_indices, unintelligible_indices, count_similars = analyzer.filter_and_classify_pages(
+                processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores, similarity_threshold=similarity_threshold
             )
             
             # Usamos um limite de tokens alto para manter o contexto completo
-            settings = self._get_current_analysis_settings()
             token_limit = settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
             aggregated_info = analyzer.group_texts_by_relevance_and_token_limit(
                 processed_data, relevant_indices, token_limit
@@ -962,24 +1041,27 @@ class ChatViewContent(ft.Column):
             supressed_tokens = tokens_antes_trunc - final_tokens
             perc_supressed = (supressed_tokens / tokens_antes_trunc * 100) if tokens_antes_trunc > 0 else 0
 
+            total_processing_time = perf_counter() - start_time
+
             processing_metadata = {
                 "total_pages_processed": len(ordered_keys),
                 "total_tokens_before_filter": tokens_antes_filtro,
                 "relevant_pages_global_keys_formatted": analyzer.format_global_keys_for_display(relevant_indices),
                 "count_selected_relevant": len(relevant_indices),
-                "count_discarded_similarity": 0, # Placeholder, lógica não implementada nesta view
-                "unintelligible_pages_global_keys_formatted": "N/A", # Placeholder
-                "count_discarded_unintelligible": 0, # Placeholder
+                "unintelligible_pages_global_keys_formatted": analyzer.format_global_keys_for_display(unintelligible_indices),
+                "count_discarded_unintelligible": len(unintelligible_indices),
+                "count_discarded_similarity": count_similars, 
                 "total_tokens_before_truncation": tokens_antes_trunc,
                 "final_pages_global_keys_formatted": analyzer.format_global_keys_for_display(pages_agg_indices),
                 "count_selected_final": len(pages_agg_indices),
                 "final_aggregated_tokens": final_tokens, # f"{final_tokens:,}".replace(",", ".")
                 "supressed_tokens_percentage": perc_supressed,
-                "processing_time": "N/A", # O tempo total não é medido aqui
-                "calculated_embedding_cost_usd": 0 # Placeholder
-            }            
+                "processing_time": format_seconds_to_min_sec(total_processing_time),
+                "calculated_embedding_cost_usd": calculated_embedding_cost_usd
+            } 
 
             self.page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, processing_metadata)
+            self.page.session.set(KEY_SESSION_SHARED_PROCESSING_METADATA, processing_metadata)
 
             if not aggregated_text.strip():
                 raise ValueError("Nenhum texto relevante foi extraído dos documentos.")
@@ -987,7 +1069,8 @@ class ChatViewContent(ft.Column):
             # Salva o contexto na sessão
             self.page.run_thread(self._update_processing_metadata_display, processing_metadata)
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = aggregated_text
-            self.page.session.set(KEY_SESSION_CHAT_HAS_OPTIMIZED, True)
+            self.user_cache[KEY_SESSION_SHARED_DOCUMENT_CONTEXT] = aggregated_text
+            self.page.session.set(KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED, True)
             self._log_file_processing_metrics(optimized=True, total_pages=len(ordered_keys), relevant_pages=len(relevant_indices))
 
             # Atualiza a UI na thread principal
@@ -1036,15 +1119,18 @@ class ChatViewContent(ft.Column):
                 "final_aggregated_tokens": total_tokens_raw,
                 "processing_time": format_seconds_to_min_sec(perf_counter() - start_time_proc),
                 # Campos não aplicáveis no modo "bruto"
-                "relevant_pages_global_keys_formatted": None,
-                "count_selected_relevant": None,
+                #"relevant_pages_global_keys_formatted": None,
+                #"count_selected_relevant": None,
             }
             self.page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, processing_metadata)
+            self.page.session.set(KEY_SESSION_SHARED_PROCESSING_METADATA, processing_metadata)
             self.page.run_thread(self._update_processing_metadata_display, processing_metadata)
 
             self._log_file_processing_metrics(optimized=False, total_pages=total_pages_raw)
             self.user_cache[KEY_SESSION_CHAT_RAW_PAGES_TEXT] = raw_pages_text_map
-            self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = " ".join(all_texts_concatenated)            
+            final_text = " ".join(all_texts_concatenated)
+            self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = final_text         
+            self.user_cache[KEY_SESSION_SHARED_DOCUMENT_CONTEXT] = final_text         
             self.page.run_thread(lambda: show_snackbar(self.page, "Extração de texto concluída.", color=theme.COLOR_SUCCESS))
 
             if optimize_too:
@@ -1082,29 +1168,47 @@ class ChatViewContent(ft.Column):
             "calculated_embedding_cost_usd":  "Custos de Embeddings",
         }
 
+        calculated_embedding_cost_usd = metadata_to_display.get("calculated_embedding_cost_usd")
         data_rows = []
         for key, label_text in labels.items():
             if key in metadata_to_display:
                 value = metadata_to_display.get(key)
                 display_value = str(value if value is not None else "N/A")
 
+                if key == "final_pages_global_keys_formatted" and value == metadata_to_display.get("relevant_pages_global_keys_formatted"):
+                    continue # Quando não houver supressão de páginas por limites de token
+                
+                if key == "calculated_embedding_cost_usd" and not calculated_embedding_cost_usd:
+                    calculated_embedding_cost_usd = 0
+
                 # Lógica de formatação mesclada
                 if key == "total_pages_processed":
-                    total_tokens = metadata_to_display.get("total_tokens_before_filter", 0)
-                    display_value = f"{value} ({total_tokens:,} tokens)".replace(",", ".")
+                    initial_total_tokens = metadata_to_display.get("total_tokens_before_filter", 0)
+                    final_total_tokens = metadata_to_display.get("final_aggregated_tokens", 0)
+                    if initial_total_tokens != final_total_tokens:
+                        display_value = f"{value} ({initial_total_tokens:,} tokens)".replace(",", ".")
+                elif key == "supressed_tokens_percentage" and isinstance(value, (int, float)):
+                    display_value = f"{value:.2f}%" if value > 0 else "0.00%"
                 elif key == "relevant_pages_global_keys_formatted" and metadata_to_display.get("count_selected_relevant") is not None:
                     display_value = f"{metadata_to_display['count_selected_relevant']} : {display_value}"
+                elif key == "unintelligible_pages_global_keys_formatted" and value is not None:
+                    total_value = metadata_to_display.get("count_discarded_unintelligible")
+                    display_value = f"{total_value} : {display_value}"                    
                 elif key == "final_pages_global_keys_formatted" and metadata_to_display.get("count_selected_final") is not None:
                     if value != metadata_to_display.get("relevant_pages_global_keys_formatted"):
                         display_value = f"{metadata_to_display['count_selected_final']} : {display_value}"
                     else:
                         continue # Não mostrar se for igual às páginas relevantes
-                elif key == "supressed_tokens_percentage" and isinstance(value, (int, float)):
-                    display_value = f"{value:.2f}%" if value > 0 else "0.00%"
+                elif key == "calculated_embedding_cost_usd":
+                    if not calculated_embedding_cost_usd:
+                        continue
+                    cost_embeddings_usd_str = f"U$ {calculated_embedding_cost_usd:.4f}"
+                    cost_embeddings_brl_str = f"R$ {(calculated_embedding_cost_usd * cotacao_dolar_to_real):.4f}"
+                    display_value = f"{cost_embeddings_usd_str} : {cost_embeddings_brl_str}"                
                 
                 # Não exibir campos irrelevantes ou com valor zero/vazio
-                if "count_" in key or value is None or value == 0 or value == "N/A" or value == "0.00%":
-                    continue
+                # if "count_" in key or value is None or value == 0 or value == "N/A" or value == "0.00%":
+                #    continue
 
                 data_rows.append((f"{label_text}:", display_value))
 

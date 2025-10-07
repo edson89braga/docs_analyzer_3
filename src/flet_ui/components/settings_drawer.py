@@ -5,7 +5,8 @@ from src.services.local_db_manager import LocalDBManager
 from src.flet_ui.components.components import show_snackbar, ManagedAlertDialog
 from src.flet_ui import theme
 from src.settings import (
-    KEY_SESSION_ANALYSIS_SETTINGS,
+    KEY_SESSION_NC_ANALYZE_SETTINGS,
+    KEY_SESSION_CHAT_SETTINGS,
     KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS,
     FALLBACK_ANALYSIS_SETTINGS,
     KEY_SESSION_LOADED_LLM_PROVIDERS,
@@ -46,9 +47,11 @@ class BaseSettingsDrawer(ft.Column):
         "verbosity_level_dd":           "verbosity_level"
     }
     
-    def __init__(self, page: ft.Page):
+    def __init__(self, page: ft.Page, session_key: str):
         super().__init__(scroll=ft.ScrollMode.ADAPTIVE, expand=True)
         self.page = page
+        self.session_key = session_key
+        self.db_manager = LocalDBManager()
         self.gui_controls: Dict[str, ft.Control] = {}
         
         # Controls fora das Sections:
@@ -198,8 +201,9 @@ class BaseSettingsDrawer(ft.Column):
         """
         cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
         if cloud_defaults:
-            self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, cloud_defaults.copy())
+            self.page.session.set(self.session_key, cloud_defaults.copy())
             self.load_settings_into_controls()
+            self.save_settings_to_session() # Salva o reset no DB local também
             show_snackbar(self.page, "Configurações resetadas para os padrões.", theme.COLOR_INFO)
         else:
             show_snackbar(self.page, "Padrões da nuvem não encontrados.", theme.COLOR_ERROR)
@@ -285,6 +289,7 @@ class BaseSettingsDrawer(ft.Column):
     def save_settings_to_session(self):
         """
         Coleta os valores dos controles e os salva na sessão da página.
+        Também persiste no banco de dados local.
         """
         # Apenas administradores podem alterar
         if not self.page.session.get("is_admin"):
@@ -294,7 +299,8 @@ class BaseSettingsDrawer(ft.Column):
             # return
 
         new_settings = self._get_settings_from_controls()
-        self.page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, new_settings)
+        self.page.session.set(self.session_key, new_settings)
+        self.db_manager.save_setting(self.session_key, new_settings)
         logger.info(f"[DEBUG] Configurações da sessão atualizadas: {new_settings}")
         self._update_reset_button_visibility()
 
@@ -320,7 +326,7 @@ class BaseSettingsDrawer(ft.Column):
         Carrega as configurações da sessão para os controles da UI.
         Deve ser estendido pelas classes filhas, se necessário.
         """
-        current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or FALLBACK_ANALYSIS_SETTINGS.copy()
+        current_settings = self.page.session.get(self.session_key) or FALLBACK_ANALYSIS_SETTINGS.copy()
         initial_simi_threshold = current_settings.get("similarity_threshold", 0.87)
         initial_temp = current_settings.get("llm_temperature", 0.20)
 
@@ -348,7 +354,7 @@ class BaseSettingsDrawer(ft.Column):
         Mostra ou esconde o botão de resetar com base nas diferenças entre as
         configurações atuais e as padrões.
         """
-        current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
+        current_settings = self.page.session.get(self.session_key) or {}
         cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
         reset_button = self.gui_controls.get("reset_settings_button")
         
@@ -358,7 +364,8 @@ class BaseSettingsDrawer(ft.Column):
         # Compara apenas as chaves que existem em ambos, para evitar problemas
         common_keys = set(current_settings.keys()) & set(cloud_defaults.keys())
         for key in common_keys:
-            if current_settings[key] != cloud_defaults[key]:
+            if str(current_settings[key]) != str(cloud_defaults[key]):
+                logger.info(f"[DEBUG] Configuração '{key}' diferente da padrão. {current_settings[key]} != {cloud_defaults[key]}")
                 are_different = True
                 break
         
@@ -424,11 +431,11 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
     }
     DEFAULT_KEY = "flexivel"
     
-    def __init__(self, page: ft.Page):
+    def __init__(self, page: ft.Page, session_key: str):
         self.page = page
         self.user_cache = get_user_cache(self.page) # chamar aqui antes de super()
         self.db_manager = LocalDBManager()
-        super().__init__(page)
+        super().__init__(page, session_key=session_key)
 
     def build_content(self):
         """

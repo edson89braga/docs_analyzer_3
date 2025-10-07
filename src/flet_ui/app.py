@@ -13,14 +13,12 @@ import flet as ft
 import time, os, threading, jwt
 from typing import Optional
 
-from ..settings import (APP_TITLE, APP_VERSION,
-                        APP_DEFAULT_SETTINGS_COLLECTION, ANALYZE_PDF_DEFAULTS_DOC_ID,
-                        KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS,
-                        FALLBACK_ANALYSIS_SETTINGS,
-                        LLM_PROVIDERS_CONFIG_COLLECTION, LLM_PROVIDERS_DEFAULT_DOC_ID, 
-                        KEY_SESSION_LOADED_LLM_PROVIDERS, KEY_SESSION_USER_LLM_PREFERENCES, 
-                        USER_LLM_PREFERENCES_COLLECTION,
-                        LLM_EMBEDDINGS_CONFIG_COLLECTION, LLM_EMBEDDINGS_DEFAULT_DOC_ID, 
+from ..settings import (APP_TITLE, APP_VERSION, APP_DEFAULT_SETTINGS_COLLECTION,
+                        ANALYZE_PDF_DEFAULTS_DOC_ID, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS,
+                        FALLBACK_ANALYSIS_SETTINGS, LLM_PROVIDERS_CONFIG_COLLECTION,
+                        LLM_PROVIDERS_DEFAULT_DOC_ID, KEY_SESSION_LOADED_LLM_PROVIDERS,
+                        LLM_EMBEDDINGS_CONFIG_COLLECTION, LLM_EMBEDDINGS_DEFAULT_DOC_ID,
+                        KEY_SESSION_NC_ANALYZE_SETTINGS, KEY_SESSION_CHAT_SETTINGS,
                         KEY_SESSION_MODEL_EMBEDDINGS_LIST)
 
 from .layout import show_snackbar, create_app_bar, create_navigation_rail, handle_logout
@@ -32,6 +30,7 @@ error_color = theme.COLOR_ERROR if hasattr(theme, 'COLOR_ERROR') else ft.Colors.
 from src import app_cache
 from src.services import credentials_manager
 from src.services.firebase_client import FbManagerAuth, FirebaseClientFirestore, _from_firestore_value
+from src.services.local_db_manager import LocalDBManager
 from src.logger.logger import LoggerSetup
 
 auth_manager = FbManagerAuth()
@@ -39,169 +38,105 @@ firestore_client = FirebaseClientFirestore()
 
 def load_default_analysis_settings(page: ft.Page):
     """
-    Carrega as configurações padrão de análise do Firestore para a sessão,
-    incluindo a lista de provedores LLM e as preferências do usuário,
-    que podem sobrepor os defaults.
-
-    Args:
-        page: A instância da página Flet.
+    Carrega as configurações para as views `nc_analyze` e `chat`.
+    A lógica é: SQLite local > Padrões da Nuvem (Firestore) > Fallback local.
     """
-    logger.info("Carregando configurações de LLM (provedores, defaults e preferências do usuário)...")
+    logger.info("Carregando configurações de análise para as views...")
     user_token = page.session.get("auth_id_token")
     user_id = page.session.get("auth_user_id")
+    db_manager = LocalDBManager()
 
+    # --- Fallbacks para usuário não autenticado ---
     if not user_token or not user_id:
-        logger.warning("load_default_analysis_settings: Token/ID de usuário não encontrado. Usando fallbacks.")
-        page.session.set(KEY_SESSION_LOADED_LLM_PROVIDERS, []) # Lista vazia de provedores
-        page.session.set(KEY_SESSION_USER_LLM_PREFERENCES, {}) # Prefs vazias
-        page.session.set(KEY_SESSION_MODEL_EMBEDDINGS_LIST, []) #
+        logger.warning("Token/ID de usuário não encontrado. Usando fallbacks locais para configurações.")
+        page.session.set(KEY_SESSION_LOADED_LLM_PROVIDERS, [])
+        page.session.set(KEY_SESSION_MODEL_EMBEDDINGS_LIST, [])
         page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS.copy())
-        page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
+        page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
+        page.session.set(KEY_SESSION_CHAT_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
         return
 
-    # 1. Carregar Lista de Provedores LLM (Configuração Global)
+    # --- Carregamento de dados globais (Provedores, Custos, Padrões da Nuvem) ---
+    # Esta parte é executada uma vez para popular a sessão com dados de referência.
+    _load_global_providers_and_costs(page, user_token)
+    cloud_defaults = _load_cloud_defaults(page, user_token)
+
+    # --- Carregamento das Configurações Específicas de cada View ---
+    # 1. Carregar para NC Analyze View
+    nc_analyze_settings = db_manager.get_setting(KEY_SESSION_NC_ANALYZE_SETTINGS)
+    if nc_analyze_settings:
+        page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, nc_analyze_settings)
+        logger.info("Configurações para 'Análise de Documentos' carregadas do banco de dados local.")
+    else:
+        page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, cloud_defaults.copy())
+        logger.info("Configurações para 'Análise de Documentos' definidas a partir dos padrões da nuvem (não encontradas localmente).")
+
+    # 2. Carregar para Chat View
+    chat_settings = db_manager.get_setting(KEY_SESSION_CHAT_SETTINGS)
+    if chat_settings:
+        page.session.set(KEY_SESSION_CHAT_SETTINGS, chat_settings)
+        logger.info("Configurações para 'Chat com Documentos' carregadas do banco de dados local.")
+    else:
+        page.session.set(KEY_SESSION_CHAT_SETTINGS, cloud_defaults.copy())
+        logger.info("Configurações para 'Chat com Documentos' definidas a partir dos padrões da nuvem (não encontradas localmente).")
+
+def _load_global_providers_and_costs(page: ft.Page, user_token: str):
+    """Carrega a lista de provedores LLM e custos de embedding do Firestore."""
+    # Carregar Lista de Provedores LLM
     loaded_providers_list = []
     providers_doc_path = f"{LLM_PROVIDERS_CONFIG_COLLECTION}/{LLM_PROVIDERS_DEFAULT_DOC_ID}"
     try:
-        response_providers = firestore_client._make_firestore_request("GET", user_token, providers_doc_path)
-        if response_providers.status_code == 200:
-            providers_doc_data = response_providers.json()
-            providers_array_fs = providers_doc_data.get("fields", {}).get("all_providers", {}).get("arrayValue", {}).get("values", [])
-            if providers_array_fs:
-                # Cada item em providers_array_fs é um mapValue que precisa ser convertido
-                for provider_map_fs in providers_array_fs:
-                    if "mapValue" in provider_map_fs:
-                        provider_dict = _from_firestore_value(provider_map_fs)
-                        if isinstance(provider_dict, dict):
-                            loaded_providers_list.append(provider_dict)
-                logger.info(f"{len(loaded_providers_list)} provedores LLM carregados do Firestore.")
-            else:
-                logger.warning(f"Documento de provedores LLM '{providers_doc_path}' não contém 'all_providers' ou está vazio.")
-        elif response_providers.status_code == 404:
-            logger.warning(f"Documento de configuração de provedores LLM '{providers_doc_path}' não encontrado.")
-        else:
-            logger.error(f"Erro ao carregar provedores LLM: {response_providers.status_code} - {response_providers.text}")
-    except Exception as e_prov:
-        logger.error(f"Exceção ao carregar provedores LLM: {e_prov}", exc_info=True)
+        response = firestore_client._make_firestore_request("GET", user_token, providers_doc_path)
+        if response.status_code == 200:
+            data = response.json()
+            values = data.get("fields", {}).get("all_providers", {}).get("arrayValue", {}).get("values", [])
+            loaded_providers_list = [_from_firestore_value(v) for v in values if "mapValue" in v]
+            logger.info(f"{len(loaded_providers_list)} provedores LLM carregados.")
+    except Exception as e:
+        logger.error(f"Exceção ao carregar provedores LLM: {e}", exc_info=True)
     page.session.set(KEY_SESSION_LOADED_LLM_PROVIDERS, loaded_providers_list)
 
-    # NOVO: 1.B. Carregar Lista de Custos de Modelos de Embedding
+    # Carregar Custos de Modelos de Embedding
     loaded_embeddings_list = []
-    embeddings_doc_path = f"{LLM_EMBEDDINGS_CONFIG_COLLECTION}/{LLM_EMBEDDINGS_DEFAULT_DOC_ID}" # Reutiliza a coleção, mas doc ID diferente
+    embeddings_doc_path = f"{LLM_EMBEDDINGS_CONFIG_COLLECTION}/{LLM_EMBEDDINGS_DEFAULT_DOC_ID}"
     try:
-        response_embeddings = firestore_client._make_firestore_request("GET", user_token, embeddings_doc_path)
-        if response_embeddings.status_code == 200:
-            embeddings_doc_data = response_embeddings.json()
-            # Supondo que o documento tem um campo 'embeddings_costs' que é um array de maps
-            embeddings_array_fs = embeddings_doc_data.get("fields", {}).get("all_models", {}).get("arrayValue", {}).get("values", [])
-            if embeddings_array_fs:
-                for embedding_map_fs in embeddings_array_fs:
-                    if "mapValue" in embedding_map_fs:
-                        embedding_dict = _from_firestore_value(embedding_map_fs)
-                        if isinstance(embedding_dict, dict) and "name" in embedding_dict and "cost_per_million" in embedding_dict:
-                            try: # Garante que o custo seja float
-                                embedding_dict["cost_per_million"] = float(embedding_dict["cost_per_million"])
-                                loaded_embeddings_list.append(embedding_dict)
-                            except (ValueError, TypeError):
-                                logger.warning(f"Custo inválido para embedding '{embedding_dict.get('name')}'. Pulando.")
-                logger.info(f"{len(loaded_embeddings_list)} configurações de custo de embedding carregadas.")
-            else:
-                logger.warning(f"Documento de custos de embedding '{embeddings_doc_path}' não contém 'all_models' ou está vazio.")
-        elif response_embeddings.status_code == 404:
-            logger.warning(f"Documento de custos de embedding '{embeddings_doc_path}' não encontrado.")
-        else:
-            logger.error(f"Erro ao carregar custos de embedding: {response_embeddings.status_code} - {response_embeddings.text}")
-    except Exception as e_emb:
-        logger.error(f"Exceção ao carregar custos de embedding: {e_emb}", exc_info=True)
+        response = firestore_client._make_firestore_request("GET", user_token, embeddings_doc_path)
+        if response.status_code == 200:
+            data = response.json()
+            values = data.get("fields", {}).get("all_models", {}).get("arrayValue", {}).get("values", [])
+            for v in values:
+                if "mapValue" in v:
+                    embedding_dict = _from_firestore_value(v)
+                    if isinstance(embedding_dict, dict) and "name" in embedding_dict and "cost_per_million" in embedding_dict:
+                        try:
+                            embedding_dict["cost_per_million"] = float(embedding_dict["cost_per_million"])
+                            loaded_embeddings_list.append(embedding_dict)
+                        except (ValueError, TypeError):
+                            pass # Log warning se necessário
+            logger.info(f"{len(loaded_embeddings_list)} custos de embedding carregados.")
+    except Exception as e:
+        logger.error(f"Exceção ao carregar custos de embedding: {e}", exc_info=True)
     page.session.set(KEY_SESSION_MODEL_EMBEDDINGS_LIST, loaded_embeddings_list)
 
-    # 2. Carregar Preferências de LLM do Usuário
-    user_llm_preferences = {}
-    user_prefs_doc_path = f"{USER_LLM_PREFERENCES_COLLECTION}/{user_id}"
-    try:
-        response_prefs = firestore_client._make_firestore_request("GET", user_token, user_prefs_doc_path)
-        if response_prefs.status_code == 200:
-            prefs_doc_data = response_prefs.json()
-            fields = prefs_doc_data.get("fields", {})
-            if fields:
-                user_llm_preferences = {k: _from_firestore_value(v) for k, v in fields.items()}
-                logger.info(f"Preferências de LLM do usuário '{user_id}' carregadas: {user_llm_preferences}")
-        elif response_prefs.status_code == 404:
-            logger.info(f"Nenhuma preferência de LLM salva para o usuário '{user_id}'.")
-        else:
-            logger.error(f"Erro ao carregar preferências de LLM do usuário: {response_prefs.status_code} - {response_prefs.text}")
-    except Exception as e_prefs:
-        logger.error(f"Exceção ao carregar preferências de LLM do usuário: {e_prefs}", exc_info=True)
-    page.session.set(KEY_SESSION_USER_LLM_PREFERENCES, user_llm_preferences)
-
-    # 3. Carregar Configurações Padrão de Análise (analyze_pdf_defaults)
-    analysis_defaults = FALLBACK_ANALYSIS_SETTINGS.copy() # Começa com o fallback local
+def _load_cloud_defaults(page: ft.Page, user_token: str) -> dict:
+    """Carrega as configurações padrão de análise do Firestore, com fallback local."""
+    analysis_defaults = FALLBACK_ANALYSIS_SETTINGS.copy()
     defaults_doc_path = f"{APP_DEFAULT_SETTINGS_COLLECTION}/{ANALYZE_PDF_DEFAULTS_DOC_ID}"
     try:
-        response_defaults = firestore_client._make_firestore_request("GET", user_token, defaults_doc_path)
-        if response_defaults.status_code == 200:
-            defaults_data = response_defaults.json()
-            fields = defaults_data.get("fields", {})
+        response = firestore_client._make_firestore_request("GET", user_token, defaults_doc_path)
+        if response.status_code == 200:
+            fields = response.json().get("fields", {})
             if fields:
                 raw_cloud_defaults = {k: _from_firestore_value(v) for k, v in fields.items()}
-                # Mescla com fallback para garantir todos os campos e tipos corretos
-                for key, fallback_value in FALLBACK_ANALYSIS_SETTINGS.items():
-                    cloud_value = raw_cloud_defaults.get(key)
-                    if cloud_value is not None:
-                        try:
-                            if isinstance(fallback_value, int): analysis_defaults[key] = int(cloud_value)
-                            elif isinstance(fallback_value, float): analysis_defaults[key] = float(cloud_value)
-                            else: analysis_defaults[key] = cloud_value # Assume string ou bool
-                        except (ValueError, TypeError):
-                            logger.warning(f"Valor inválido para '{key}' em defaults_settings da nuvem, usando fallback local.")
-                            analysis_defaults[key] = fallback_value # Mantém o do fallback local
-                    # Se cloud_value for None, o valor do FALLBACK_ANALYSIS_SETTINGS já está em analysis_defaults
-                logger.info("Configurações padrão de análise (defaults) carregadas do Firestore.")
-            else:
-                logger.warning(f"Documento de defaults '{defaults_doc_path}' vazio. Usando fallbacks locais.")
-        elif response_defaults.status_code == 404:
-            logger.warning(f"Documento de defaults '{defaults_doc_path}' não encontrado. Usando fallbacks locais.")
+                analysis_defaults.update(raw_cloud_defaults) # Simplesmente atualiza com o que veio da nuvem
+                logger.info("Configurações padrão de análise carregadas do Firestore.")
         else:
-            logger.error(f"Erro ao carregar defaults de análise: {response_defaults.status_code} - {response_defaults.text}. Usando fallbacks locais.")
-    except Exception as e_def:
-        logger.error(f"Exceção ao carregar defaults de análise: {e_def}. Usando fallbacks locais.", exc_info=True)
+            logger.warning(f"Documento de defaults não encontrado ou erro ({response.status_code}). Usando fallbacks locais.")
+    except Exception as e:
+        logger.error(f"Exceção ao carregar defaults de análise: {e}. Usando fallbacks locais.", exc_info=True)
     
     page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, analysis_defaults.copy())
-
-    # 4. Aplicar Preferências do Usuário sobre os Defaults de Análise
-    final_analysis_settings = analysis_defaults.copy() # Começa com os defaults (da nuvem ou fallback)
-    pref_provider = user_llm_preferences.get("default_provider_system_name")
-    pref_model = user_llm_preferences.get("default_model_id")
-
-    if pref_provider and loaded_providers_list: # Se há preferência de provedor e provedores carregados
-        # Valida se o provedor preferido existe na lista carregada
-        chosen_provider_config = next((p for p in loaded_providers_list if p.get("system_name") == pref_provider), None)
-        if chosen_provider_config:
-            final_analysis_settings["llm_provider"] = pref_provider
-            logger.info(f"Preferência de provedor do usuário ('{pref_provider}') aplicada.")
-            if pref_model:
-                # Valida se o modelo preferido existe para o provedor escolhido
-                chosen_model_config = next((m for m in chosen_provider_config.get("models", []) if m.get("id") == pref_model), None)
-                if chosen_model_config:
-                    final_analysis_settings["llm_model"] = pref_model
-                    logger.info(f"Preferência de modelo do usuário ('{pref_model}') aplicada.")
-                else:
-                    logger.warning(f"Modelo LLM preferido ('{pref_model}') não encontrado para o provedor '{pref_provider}'. Verificando primeiro modelo do provedor.")
-                    if chosen_provider_config.get("models"): # Se o provedor tem modelos
-                        first_model_id = chosen_provider_config["models"][0].get("id")
-                        if first_model_id:
-                            final_analysis_settings["llm_model"] = first_model_id
-                            logger.info(f"Usando o primeiro modelo ('{first_model_id}') do provedor '{pref_provider}' como fallback.")
-                        else: # Primeiro modelo do provedor não tem ID
-                            logger.warning(f"Primeiro modelo do provedor '{pref_provider}' não tem ID. Mantendo modelo dos defaults globais.")
-                    # Se não, mantém o modelo dos defaults globais
-            # else: Se não há pref_model, mantém o modelo dos defaults globais
-        else:
-            logger.warning(f"Provedor LLM preferido ('{pref_provider}') não encontrado na lista de provedores carregados. Mantendo provedor dos defaults globais.")
-    # else: Se não há pref_provider, mantém as configurações de llm_provider e llm_model dos defaults globais.
-
-    page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, final_analysis_settings)
-    logger.debug(f"Configurações finais de análise (KEY_SESSION_ANALYSIS_SETTINGS) definidas na sessão: {final_analysis_settings}")
+    return analysis_defaults
 
 def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False) -> bool:
     """
@@ -523,8 +458,6 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         LoggerSetup.set_cloud_user_context(None, None)
         logger.debug("Contexto do logger de nuvem limpo ao desconectar.")
 
-
-
         # Para a thread de renovação de token
         if _token_refresh_thread_stop_event:
             logger.debug("Sinalizando parada para a thread de renovação proativa de token...")
@@ -629,9 +562,10 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         else:
             logger.debug("Usuário não autenticado na inicialização, thread de renovação proativa não iniciada.")
             # Garante que as chaves de settings estejam com fallback
-            if not page.session.contains_key(KEY_SESSION_ANALYSIS_SETTINGS):
+            if not page.session.contains_key(KEY_SESSION_NC_ANALYZE_SETTINGS):
                 page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS.copy())
-                page.session.set(KEY_SESSION_ANALYSIS_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
+                page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
+                page.session.set(KEY_SESSION_CHAT_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
             final_route = "/login"
 
         # Dispara a navegação inicial

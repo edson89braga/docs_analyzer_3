@@ -26,14 +26,17 @@ from src.flet_ui.components.file_list_manager import FileListManager
 from src.flet_ui.components.settings_drawer import AnalyzeSettingsDrawer
 from src.flet_ui import theme
 
-from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR, TEMPLATES_DOCX_SUBDIR, cotacao_dolar_to_real,
-                          KEY_SESSION_ANALYSIS_SETTINGS, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, 
-                          FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_LOADED_LLM_PROVIDERS,
+from src.settings import (KEY_SESSION_CURRENT_BATCH_NAME, 
+                          KEY_SESSION_PROMPTS_FINAL, KEY_SESSION_PROMPTS_DICT, KEY_SESSION_LIST_TO_PROMPTS,
+                          KEY_SESSION_SHARED_FILES_ORDERED, KEY_SESSION_SHARED_DOCUMENT_CONTEXT,
+                          KEY_SESSION_SHARED_PROCESSING_METADATA)
+
+from src.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR, TEMPLATES_DOCX_SUBDIR,
+                          cotacao_dolar_to_real, KEY_SESSION_NC_ANALYZE_SETTINGS,
+                          KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS,
+                          KEY_SESSION_LOADED_LLM_PROVIDERS,
                           KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST,
                           PROMPTS_COLLECTION, PROMPTS_DOCUMENT_ID)
-
-from src.settings import (KEY_SESSION_CURRENT_BATCH_NAME, 
-                          KEY_SESSION_PROMPTS_FINAL, KEY_SESSION_PROMPTS_DICT, KEY_SESSION_LIST_TO_PROMPTS)
 
 from src.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
                         get_lista_ufs_cached, get_municipios_por_uf_cached, calcular_similaridade_rouge_l)
@@ -45,7 +48,7 @@ from src.utils import _initialize_heavy_utils
 _initialize_heavy_utils()
 
 from src.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
-import src.core.ai_orchestrator as ai_orchestrator 
+import src.core.ai_orchestrator as ai_orchestrator
 from src.core.doc_generator import DocxExporter
 
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
@@ -56,7 +59,7 @@ firestore_client = FirebaseClientFirestore()
 
 logger.info(f"[DEBUG] Carregamento pesado dentro de NC_ANALYZE_VIEW em {perf_counter()-start_time:.4f}s")
 
-from src.utils import get_user_cache, clear_user_cache
+from src.utils import get_user_cache
 
 # --- Constantes de Chave de Sessão/Cache Local para NC_ANALYZE_VIEW ---
 KEY_SESSION_PDF_FILES_ORDERED = "apv_pdf_files_ordered"
@@ -70,6 +73,8 @@ KEY_SESSION_PDF_AGGREGATED_TEXT_INFO = "apv_pdf_aggregated_text_info" # (str_pag
 KEY_SESSION_PDF_LLM_RESPONSE = "apv_pdf_llm_response"                                           # Resposta original da IA
 KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL = "apv_pdf_llm_response_actual"                             # Resposta na GUI (que pode ter sido editada pelo usuário) # LLMStructuredResultDisplay.get_current_form_data()
 KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK = "apv_llm_response_snapshot_for_feedback"   # Cópia da resposta original p/ fins de comparação com a respota editada pelo usuário.
+KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED = "has_analyzer_data"
+KEY_SESSION_HAS_LLM_REPONSE = "has_llm_response"
 
 # Constantes para nomes de controles (facilita acesso) CTL = Control
 # TODO: Alterar para variáveis diretas na classe, em vez de usar dict.
@@ -329,7 +334,7 @@ class AnalyzePDFViewContent(ft.Column):
         )
 
         # --- Drawer de Configurações (Placeholder) ---
-        self.settings_drawer_component = AnalyzeSettingsDrawer(self.page)
+        self.settings_drawer_component = AnalyzeSettingsDrawer(self.page, session_key=KEY_SESSION_NC_ANALYZE_SETTINGS)
         self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0)
         # self.settings_drawer_manager não é mais necessário
 
@@ -495,12 +500,13 @@ class AnalyzePDFViewContent(ft.Column):
                 current_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED) or []
                 if not isinstance(current_files, list):
                     current_files = []
-                if not any(f['name'] == file_name and f['path'] == path_or_msg for f in current_files):
-                    new_file_entry = {"name": file_name,
-                                        "path": path_or_msg,
+                if not any(f['name'] == file_name and f['path_or_message'] == path_or_msg for f in current_files):
+                    new_file_entry = {  "name": file_name,
+                                        "path_or_message": path_or_msg,
                                         "original_index": len(current_files)}
                     current_files.append(new_file_entry)
                     self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, current_files)
+                    self.page.session.set(KEY_SESSION_SHARED_FILES_ORDERED, current_files)
             elif path_or_msg == "Seleção cancelada":
                 logger.info("Seleção de arquivos cancelada.")
             else:
@@ -592,7 +598,7 @@ class AnalyzePDFViewContent(ft.Column):
             logger.warning(f"Ação '{step_type}' abortada: Nenhum PDF carregado.")
             return
         
-        pdf_paths = [f['path'] for f in ordered_files] if ordered_files else []
+        pdf_paths = [f['path_or_message'] for f in ordered_files] if ordered_files else []
         batch_name = self.page.session.get(KEY_SESSION_CURRENT_BATCH_NAME) or "Lote Atual"
 
         # Verifica se é uma reanálise ANTES de limpar os resultados existentes
@@ -630,11 +636,10 @@ class AnalyzePDFViewContent(ft.Column):
             def primary_llm_analysis_action():
                 # A lógica de decidir entre pipeline completo ou só LLM está dentro de proceed_with_llm_analysis
                 # do exemplo anterior, que agora será parte de primary_analyze_action.        
-                aggregated_text_info = self.user_cache.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
-                if not aggregated_text_info or not aggregated_text_info[1]: # [1] é o texto
+                aggregated_text = self.user_cache.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
+                if not aggregated_text: 
                     show_snackbar(self.page, "Não há texto agregado para análise. Verifique o processamento.", theme.COLOR_ERROR)
                     return
-                aggregated_text = aggregated_text_info[1]
                 
                 # Apenas reseta os resultados da LLM.
                 self._reset_llm_results()
@@ -981,8 +986,10 @@ class AnalyzePDFViewContent(ft.Column):
                     display_value = str(value if value is not None else "N/A")
 
                     if key == "total_pages_processed":
-                        total_tokens = metadata_to_display.get("total_tokens_before_filter", 0)
-                        display_value = f"{value} ({total_tokens:,} tokens)".replace(",", ".")
+                        initial_total_tokens = metadata_to_display.get("total_tokens_before_filter", 0)
+                        final_total_tokens = metadata_to_display.get("final_aggregated_tokens", 0)
+                        if initial_total_tokens != final_total_tokens:
+                            display_value = f"{value} ({initial_total_tokens:,} tokens)".replace(",", ".")                        
                     elif key == "supressed_tokens_percentage" and isinstance(value, (int, float)):
                         value = 0 if value < 0 else value
                         display_value = f"{value:.2f}%"
@@ -996,6 +1003,8 @@ class AnalyzePDFViewContent(ft.Column):
                         total_value = metadata_to_display.get("count_selected_final")
                         display_value = f"{total_value} : {display_value}"
                     elif key == "calculated_embedding_cost_usd":
+                        if not calculated_embedding_cost_usd:
+                            continue
                         cost_embeddings_usd_str = f"U$ {calculated_embedding_cost_usd:.4f}"
                         cost_embeddings_brl_str = f"R$ {(calculated_embedding_cost_usd * cotacao_dolar_to_real):.4f}"
                         display_value = f"{cost_embeddings_usd_str} : {cost_embeddings_brl_str}"
@@ -1159,6 +1168,7 @@ class AnalyzePDFViewContent(ft.Column):
         
         self.user_cache = get_user_cache(self.page)
         self.user_cache.pop(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, None)
+        self.user_cache.pop(KEY_SESSION_SHARED_DOCUMENT_CONTEXT, None)
         self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE, None)
         self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL, None)
         self.user_cache.pop(KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK, None)
@@ -1166,7 +1176,8 @@ class AnalyzePDFViewContent(ft.Column):
         keys_to_clear = [
             KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA,
             KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
-            "has_analyzer_data", "has_llm_response"
+            KEY_SESSION_SHARED_PROCESSING_METADATA,
+            KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED, KEY_SESSION_HAS_LLM_REPONSE
         ]
         for key in keys_to_clear:
             self._remove_data_session(key)
@@ -1189,7 +1200,7 @@ class AnalyzePDFViewContent(ft.Column):
         keys_to_clear = [
             KEY_SESSION_LLM_METADATA,
             KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
-            "has_llm_response"
+            KEY_SESSION_HAS_LLM_REPONSE
         ]
         for key in keys_to_clear:
             self._remove_data_session(key)
@@ -1205,10 +1216,35 @@ class AnalyzePDFViewContent(ft.Column):
         """
         logger.debug("Atualizando GUI a partir do estado da sessão...")
         hide_loading_overlay(self.page)
+
+        # Lógica de carregamento: Prioriza a chave da view, depois a compartilhada.
+        if not self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED):
+            shared_files = self.page.session.get(KEY_SESSION_SHARED_FILES_ORDERED)
+            if shared_files:
+                self.page.session.set(KEY_SESSION_PDF_FILES_ORDERED, shared_files)
+                logger.info("Contexto de arquivos carregado da sessão compartilhada.")
         
+        self.user_cache = get_user_cache(self.page)
+        if not self.user_cache.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO):
+            shared_text = self.user_cache.get(KEY_SESSION_SHARED_DOCUMENT_CONTEXT)
+            if shared_text:
+                # A chave desta view espera uma tupla, mas só temos o texto. Criamos uma tupla parcial.
+                self.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = shared_text
+                logger.info("Contexto de texto carregado da sessão compartilhada.")
+
+        if not self.page.session.get(KEY_SESSION_PROCESSING_METADATA):
+            shared_metadata = self.page.session.get(KEY_SESSION_SHARED_PROCESSING_METADATA)
+            if shared_metadata:
+                self.page.session.set(KEY_SESSION_PROCESSING_METADATA, shared_metadata)
+                logger.info("Metadados de processamento carregados da sessão compartilhada.")
+                
         # Atualiza flags internas com base na sessão Flet
-        self._files_processed = self.page.session.get("has_analyzer_data") or False
-        self._analysis_requested = self.page.session.get("has_llm_response") or False
+        self._files_processed = self.page.session.get(KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED) or False
+        if not self._files_processed:
+            # confere se houve otimização na sessão compartilhada
+            processing_metada = self.page.session.get(KEY_SESSION_PROCESSING_METADATA)
+            self._files_processed = processing_metada and "relevant_pages_global_keys_formatted" in processing_metada
+        self._analysis_requested = self.page.session.get(KEY_SESSION_HAS_LLM_REPONSE) or False
         
         # 2. Chama os métodos de atualização individuais
         self.file_list_manager.update_display()
@@ -1228,6 +1264,7 @@ class AnalyzePDFViewContent(ft.Column):
             #is_initial_response = not bool(self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL))
             self._show_info_balloon_or_result(False, llm_response_to_show, is_initial_response)
         else:
+            self.file_list_manager.expand_container()
             self._show_info_balloon_or_result(True)
 
         # 4. Atualiza o estado dos botões (que depende das flags atualizadas)
@@ -1259,14 +1296,18 @@ class AnalyzePDFViewContent(ft.Column):
             KEY_SESSION_PROMPTS_DICT,
             KEY_SESSION_LIST_TO_PROMPTS
         ]
-        clear_user_cache(self.page, preserve_keys=keys_to_preserve)
+        cache_to_clear = [KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK, KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL,
+            KEY_SESSION_PDF_LLM_RESPONSE, KEY_SESSION_PDF_AGGREGATED_TEXT_INFO, KEY_SESSION_SHARED_DOCUMENT_CONTEXT]
+        for _key in cache_to_clear:
+            self.user_cache.pop(_key, None)
 
         # Limpa sessão relacionada a esta view
         keys_to_clear_from_session = [
             KEY_SESSION_CURRENT_BATCH_NAME, KEY_SESSION_PDF_FILES_ORDERED,
             KEY_SESSION_PROCESSING_METADATA, KEY_SESSION_LLM_METADATA,
             KEY_SESSION_FEEDBACK_COLLECTED_FOR_CURRENT_ANALYSIS,
-            "has_analyzer_data", "has_llm_response"
+            KEY_SESSION_SHARED_FILES_ORDERED, KEY_SESSION_SHARED_PROCESSING_METADATA,
+            KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED, KEY_SESSION_HAS_LLM_REPONSE
         ]
         for key in keys_to_clear_from_session:
             self._remove_data_session(key)
@@ -1276,8 +1317,7 @@ class AnalyzePDFViewContent(ft.Column):
         self._analysis_requested = False
         
         # Limpa diretório de uploads temporários, se o ManagedFilePicker estiver configurado
-        if self.managed_file_picker:
-            self.managed_file_picker.clear_upload_directory()
+        # if self.managed_file_picker: self.managed_file_picker.clear_upload_directory()
 
         # Chama o método central para atualizar toda a GUI para o estado limpo
         self._update_gui_from_state()
@@ -1987,25 +2027,13 @@ class InternalAnalysisController:
         self.user_cache = get_user_cache(self.page)
 
     def _get_current_analysis_settings(self) -> Dict[str, Any]:
-        """
-        Busca as configurações de análise atuais da sessão.
-
-        Retorna um dicionário com as configurações, aplicando valores padrão (fallbacks)
-        se as configurações não forem encontradas ou estiverem em formato inválido.
-        Realiza a conversão de tipos para garantir a correta utilização dos valores.
-
-        Returns:
-            Dict[str, Any]: Um dicionário contendo as configurações de análise.
-        """
-        settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS)
+        """Busca as configurações de análise específicas para esta view da sessão."""
+        settings = self.page.session.get(KEY_SESSION_NC_ANALYZE_SETTINGS)
         if not settings or not isinstance(settings, dict):
-            logger.warning("Configurações de análise não encontradas na sessão ou formato inválido. Usando fallbacks.")
-            return FALLBACK_ANALYSIS_SETTINGS.copy() # Retorna uma cópia
-        
-        # Garante que os tipos numéricos estejam corretos, pois podem vir de TextFields como string
-        # Faz uma cópia para não modificar o original na sessão aqui.
-        # A normalização de tipos deve ocorrer quando os valores são lidos do drawer.
-        # Aqui, apenas garantimos que se o tipo for string e deveria ser número, tentamos converter.
+            logger.warning("Configurações de 'nc_analyze' não encontradas na sessão. Usando fallbacks.")
+            return FALLBACK_ANALYSIS_SETTINGS.copy()
+
+        # Garante que os tipos numéricos estejam corretos
         current_settings = settings.copy()
         try:
             current_settings['llm_input_token_limit'] = int(current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']))
@@ -2141,8 +2169,9 @@ class InternalAnalysisController:
             aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(processed_page_data_combined, relevant_ordered_indices, token_limit_pref)
             
             self.user_cache = get_user_cache(self.page)
-            self.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = aggregated_info
-            self.page.session.set("has_analyzer_data", True)
+            self.user_cache[KEY_SESSION_PDF_AGGREGATED_TEXT_INFO] = aggregated_info[1] # Texto agregado
+            self.user_cache[KEY_SESSION_SHARED_DOCUMENT_CONTEXT] = aggregated_info[1] 
+            self.page.session.set(KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED, True)
             
             pages_agg_indices, _, tokens_antes_filtro, tokens_antes_trunc, tokens_final_agg = aggregated_info
             count_sel_final = len(pages_agg_indices)
@@ -2170,6 +2199,7 @@ class InternalAnalysisController:
                 "calculated_embedding_cost_usd": calculated_embedding_cost_usd
             }
             self.page.session.set(KEY_SESSION_PROCESSING_METADATA, proc_meta_for_ui)
+            self.page.session.set(KEY_SESSION_SHARED_PROCESSING_METADATA, proc_meta_for_ui)
             self.page.run_thread(self.parent_view._update_processing_metadata_display, proc_meta_for_ui)
  
             self.parent_view._files_processed = True
@@ -2261,7 +2291,7 @@ class InternalAnalysisController:
         
         proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {}
         tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
-        current_settings = self.page.session.get(KEY_SESSION_ANALYSIS_SETTINGS) or {}
+        current_settings = self.page.session.get(KEY_SESSION_NC_ANALYZE_SETTINGS) or {}
         default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
         
         llm_response_obj = self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE)
@@ -2337,7 +2367,7 @@ class InternalAnalysisController:
                 self.page.session.set(KEY_SESSION_LLM_REANALYSIS, is_reanalysis)
                 
                 self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = llm_response_data
-                self.page.session.set("has_llm_response", True)
+                self.page.session.set(KEY_SESSION_HAS_LLM_REPONSE, True)
                 # A flag 'is_new_llm_response' será passada para a sessão para ser usada por _update_ui_from_state
                 self.page.session.set("is_new_llm_response_flag", True)
                 

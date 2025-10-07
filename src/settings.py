@@ -87,22 +87,27 @@ APP_DEFAULT_SETTINGS_COLLECTION = "app_default_settings"
 ANALYZE_PDF_DEFAULTS_DOC_ID = "analyze_pdf_defaults"
 LLM_PROVIDERS_CONFIG_COLLECTION = "llm_providers_config" # Já existe como PROVIDERS_COLLECTION em llm_settings_view
 LLM_PROVIDERS_DEFAULT_DOC_ID = "default_list"          # Já existe como DEFAULT_PROVIDERS_DOC_ID em llm_settings_view
-USER_LLM_PREFERENCES_COLLECTION = "user_llm_preferences"
 LLM_EMBEDDINGS_CONFIG_COLLECTION = "llm_providers_config" # Pode ser a mesma coleção dos provedores
 LLM_EMBEDDINGS_DEFAULT_DOC_ID = "model_embeddings_list" # Documento com a lista de custos
 
 PROMPTS_COLLECTION = "prompt_templates"
 PROMPTS_DOCUMENT_ID = "initial_analysis_v1"
 
+# --- Chaves de sessão relacionadas às configurações das views ---
+KEY_SESSION_NC_ANALYZE_SETTINGS = "app_nc_analyze_settings"
+KEY_SESSION_CHAT_SETTINGS = "app_chat_settings"
+#KEY_SESSION_ANALYSIS_SETTINGS = "app_analysis_settings" # Configurações atuais da sessão
+
 # Chaves de sessão relacionadas ao Firebase ---------------------------------
 KEYRING_SERVICE_FIREBASE = f"{APP_NAME}_Firebase"
 KEYRING_USER_ENCRYPTION_KEY = "encryption_key" # Chave Fernet
 KEY_SESSION_LOADED_LLM_PROVIDERS = "app_loaded_llm_providers" # Lista de dicts dos provedores
-KEY_SESSION_USER_LLM_PREFERENCES = "app_user_llm_preferences" # Dict com default_provider e default_model
-KEY_SESSION_ANALYSIS_SETTINGS = "app_analysis_settings" # Configurações atuais da sessão
 KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS = "app_cloud_analysis_defaults" # Padrões carregados da nuvem
 KEY_SESSION_TOKENS_EMBEDDINGS = "app_tokens_embeddings"
 KEY_SESSION_MODEL_EMBEDDINGS_LIST = "app_model_embeddings_list"
+
+# --- Configurações do Banco de Dados Local (SQLite) ---
+DB_APP_SETTINGS_TABLE = "app_settings"
 
 # --- Configurações de Cloud Logger ---------------------------------------------
 CLOUD_LOGGER_FOLDER = "logs/"        # Pasta no CloudStorage
@@ -133,7 +138,7 @@ FALLBACK_ANALYSIS_SETTINGS = {
     "llm_max_output_length": "Padrão",
     "llm_temperature": 0.2,
     "prompt_structure": "prompt_unico",
-    "reasoning_effort": "medium",
+    "reasoning_effort": "low",
     "verbosity_level": "medium"
 }
 
@@ -161,21 +166,23 @@ def show_data_k(keyring):
     logger.debug(f"Proxy Password: *** ") # {keyring.get_password(PROXY_KEYRING_SERVICE, K_PROXY_PASSWORD)}
 
 
+# --- Chaves de Sessão Compartilhadas entre Views ---
+KEY_SESSION_SHARED_FILES_ORDERED = "shared_files_ordered"
+KEY_SESSION_SHARED_DOCUMENT_CONTEXT = "shared_document_context"
+KEY_SESSION_SHARED_PROCESSING_METADATA = "shared_processing_metadata"
+
 # --- Configurações de NC_ANALYZE_VIEW --------------------------------------------------------------------------
 # Chaves de Sessão (mantidas e podem ser expandidas) apv: Refere-se a "Analyze PDF View"
 KEY_SESSION_CURRENT_BATCH_NAME = "apv_current_batch_name"
-
 KEY_SESSION_PROMPTS_FINAL = "app_prompts_from_firestore_1"
 KEY_SESSION_PROMPTS_DICT = "app_prompts_from_firestore_2"
 KEY_SESSION_LIST_TO_PROMPTS = "app_list_to_prompts_from_firestore"
 
 # --- Configurações de CHAT_VIEW --------------------------------------------------------------------------
-
 KEY_SESSION_CHAT_PROMPT_STRICT = "chat_prompt_strict"
 KEY_SESSION_CHAT_PROMPT_FLEXIBLE = "chat_prompt_flexible"
 KEY_SESSION_CHAT_PROMPT_CUSTOM = "chat_prompt_custom"
 KEY_SESSION_CHAT_PROMPT_ACTIVE_KEY = "chat_prompt_active_key"
-
 CHAT_PROMPTS_DEFAULTS_DOC_ID = "chat_prompts_defaults"
 
 # -----------------------------------------------------------------------------------------------------------------

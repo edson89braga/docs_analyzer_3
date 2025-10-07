@@ -1,6 +1,6 @@
 # FILE: src\services\local_db_manager.py
 
-import logging, threading, sqlite3
+import logging, threading, sqlite3, json
 from typing import Optional
 from pathlib import Path
 
@@ -63,6 +63,14 @@ class LocalDBManager:
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+
+            # Tabela genérica para configurações da aplicação
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+            ''')            
             self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"Erro ao criar tabelas no banco de dados local: {e}")
@@ -94,6 +102,35 @@ class LocalDBManager:
             return None
         except sqlite3.Error as e:
             logger.error(f"Erro ao recuperar prompt customizado '{key}': {e}")
+            return None
+
+    def save_setting(self, key: str, value: dict) -> bool:
+        """Salva uma configuração (dicionário) como JSON no banco de dados."""
+        if not self.conn: return False
+        try:
+            json_value = json.dumps(value)
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)
+            ''', (key, json_value))
+            self.conn.commit()
+            logger.debug(f"Configuração '{key}' salva no banco de dados local.")
+            return True
+        except (sqlite3.Error, TypeError) as e:
+            logger.error(f"Erro ao salvar configuração '{key}': {e}")
+            return False
+
+    def get_setting(self, key: str) -> Optional[dict]:
+        """Recupera uma configuração do banco de dados e a converte de JSON."""
+        if not self.conn: return None
+        try:
+            self.cursor.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+            row = self.cursor.fetchone()
+            if row and row[0]:
+                logger.debug(f"Configuração '{key}' recuperada do banco de dados local.")
+                return json.loads(row[0])
+            return None
+        except (sqlite3.Error, json.JSONDecodeError) as e:
+            logger.error(f"Erro ao recuperar ou decodificar configuração '{key}': {e}")
             return None
 
     def close(self):

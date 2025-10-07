@@ -826,11 +826,8 @@ class PDFDocumentAnalyzer:
             processed_files_metadata, all_indices_in_batch, all_texts_for_storage_dict
         )
 
-        embedding_vectors, tfidf_vectors, tfidf_scores = self.get_similarity_and_tfidf_score_docs(
-            all_texts_for_analysis_list
-        )
-
-        return combined_page_data, ordered_keys, embedding_vectors, tfidf_vectors, tfidf_scores
+        # embedding_vectors, tfidf_vectors, tfidf_scores = self.get_similarity_and_tfidf_score_docs(all_texts_for_analysis_list)
+        return combined_page_data, ordered_keys, all_texts_for_analysis_list
        
     ### ======================================================================================
 

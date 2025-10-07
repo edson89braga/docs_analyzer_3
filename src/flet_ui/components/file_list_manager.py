@@ -144,12 +144,16 @@ class FileListManager(ft.Column):
             self.metadata_content.update()
 
     def collapse_container(self):
-        self.panel_list.controls[0].expanded = False
-        self.panel_list.update()
+        if self.panel_list.controls:
+            self.panel_list.controls[0].expanded = False
+        if self.page and self.uid:    
+            self.panel_list.update()
 
     def expand_container(self):
-        self.panel_list.controls[0].expanded = True
-        self.panel_list.update()
+        if self.panel_list.controls:
+            self.panel_list.controls[0].expanded = True
+        if self.page and self.uid:
+            self.panel_list.update()
 
     def disable_interactions(self):
         if self.file_list_view.page and self.file_list_view.uid:
