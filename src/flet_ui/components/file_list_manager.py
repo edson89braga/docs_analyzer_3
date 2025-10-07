@@ -161,8 +161,7 @@ class FileListManager(ft.Column):
                 # tile.leading.disabled = True
                 for btn in tile.trailing.controls:
                     btn.disabled = True
-                    btn.update()
-            #self.file_list_view.update()
+            self.file_list_view.update()
     
     def enable_interactions(self):
         if self.file_list_view.page and self.file_list_view.uid:
@@ -170,5 +169,4 @@ class FileListManager(ft.Column):
                 # tile.leading.disabled = False
                 for btn in tile.trailing.controls:
                     btn.disabled = False
-                    btn.update()
-            #self.file_list_view.update()
+            self.file_list_view.update()

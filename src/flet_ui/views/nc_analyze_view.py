@@ -84,6 +84,7 @@ CTL_ANALYZE_BTN = "analyze_button"
 CTL_PROMPT_STRUCT_BTN = "prompt_structured_button"
 CTL_RESTART_BTN = "restart_button"
 CTL_EXPORT_BTN = "export_button"
+CTL_TEXT_MODEL_BTN = "active_model_button"
 CTL_SETTINGS_BTN = "settings_button"
 CTL_RESET_SETTINGS_BTN = "reset_settings_button"
 CTL_LLM_RESULT_TEXT = "llm_result_text"
@@ -198,6 +199,13 @@ class AnalyzePDFViewContent(ft.Column):
                 #ft.PopupMenuItem(text="Exportar em Simples DOCX", data="docx_simple"),
                 #ft.PopupMenuItem(text="Exportar em Template DOCX", data="docx_template", disabled=True), # habilitado após análise LLM
         )
+        self.gui_controls[CTL_TEXT_MODEL_BTN] = ft.TextButton(
+            text="Modelo: Carregando...",
+            icon=ft.Icons.MODEL_TRAINING_OUTLINED,
+            tooltip="Clique ver e alterar as configurações de análise",
+            width=200,
+            style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=12))
+        )        
         self.gui_controls[CTL_SETTINGS_BTN] = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, tooltip="Configurações específicas", icon_size=default_icon_size_bar)
 
         action_buttons_bar = ft.Row(
@@ -209,6 +217,7 @@ class AnalyzePDFViewContent(ft.Column):
                 #ft.Container(expand=True), # Espaçador
                 ft.Row([
                     self.gui_controls[CTL_PROMPT_STRUCT_BTN],
+                    self.gui_controls[CTL_TEXT_MODEL_BTN],
                     self.gui_controls[CTL_RESTART_BTN],
                     self.gui_controls[CTL_EXPORT_BTN],
                     self.gui_controls[CTL_SETTINGS_BTN]], wrap=True)
@@ -334,7 +343,8 @@ class AnalyzePDFViewContent(ft.Column):
         )
 
         # --- Drawer de Configurações (Placeholder) ---
-        self.settings_drawer_component = AnalyzeSettingsDrawer(self.page, session_key=KEY_SESSION_NC_ANALYZE_SETTINGS)
+        self.settings_drawer_component = AnalyzeSettingsDrawer(self.page, session_key=KEY_SESSION_NC_ANALYZE_SETTINGS, 
+                                                               on_settings_changed=self._update_active_model_button)
         self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0)
         # self.settings_drawer_manager não é mais necessário
 
@@ -469,6 +479,7 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_ANALYZE_BTN].on_click = self._handle_analyze_click
         self.gui_controls[CTL_RESTART_BTN].on_click = self._handle_restart_click
         #self.gui_controls[CTL_EXPORT_BTN].on_item_selected = self.export_manager.handle_export_selected # Para PopupMenuButton
+        self.gui_controls[CTL_TEXT_MODEL_BTN].on_click = self._handle_toggle_settings_drawer
         self.gui_controls[CTL_SETTINGS_BTN].on_click = self._handle_toggle_settings_drawer
         self.gui_controls[CTL_PROMPT_STRUCT_BTN].on_click = self._toggle_prompt_view
 
@@ -873,6 +884,20 @@ class AnalyzePDFViewContent(ft.Column):
         self.update()       
 
     # --- Lógica de Atualização da UI (Métodos Internos) ---
+    def _update_active_model_button(self):
+        """
+        Atualiza o texto do TextButton que mostra o modelo LLM ativo.
+        """
+        settings = self.page.session.get(KEY_SESSION_NC_ANALYZE_SETTINGS) or {}
+        model_name = settings.get("llm_model", "N/D")
+        
+        button = self.gui_controls.get(CTL_TEXT_MODEL_BTN)
+        if isinstance(button, ft.TextButton):
+            button.text = f"Modelo: {model_name}"
+            if button.page and button.uid:
+                button.update()
+        logger.debug(f"Botão de modelo ativo atualizado para: {model_name}")
+
     def _update_button_states(self):
         """
         Atualiza o estado (habilitado/desabilitado) dos botões da UI com base no estado atual da view.
@@ -1250,6 +1275,7 @@ class AnalyzePDFViewContent(ft.Column):
         self.file_list_manager.update_display()
         self._update_processing_metadata_display()
         self._update_llm_metadata_display()
+        self._update_active_model_button()
 
         self.user_cache = get_user_cache(self.page)
         # 3. Decide qual conteúdo de resultado LLM exibir

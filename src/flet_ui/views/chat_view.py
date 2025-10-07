@@ -84,6 +84,14 @@ class ChatViewContent(ft.Column):
         self.metrics_button = ft.TextButton(text="Total Tokens: 0", icon=ft.Icons.QUERY_STATS, on_click=self._show_metrics_dialog, 
                                                 tooltip="Ver detalhes do consumo de tokens", width=200)
 
+        self.active_model_button = ft.TextButton(
+            text="Modelo: Carregando...",
+            icon=ft.Icons.MODEL_TRAINING_OUTLINED, width=200,
+            on_click=self._handle_toggle_settings_drawer,
+            tooltip="Clique para ver e alterar as configurações de análise",
+            style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=12))
+        )
+
         self.clear_chat_button_1 = ft.IconButton(icon=ft.Icons.DELETE_SWEEP_OUTLINED, tooltip="Limpar Conversa e reiniciar", on_click=self._handle_clear_chat, disabled=True)
         self.clear_chat_button_2 = ft.ElevatedButton(text="Encerrar Chat", icon=ft.Icons.DELETE_SWEEP_OUTLINED, tooltip="Limpar Conversa e reiniciar", on_click=self._handle_clear_chat, disabled=False)
         self.clear_chat_button = ft.Container(content = self.clear_chat_button_1)
@@ -104,7 +112,8 @@ class ChatViewContent(ft.Column):
         self.file_list_manager = self._initialize_file_list_manager()
         
         # Drawer de Configurações (agora um container lateral)
-        self.settings_drawer_component = ChatSettingsDrawer(self.page, session_key=KEY_SESSION_CHAT_SETTINGS) # Usa o drawer específico do Chat
+        self.settings_drawer_component = ChatSettingsDrawer(self.page, session_key=KEY_SESSION_CHAT_SETTINGS,
+                                                             on_settings_changed=self._update_active_model_button)
         self.settings_drawer_container = ft.Container(content=self.settings_drawer_component, padding=10, width=0, animate=ft.Animation(300, ft.AnimationCurve.EASE_OUT_QUART))
         
         self._build_layout()
@@ -147,6 +156,7 @@ class ChatViewContent(ft.Column):
                     self.metrics_button], wrap=True),
                 #ft.Row([ft.Container(expand=True)]),
                 ft.Row([
+                    self.active_model_button,
                     self.clear_chat_button,
                     self.settings_button], wrap=True)
             ],
@@ -251,6 +261,7 @@ class ChatViewContent(ft.Column):
         if not self.chat_session_id:
             self._start_new_chat_session()
 
+        self._update_active_model_button()
         self._update_button_states()
         self._update_processing_metadata_display()
         self._scroll_to_last_message()
@@ -797,6 +808,20 @@ class ChatViewContent(ft.Column):
         self.settings_drawer_container.update()
         self.settings_button.update()
 
+    def _update_active_model_button(self):
+        """
+        Atualiza o texto do TextButton que mostra o modelo LLM ativo para o chat.
+        """
+        settings = self.page.session.get(KEY_SESSION_CHAT_SETTINGS) or {}
+        model_name = settings.get("llm_model", "N/D")
+        
+        button = self.active_model_button
+        if isinstance(button, ft.TextButton):
+            button.text = f"Modelo: {model_name}"
+            if button.page and button.uid:
+                button.update()
+        logger.debug(f"Botão de modelo ativo (chat) atualizado para: {model_name}")
+
     def _handle_bubble_hover(self, e: ft.HoverEvent, toolbar: ft.Row, message_id: float):
         """Mostra ou esconde a barra de ferramentas de ações da mensagem."""
         if self.editing_message_id != message_id:
@@ -1252,7 +1277,7 @@ class ChatViewContent(ft.Column):
                 
         total_cost_usd = 0
         metric_rows = []
-        for metric in sorted(self.metrics_history, key=lambda x: x.get('timestamp'), reverse=True):
+        for metric in sorted(metrics_history, key=lambda x: x.get('timestamp'), reverse=True):
             cost_usd = metric.get('total_cost_usd', 0)
             cost_brl = cost_usd * cotacao_dolar_to_real
             total_cost_usd += cost_usd

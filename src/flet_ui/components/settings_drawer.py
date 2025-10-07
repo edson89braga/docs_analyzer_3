@@ -1,6 +1,6 @@
 # src\flet_ui\components\settings_drawer.py
 import flet as ft
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Callable
 from src.services.local_db_manager import LocalDBManager
 from src.flet_ui.components.components import show_snackbar, ManagedAlertDialog
 from src.flet_ui import theme
@@ -47,12 +47,13 @@ class BaseSettingsDrawer(ft.Column):
         "verbosity_level_dd":           "verbosity_level"
     }
     
-    def __init__(self, page: ft.Page, session_key: str):
+    def __init__(self, page: ft.Page, session_key: str, on_settings_changed: Optional[Callable] = None):
         super().__init__(scroll=ft.ScrollMode.ADAPTIVE, expand=True)
         self.page = page
         self.session_key = session_key
         self.db_manager = LocalDBManager()
         self.gui_controls: Dict[str, ft.Control] = {}
+        self.on_settings_changed = on_settings_changed
         
         # Controls fora das Sections:
         self.gui_controls["reset_settings_button"] = ft.ElevatedButton(
@@ -302,6 +303,8 @@ class BaseSettingsDrawer(ft.Column):
         self.page.session.set(self.session_key, new_settings)
         self.db_manager.save_setting(self.session_key, new_settings)
         logger.info(f"[DEBUG] Configurações da sessão atualizadas: {new_settings}")
+        if self.on_settings_changed:
+            self.on_settings_changed()        
         self._update_reset_button_visibility()
 
     def _get_settings_from_controls(self) -> Dict[str, Any]:
@@ -431,11 +434,11 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
     }
     DEFAULT_KEY = "flexivel"
     
-    def __init__(self, page: ft.Page, session_key: str):
+    def __init__(self, page: ft.Page, session_key: str, on_settings_changed: Optional[Callable] = None):
         self.page = page
         self.user_cache = get_user_cache(self.page) # chamar aqui antes de super()
         self.db_manager = LocalDBManager()
-        super().__init__(page, session_key=session_key)
+        super().__init__(page, session_key=session_key, on_settings_changed=on_settings_changed)
 
     def build_content(self):
         """
