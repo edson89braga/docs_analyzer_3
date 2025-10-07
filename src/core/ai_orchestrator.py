@@ -328,7 +328,7 @@ def get_embeddings_from_api(
         # Reinstanciar o cliente se a chave mudou ou se não existe
         if client_openai is None or (api_key and client_openai.api_key != api_key) :
              logger.debug("Instanciando ou reinstanciando o cliente OpenAI com a chave fornecida/ambiente.")
-             client_openai = OpenAI(api_key=key_to_use) # Usa a chave efetiva
+             client_openai = OpenAI(api_key=key_to_use, timeout=180, max_retries=2)
         
         for batch_de_textos, batch_de_indices_originais in batches_para_api:
             if not batch_de_textos: # Segurança, não deve acontecer se criar_batches for correta
@@ -534,11 +534,11 @@ def analyze_text_with_llm(
             # Reinstancia o cliente se ele não existir ou se a chave API mudou.
             if client_openai is None or client_openai.api_key != api_key:
                 logger.info(f"Instanciando ou atualizando cliente OpenAI com a nova chave API para o provedor '{provider}'.")
-                client_openai = OpenAI(api_key=api_key)
+                client_openai = OpenAI(api_key=api_key, timeout=180, max_retries=2)
             
             # Chamada à API de ChatCompletion
             if not client_openai:
-                client_openai = OpenAI()
+                client_openai = OpenAI(timeout=180, max_retries=2)
             
             if prompt_name == "PROMPT_UNICO_for_INITIAL_ANALYSIS":
                 prompt_list_dicts = prompts[prompt_name]
@@ -547,19 +547,35 @@ def analyze_text_with_llm(
                     modified_msg_dict = {key: value.replace("{input_text}", processed_text) for key, value in msg_dict.items()}
                     modified_prompt_list.append(modified_msg_dict)
 
+                # Converter a classe Pydantic para JSON schema
+                json_schema = output_formats[prompt_name].model_json_schema()
+                json_schema = output_formats[prompt_name].model_json_schema()
+                json_schema["required"] = list(json_schema["properties"].keys())
+                json_schema["additionalProperties"] = False
                 data_to_api = {
                     "model": model_name,
                     "input": modified_prompt_list, # Lista única
-                    "text_format": output_formats[prompt_name]
+                    "text": {
+                        "format": {
+                            "type": "json_schema",
+                            "name": output_formats[prompt_name].__name__,  
+                            "schema": json_schema,
+                            "strict": True
+                        }
+                    }                 
+                    # "text_format": output_formats[prompt_name]
                 }
                 if model_name.startswith("gpt-4"):
                     data_to_api.update({"temperature": temperature})
 
                 logger.info('[DEBUG]: Requisitando à API da Openai...')
-                response = client_openai.responses.parse(**data_to_api)
+                # response = client_openai.responses.parse(**data_to_api)
+                response = client_openai.responses.create(**data_to_api)
                 logger.info('[DEBUG]: Requisição concluída.')
-                final_response = response.output_text
-
+                
+                final_response_text = response.output_text
+                final_response = output_formats[prompt_name].model_validate_json(final_response_text)
+                
                 # Obter informações sobre o uso de tokens
                 cb = response.usage # callback
                 token_usage_info = {

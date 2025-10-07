@@ -194,12 +194,12 @@ def create_placeholder_content(page: ft.Page, module_name: str) -> ft.Control:
         duration=3000
     )
     return ft.Column( # Retorna um Column para consistência com outras content_creators
-        [
+        [   ft.Container(height=30),
+            ft.Icon(ft.Icons.CONSTRUCTION, size=50, opacity=0.5),
             ft.Text(f"{module_name}", style=ft.TextThemeStyle.HEADLINE_MEDIUM),
-            ft.Text("Esta funcionalidade será implementada em versões futuras."),
-            ft.Icon(ft.Icons.CONSTRUCTION, size=50, opacity=0.5)
+            ft.Text("Esta funcionalidade deve ser implementada em versões futuras."),
         ],
-        alignment=ft.MainAxisAlignment.CENTER,
+        alignment=ft.MainAxisAlignment.START,
         horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         expand=True,
         spacing=20

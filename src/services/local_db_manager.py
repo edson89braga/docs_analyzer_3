@@ -119,6 +119,20 @@ class LocalDBManager:
             logger.error(f"Erro ao salvar configuração '{key}': {e}")
             return False
 
+    def delete_setting(self, key: str) -> bool:
+        """Deleta uma configuração da tabela app_settings."""
+        if not self.conn: return False
+        try:
+            self.cursor.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+            self.conn.commit()
+            # Verifica se alguma linha foi de fato afetada
+            if self.cursor.rowcount > 0:
+                logger.debug(f"Configuração '{key}' deletada do banco de dados local.")
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Erro ao deletar configuração '{key}': {e}")
+            return False
+
     def get_setting(self, key: str) -> Optional[dict]:
         """Recupera uma configuração do banco de dados e a converte de JSON."""
         if not self.conn: return None

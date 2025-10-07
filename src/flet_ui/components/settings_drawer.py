@@ -204,7 +204,7 @@ class BaseSettingsDrawer(ft.Column):
         if cloud_defaults:
             self.page.session.set(self.session_key, cloud_defaults.copy())
             self.load_settings_into_controls()
-            self.save_settings_to_session() # Salva o reset no DB local também
+            self.save_settings_to_session(delete_on_local_db=True) # 
             show_snackbar(self.page, "Configurações resetadas para os padrões.", theme.COLOR_INFO)
         else:
             show_snackbar(self.page, "Padrões da nuvem não encontrados.", theme.COLOR_ERROR)
@@ -287,7 +287,7 @@ class BaseSettingsDrawer(ft.Column):
         """Handler genérico para salvar qualquer mudança."""
         self.save_settings_to_session()
 
-    def save_settings_to_session(self):
+    def save_settings_to_session(self, delete_on_local_db:bool = False):
         """
         Coleta os valores dos controles e os salva na sessão da página.
         Também persiste no banco de dados local.
@@ -301,7 +301,10 @@ class BaseSettingsDrawer(ft.Column):
 
         new_settings = self._get_settings_from_controls()
         self.page.session.set(self.session_key, new_settings)
-        self.db_manager.save_setting(self.session_key, new_settings)
+        if delete_on_local_db:
+            self.db_manager.delete_setting(self.session_key) # Apaga o registro do DB local
+        else:
+            self.db_manager.save_setting(self.session_key, new_settings)
         logger.info(f"[DEBUG] Configurações da sessão atualizadas: {new_settings}")
         if self.on_settings_changed:
             self.on_settings_changed()        

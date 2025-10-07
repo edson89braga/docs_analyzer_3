@@ -94,16 +94,16 @@ class formatted_initial_analysis(BaseModel):
     uf_fato: str
     municipio_fato: str
     tipo_local: str
-    valor_apuracao: float = Field(default=0.0) # Consta resposta padrão 0 se não aplicável
+    valor_apuracao: Optional[float] = 0.0 # Consta resposta padrão 0 se não aplicável
     tipificacao_penal: str
-    materia_especial: str = Field(default="Não aplicável")  # Consta resposta padrão se não aplicável
+    materia_especial: Optional[str] = "Não aplicável" # Consta resposta padrão se não aplicável
     area_atribuicao: str
     destinacao: str
     tipo_a_autuar: str
-    assunto_re: str = Field(default="Não aplicável") # Consta resposta padrão se não aplicável
+    assunto_re: Optional[str] = "Não aplicável" # Consta resposta padrão se não aplicável
     pessoas_envolvidas: Optional[List[str]]
     linha_do_tempo: Optional[List[str]]
-    observacoes: str = Field(default="")
+    observacoes: Optional[str] = ""
 
     justificativa_tipo_documento_origem:str = Field(default="Justificativa não fornecida pela IA.")
     justificativa_orgao_origem:         str = Field(default="Justificativa não fornecida pela IA.")
