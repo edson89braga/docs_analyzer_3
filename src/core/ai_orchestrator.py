@@ -16,14 +16,6 @@ import os
 from typing import Optional, Dict, Any, List, Tuple, Union
 from openai import OpenAI, AuthenticationError, APIError # Para tratamento específico de erros OpenAI
 
-# LangChain Imports
-from langchain_openai import ChatOpenAI
-#from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain # Não será mais usado diretamente com PromptTemplate simples
-from langchain_core.prompts import ChatPromptTemplate # Alterado de PromptTemplate
-from langchain_core.output_parsers import StrOutputParser # Para LCEL
-from langchain_community.callbacks.manager import get_openai_callback
-
 # Imports do Projeto
 from src.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 
@@ -589,93 +581,11 @@ def analyze_text_with_llm(
                 token_usage_info["total_cost_usd"] = calc_costs_llm_analysis(token_usage_info["input_tokens"], token_usage_info["cached_tokens"], token_usage_info["output_tokens"], 
                                                                              provider, model_name, loaded_llm_providers)
             elif prompt_name == "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS":
-                prompt_inicial_para_cache, main_tokens_count = _get_prompt_to_cache(prompts, "prompt_inicial_para_cache", "{input_text}", processed_text)
-
-                dados_segmentados = []
-                for prompt_group in prompts[prompt_name]:
-                    
-                    response = client_openai.responses.create(
-                        model=model_name,
-                        input=prompt_inicial_para_cache+prompt_group, 
-                        temperature=temperature,
-                        user="Assistant_NC_Analytics" 
-                    )
-                    dados_segmentados.append(response)
-                    #logger.debug(f"Final response for segment: {response.output_text}")
-                    logger.debug(f"Token usage info for segment: {response.usage}\n\n")
-                
-                parser_prompt_final = return_parse_prompt([response.output_text for response in dados_segmentados])
-                
-                response = client_openai.responses.parse(
-                    model=model_name,
-                    input=parser_prompt_final, 
-                    temperature=temperature,
-                    text_format=formatted_initial_analysis
-                )
-                dados_segmentados.append(response)
-                
-                #logger.debug(f"Final response for segment: {response.output_text}")
-                logger.debug(f"Token usage info for Last segment: {response.usage}\n\n")
-                
-                final_response = _get_final_response(dados_segmentados, formatted_initial_analysis)
-                
-                waited_cached_tokens=main_tokens_count*(len(dados_segmentados)-2) # O prompt inicial e final não aproveita cache
-                token_usage_info = _get_token_usage_info(dados_segmentados, waited_cached_tokens)
-
-                token_usage_info["total_cost_usd"] = calc_costs_llm_analysis(token_usage_info["input_tokens"], token_usage_info["cached_tokens"], token_usage_info["output_tokens"], 
-                                                                    provider, model_name, loaded_llm_providers)
-                # "successful_requests": 1,
+                # prompt_inicial_para_cache, main_tokens_count = _get_prompt_to_cache(prompts, "prompt_inicial_para_cache", "{input_text}", processed_text)
+                raise ValueError("Modo 'Prompt segmentado' ainda não implementado.")                
 
         elif provider == "lang_chain_openai":
-            prompt_dicts = prompts[prompt_name]
-            try:
-                prompt_messages_for_template: List[Tuple[str, str]] = []
-                for msg_dict in prompt_dicts:
-                    prompt_messages_for_template.append((msg_dict["role"], msg_dict["content"]))
-                chat_prompt_template = ChatPromptTemplate.from_messages(prompt_dicts)
-            except Exception as e:
-                logger.error(f"Erro ao criar ChatPromptTemplate a partir das mensagens do prompt '{prompt_name}': {e}", exc_info=True)
-                return None, None
-
-            logger.debug(f"Configurando LangChain com OpenAI. Modelo: {model_name}, Temp: {temperature}")
-
-            llm = ChatOpenAI(
-                model_name=model_name,
-                temperature=temperature,
-                openai_api_key=api_key # Passa a chave aqui  
-            )
-            
-            #prompt_template = PromptTemplate(input_variables=["input_text"], template=prompt_string)
-            #chain = LLMChain(llm=llm, prompt=prompt_template)
-            
-            # Construindo a cadeia com LCEL
-            chain = chat_prompt_template | llm | StrOutputParser()
-
-            # Usar o callback do OpenAI para capturar o uso de tokens
-            # A variável no dicionário de entrada DEVE corresponder a 'input_variables' do PromptTemplate
-            with get_openai_callback() as cb:
-                final_response = chain.invoke({"input_text": processed_text})
-                token_usage_info = {
-                    "input_tokens":  cb.prompt_tokens,
-                    "cached_tokens": cb.prompt_tokens_cached,
-                    "output_tokens": cb.completion_tokens,
-                    # "reasoning_tokens": cb.completion_tokens, # Não há detalhamento no callback do LangChain
-                    "total_tokens":  cb.total_tokens,
-                    "successful_requests": cb.successful_requests,
-                    "total_cost_usd": cb.total_cost
-                }
-                #logger.info(f"Uso de tokens (OpenAI): {token_usage_info}")
-            
-            # Processar o resultado da cadeia
-            if final_response is not None:
-                # A chave do resultado no dicionário é geralmente 'text' para LLMChain
-                final_response = final_response.get("text") if isinstance(final_response, dict) else final_response
-                if final_response:
-                    logger.info("Análise LLM concluída com sucesso.")
-                else:
-                    logger.error(f"Cadeia LangChain executada, mas a resposta não contém a chave 'text' esperada. Resultado: {final_response}")
-            else:
-                logger.error(f"Resultado inesperado da cadeia LangChain: {final_response}")
+            raise ValueError("Provedor LangChain OpenAI ainda não implementado.")
             
         # --- Adicionar blocos `elif provider == "azure":` etc. aqui no futuro ---
         # elif provider == "azure":

@@ -2,21 +2,8 @@
 
 import os
 import shutil
-from PyInstaller.utils.hooks import collect_all
 
-# --- Bloco 1: Coleta automática de dependências complexas ---
-# Esta seção usa os hooks do PyInstaller para encontrar todos os dados, binários e imports ocultos das bibliotecas de Machine Learning.
 
-print("Coletando dependências de 'transformers'...")
-transformers_datas, transformers_binaries, transformers_hiddenimports = collect_all('transformers')
-
-print("Coletando dependências de 'sentence_transformers'...")
-s_t_datas, s_t_binaries, s_t_hiddenimports = collect_all('sentence_transformers')
-
-print("Coletando dependências de 'torch'...")
-torch_datas, torch_binaries, torch_hiddenimports = collect_all('torch')
-
-print("Coleta de dependências de ML concluída.")
 
 # --- Bloco 2: Análise principal da aplicação ---
 a = Analysis(
@@ -29,9 +16,6 @@ a = Analysis(
         (r'C:\Users\edson.eab\AppData\Local\pypoetry\Cache\virtualenvs\docs-analyzer-3-DJ3PQuGu-py3.13\Lib\site-packages\flet_web\web', 'flet_web/web'),
         (r'C:\Users\edson.eab\AppData\Local\pypoetry\Cache\virtualenvs\docs-analyzer-3-DJ3PQuGu-py3.13\Lib\site-packages\tiktoken_ext', 'tiktoken_ext'),
         (r'C:\Users\edson.eab\AppData\Roaming\nltk_data', 'nltk_data'),
-        *transformers_datas,
-        *s_t_datas,
-        *torch_datas,
     ],
     hiddenimports=[
         # Imports que o PyInstaller pode não detectar automaticamente.
@@ -49,14 +33,6 @@ a = Analysis(
         'src.flet_ui.views.nc_analyze_view',
         'src.flet_ui.views.others_view',
         
-        # Imports ocultos coletados das bibliotecas de ML.
-        'sentence_transformers',
-        'tiktoken_ext.cl100k_base',
-        'jaraco.text',
-        *transformers_hiddenimports,
-        *s_t_hiddenimports,
-        *torch_hiddenimports,
-
         # Imports para garantir a robustez da validação JWT
         #'cryptography',
         #'cryptography.hazmat.backends.openssl',

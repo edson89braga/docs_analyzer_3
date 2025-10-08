@@ -11,7 +11,7 @@ logger.info(f"{start_time:.4f}s - Iniciando run.py")
 import os, sys
 
 if getattr(sys, 'frozen', False):
-    import multiprocessing, torch
+    import multiprocessing
 
     # Define variáveis de ambiente para desativar paralelismo interno do PyTorch e Tokenizers
     # Deve ser feito ANTES de qualquer outro import que possa usar PyTorch/Transformers.
@@ -19,9 +19,6 @@ if getattr(sys, 'frozen', False):
     os.environ["OMP_NUM_THREADS"] = "1"
     os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
-
-    # Configura o PyTorch para usar 1 thread, o que é mais seguro em ambientes 'frozen'
-    torch.set_num_threads(1)
 
     # Proteção para multiprocessamento em ambientes 'frozen' (Windows)
     # Deve ser chamado no escopo principal do script de entrada.
@@ -93,9 +90,7 @@ def setup_frozen_environment():
             bundle_dir = os.path.dirname(os.path.abspath(__file__))
         # Adiciona o diretório do bundle ao path:
         sys.path.insert(0, bundle_dir)
-        
-        os.environ["TOKENIZERS_PARALLELISM"] = "false"
-        
+                
 # ===============================================================================
 # 2. GERENCIAMENTO DE FLET_SECRET_KEY
 def get_or_create_secret_key():
@@ -254,23 +249,24 @@ def load_to_utils():
     start_time_l = perf_counter()
     logger.info("[DEBUG] Start func.: load_to_utils")
 
-    import unicodedata
-    import pdfplumber, fitz
+    import unicodedata  # Não deletar; serve para antecipar importações
+    import pdfplumber, fitz # 
     from unidecode import unidecode
-    from sentence_transformers import SentenceTransformer
-    
-    try:
-        model_name = 'all-MiniLM-L6-v2'
-        model_local_path = os.path.join(ASSETS_DIR, 'models', model_name)
-        logger.info(f"Pré-carregando modelo SentenceTransformer de: {model_local_path}")
-        app_cache.sentence_transformer_model = SentenceTransformer(model_local_path) # device='cpu'
-        logger.info("Modelo SentenceTransformer pré-carregado e disponível globalmente.")
-    except Exception as e:
-        logger.critical(f"FALHA CRÍTICA ao pré-carregar o modelo SentenceTransformer: {e}", exc_info=True)
-        # A aplicação pode continuar, mas a funcionalidade de vetorização falhará.
-    finally:
-        # CRUCIAL: Sinaliza que o processo de carregamento (com sucesso ou falha) terminou.
-        app_cache.model_loading_event.set()
+
+    # -> SentenceTransformer foi apartado para ml_engine.exe e será servido com FastAPI
+    # from sentence_transformers import SentenceTransformer
+    # try:
+    #     model_name = 'all-MiniLM-L6-v2'
+    #     model_local_path = os.path.join(ASSETS_DIR, 'models', model_name)
+    #     logger.info(f"Pré-carregando modelo SentenceTransformer de: {model_local_path}")
+    #     app_cache.sentence_transformer_model = SentenceTransformer(model_local_path) # device='cpu'
+    #     logger.info("Modelo SentenceTransformer pré-carregado e disponível globalmente.")
+    # except Exception as e:
+    #     logger.critical(f"FALHA CRÍTICA ao pré-carregar o modelo SentenceTransformer: {e}", exc_info=True)
+    #     # A aplicação pode continuar, mas a funcionalidade de vetorização falhará.
+    # finally:
+    #     # CRUCIAL: Sinaliza que o processo de carregamento (com sucesso ou falha) terminou.
+    #     app_cache.model_loading_event.set()
 
     execution_time_l = perf_counter() - start_time_l
     logger.info(f"[DEBUG] Finish func.: load_to_utils em {execution_time_l:.4f}s")
@@ -292,7 +288,31 @@ from src.flet_ui.views.others_view import create_session_taken_over_view
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
+    
+    if getattr(sys, 'frozen', False):
+        # --- Verificação de Atualização (executa antes de tudo) ---
+        from src.services.update_manager import handle_update_check
+        handle_update_check()
+
     initialize_app()
+
+    # --- Gerenciamento do Motor de ML (Vetorização) ---
+    from src.services.engine_manager import MLEngineManager
+    from src.settings import get_resource_path
+ 
+    # Define o caminho para o executável do motor de ML
+    # Em ambiente de desenvolvimento, pode apontar para o .py para testes
+    if getattr(sys, 'frozen', False):
+        engine_executable_path = get_resource_path('ml_engine/engine.exe')
+    else:
+        # Em dev, podemos rodar o .py diretamente com o interpretador python
+        # Isso facilita o debug. Certifique-se de que 'python' está no PATH.
+        # engine_executable_path = f"{sys.executable} ml_engine/engine.py" # Descomente para rodar o .py
+        engine_executable_path = get_resource_path('ml_engine/engine.exe') # Ou aponte para o .exe compilado
+ 
+    ml_engine_manager = MLEngineManager(engine_path=engine_executable_path)
+    # Inicia o motor de ML em segundo plano. O atexit no manager cuidará do shutdown.
+    ml_engine_manager.start()
 
     # Cleanups movido para função on_disconnect:
     # register_temp_files_cleanup(UPLOAD_TEMP_DIR)

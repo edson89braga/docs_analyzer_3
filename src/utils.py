@@ -7,11 +7,13 @@ logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando utils.py")
 print(f"[DEBUG] {start_time:.4f}s - Iniciando utils.py")
 
 import os, keyring, re
+from numpy import array as np_array
+from numpy import ndarray as np_ndarray
 from rich import print
 from typing import Union, Optional, Any, List
 
 from src.settings import (K_PROXY_ENABLED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, 
-                            K_PROXY_PASSWORD_SAVED, ASSETS_DIR)
+                            K_PROXY_PASSWORD_SAVED, ASSETS_DIR, ML_ENGINE_API_URL)
 
 # Dicionário para servir como cache no lado do servidor para dados pesados da sessão.
 # A chave será o ID da sessão do Flet (page.session_id).
@@ -282,6 +284,33 @@ def _initialize_heavy_utils():
     
     _utils_initialized = True
     logger.debug("Utilitários pesados (tiktoken, rouge, etc.) foram inicializados.")
+
+@with_proxy(skip_ssl_verify=False) # Usa proxy se configurado, mas não pula SSL para localhost
+def get_embeddings_from_engine(text_list: List[str]) -> np_ndarray:
+    """
+    Envia uma lista de textos para o serviço local ml_engine e retorna os embeddings.
+
+    Args:
+        text_list (List[str]): A lista de textos a serem vetorizados.
+
+    Returns:
+        np.ndarray: Um array numpy com os embeddings. Retorna array vazio em caso de erro.
+    """
+    import requests
+
+    if not text_list:
+        return np_array([])
+
+    try:
+        logger.info(f"Requisitando embeddings ao motor de ML para {len(text_list)} textos...")
+        response = requests.post(f"{ML_ENGINE_API_URL}/embed", json={"text_list": text_list}, timeout=180)
+        response.raise_for_status()
+        data = response.json()
+        return np_array(data.get("embeddings", []))
+    except requests.RequestException as e:
+        logger.error(f"Não foi possível conectar ao motor de ML em '{ML_ENGINE_API_URL}'. Erro: {e}", exc_info=True)
+        # Aqui, poderíamos tentar reiniciar o motor de ML no futuro.
+        return np_array([])
 
 ### ========================================================================================================
 import collections.abc

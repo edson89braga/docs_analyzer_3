@@ -1017,21 +1017,23 @@ class ChatViewContent(ft.Column):
                 else:
                     error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
                     logger.error(error_msg)
-                    hide_loading_overlay(self.page)
-                    show_snackbar(self.page, error_msg, color=theme.COLOR_ERROR)
-                    return
+                    self.page.run_thread(hide_loading_overlay, self.page)
+                    self.page.run_thread(show_snackbar, self.page, error_msg, color=theme.COLOR_ERROR)
+                    return # Aborta a thread
                 
                 import src.core.ai_orchestrator as ai_orchestrator
                 loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
 
                 ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
                                                                                      all_texts_list, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
+
+            elif vectorization_model == "all-MiniLM-L6-v2":
+                from src.utils import get_embeddings_from_engine
+                logger.info("Requisitando get_embeddings_from_engine ...")
+                ready_embeddings = get_embeddings_from_engine(all_texts_list)
+                logger.info("Requisição concluída.")
                 
-                emb_vectors, tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list, 
-                                                                                                model_embedding=vectorization_model, 
-                                                                                                ready_embeddings=ready_embeddings)
-            else:
-                emb_vectors, tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list)
+            emb_vectors, tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list, ready_embeddings=ready_embeddings)
             
              
             if tokens_embeddings:

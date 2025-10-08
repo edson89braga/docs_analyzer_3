@@ -377,6 +377,8 @@ def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
     """
     Retorna a instância do modelo SentenceTransformer que foi pré-carregado.
     Espera pelo carregamento se ele ainda não estiver concluído.
+
+    -> Função descontinuada com a migração do sentence_transformer_model para api localhost.
     """
     # Espera que o evento seja sinalizado. Timeout para evitar bloqueio infinito.
     is_ready = app_cache.model_loading_event.wait(timeout=120.0)
@@ -395,6 +397,8 @@ def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
 def get_vectors(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2') -> np_ndarray:
     """
     Gera vetores de embedding para uma lista de textos usando um modelo SentenceTransformer.
+
+    -> Função descontinuada com a migração do sentence_transformer_model para api localhost.
 
     Args:
         pages_texts (List[str]): Lista de textos para os quais gerar embeddings.
@@ -555,8 +559,6 @@ def print_text_intelligibility(texts_normalized: list[tuple[int, str]]):
                 logger.info(f'Página original {p_idx+1} considerada ininteligível ({lang}) / Qtde caracteres: {len(text)}')
             except LangDetectException:
                 logger.info(f'Página original {p_idx+1} considerada ininteligível (não detectado) / Qtde caracteres: {len(text)}')
-
-import networkx as nx
 
 class PDFDocumentAnalyzer:
     """
@@ -742,7 +744,7 @@ class PDFDocumentAnalyzer:
                                             model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: np_array = None, preprocess_text_advanced: bool = False, 
                                             ) -> Dict[str, Dict[str, Any]]:
         
-        assert model_embedding in ['all-MiniLM-L6-v2', 'tfidf_vectorizer', 'text-embedding-3-small'], "Modelo de embeddings inválido. Deve ser 'all-MiniLM-L6-v2' ou 'tfidf_vectorizer'."
+        # assert model_embedding in ['all-MiniLM-L6-v2', 'tfidf_vectorizer', 'text-embedding-3-small'], "Modelo de embeddings inválido. Deve ser 'all-MiniLM-L6-v2' ou 'tfidf_vectorizer'."
         
         if preprocess_text_advanced:
             all_texts_for_analysis_list = [function_preprocess_text_advanced(text) for text in all_texts_for_analysis_list]
@@ -753,10 +755,11 @@ class PDFDocumentAnalyzer:
             #similarity_matrix_combined = analyze_text_similarity(all_texts_for_storage_combined, model_embedding=model_embedding, ready_embeddings=ready_embeddings)
             #tf_idf_scores_array_combined = calculate_text_relevance_tfidf(all_texts_for_storage_combined)
             
-            if ready_embeddings is not None:
+            if ready_embeddings is not None and ready_embeddings.size > 0:
                 assert len(ready_embeddings) == len(all_texts_for_analysis_list)
                 embedding_vectors_combined = ready_embeddings
             elif model_embedding == 'all-MiniLM-L6-v2':
+                raise ValueError("Função get_vectors descontinuada; PDF_Processor deve receber os vetores prontos.")
                 embedding_vectors_combined = get_vectors(all_texts_for_analysis_list, model_embedding=model_embedding)
             else: # 'tfidf_vectorizer'
                 # Deve ser None para não causar erro no método filter_and_classify_pages ao comandar get_similarity_matrix
@@ -951,6 +954,7 @@ class PDFDocumentAnalyzer:
                 combined_processed_page_data[global_page_key]['semelhantes'] = current_group_similar_global_keys
 
         elif mode_main_filter == 'get_pages_among_similars_graphs':
+            import networkx as nx
             #  Agrupa páginas semelhantes usando um grafo de similaridade e componentes conectados.
             pages_assigned_to_group = set() # Evitar auto-loops e duplicatas de arestas
             # Construir o grafo

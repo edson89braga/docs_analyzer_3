@@ -2165,9 +2165,15 @@ class InternalAnalysisController:
                 loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
                 ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
                                                                                      all_texts_to_loop, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
- 
+
+            elif vectorization_model == "all-MiniLM-L6-v2":
+                from src.utils import get_embeddings_from_engine
+                logger.info("Requisitando get_embeddings_from_engine ...")
+                ready_embeddings = get_embeddings_from_engine(all_texts_to_loop)
+                logger.info("Requisição concluída.")
+
             embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.pdf_analyzer.get_similarity_and_tfidf_score_docs(
-                                                                            all_texts_to_loop, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
+                                                                            all_texts_to_loop, ready_embeddings=ready_embeddings)
             
             point_time = perf_counter()
             self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
