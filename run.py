@@ -296,23 +296,19 @@ if __name__ == "__main__":
 
     initialize_app()
 
-    # --- Gerenciamento do Motor de ML (Vetorização) ---
+    # --- Gerenciamento do Motor de ML (Vetorização) (em background) ---
     from src.services.engine_manager import MLEngineManager
     from src.settings import get_resource_path
  
-    # Define o caminho para o executável do motor de ML
-    # Em ambiente de desenvolvimento, pode apontar para o .py para testes
     if getattr(sys, 'frozen', False):
         engine_executable_path = get_resource_path('ml_engine/engine.exe')
     else:
-        # Em dev, podemos rodar o .py diretamente com o interpretador python
-        # Isso facilita o debug. Certifique-se de que 'python' está no PATH.
-        # engine_executable_path = f"{sys.executable} ml_engine/engine.py" # Descomente para rodar o .py
-        engine_executable_path = get_resource_path('ml_engine/engine.exe') # Ou aponte para o .exe compilado
+        engine_executable_path = get_resource_path('ml_engine/engine.exe')
  
     ml_engine_manager = MLEngineManager(engine_path=engine_executable_path)
-    # Inicia o motor de ML em segundo plano. O atexit no manager cuidará do shutdown.
-    ml_engine_manager.start()
+    # Inicia o motor de ML em uma thread separada para não bloquear a UI do Flet
+    ml_engine_thread = threading.Thread(target=ml_engine_manager.start, daemon=True)
+    ml_engine_thread.start()
 
     # Cleanups movido para função on_disconnect:
     # register_temp_files_cleanup(UPLOAD_TEMP_DIR)
@@ -324,7 +320,7 @@ if __name__ == "__main__":
 
     execution_time = perf_counter() - start_time
     logger.info(f"[DEBUG] Carregado RUN em {execution_time:.4f}s")
-
+    
     original_main_function = main
 
     def shutdown_server(cleanup_func):
@@ -340,27 +336,35 @@ if __name__ == "__main__":
         global _ACTIVE_SESSION_ID, _SHUTDOWN_TIMER
 
         # Primeiro, chama o main original para que ele configure page.on_disconnect
+        # Isso anexa a lógica de limpeza de arquivos temporários ao evento on_disconnect.
         original_main_function(page)
         
         # Agora, captura a função on_disconnect configurada por app.py
         original_on_disconnect_from_app = page.on_disconnect
-        def on_page_connect(e):
+
+        with _SESSION_LOCK:
+            # A primeira vez que este wrapper é chamado, define a sessão principal.
+            if _ACTIVE_SESSION_ID is None:
+                _ACTIVE_SESSION_ID = page.session_id
+                logger.info(f"Sessão principal definida: {_ACTIVE_SESSION_ID}")
+            # Se uma sessão principal já existe e esta é uma sessão diferente, é uma duplicata.
+            elif page.session_id != _ACTIVE_SESSION_ID:
+                logger.warning(f"Sessão duplicada detectada ({page.session_id}). Redirecionando.")
+                # Importante: A view precisa ser renderizada antes de `page.go` funcionar
+                page.views.append(create_session_taken_over_view(page))
+                page.update()
+                page.go("/session-taken-over")
+                return # Interrompe a configuração dos handlers de disconnect para esta aba
+
+        def on_page_connect(e): # Este handler agora serve apenas para cancelar o shutdown em um F5
             global _ACTIVE_SESSION_ID, _SHUTDOWN_TIMER
             with _SESSION_LOCK:
                 # Se uma nova conexão chega (F5), cancela qualquer desligamento agendado.
-                if _SHUTDOWN_TIMER is not None:
+                if _SHUTDOWN_TIMER is not None and page.session_id == _ACTIVE_SESSION_ID:
                     _SHUTDOWN_TIMER.cancel()
                     _SHUTDOWN_TIMER = None
                     logger.info("Desligamento do servidor cancelado por nova conexão (refresh).")
 
-                if _ACTIVE_SESSION_ID is None:
-                    # Esta é a primeira sessão, torna-se a mestra.
-                    _ACTIVE_SESSION_ID = page.session_id
-                    logger.info(f"Sessão principal definida: {_ACTIVE_SESSION_ID}")
-                elif page.session_id != _ACTIVE_SESSION_ID:
-                    # Já existe uma sessão ativa, esta é uma duplicata.
-                    logger.warning(f"Sessão duplicada detectada ({page.session_id}). Redirecionando.")
-                    page.go("/session-taken-over")
         page.on_connect = on_page_connect
 
         def master_session_disconnect(e):
@@ -374,7 +378,7 @@ if __name__ == "__main__":
                     _SHUTDOWN_TIMER = threading.Timer(SHUTDOWN_GRACE_PERIOD, shutdown_server, args=[original_on_disconnect_from_app])
                     _SHUTDOWN_TIMER.start()
                 else:
-                    logger.info(f"Sessão inativa {page.session_id} desconectada. Servidor permanece ativo.")                    
+                    logger.info(f"Sessão inativa/duplicada {page.session_id} desconectada. Servidor permanece ativo.")                    
         page.on_disconnect = master_session_disconnect
 
     # Configura e inicia a aplicação Flet

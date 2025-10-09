@@ -10,6 +10,7 @@ from tkinter import messagebox
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Dict
+from time import sleep
 
 # packaging é uma biblioteca robusta para comparar versões (ex: "1.10.0" > "1.9.0")
 # É uma dependência do Flet, então já deve estar disponível.
@@ -108,6 +109,7 @@ def _show_update_dialog(status: UpdateStatus) -> bool:
     user_choice = False
     try:
         if status.is_forced:
+            title = "Atualização Obrigatória"
             message = (
                 f"Sua versão ({APP_VERSION}) está desatualizada e precisa ser atualizada para a v{version}.\n\n"
                 f"Notas da versão:\n{notes}\n\nA aplicação será fechada para iniciar a atualização."
@@ -115,6 +117,7 @@ def _show_update_dialog(status: UpdateStatus) -> bool:
             messagebox.showwarning(title, message)
             user_choice = True  # A atualização é a única opção
         else:
+            title = "Atualização Disponível"
             message = (
                 f"Uma nova versão (v{version}) está disponível!\n\n"
                 f"Notas da versão:\n{notes}\n\nDeseja atualizar agora?"
@@ -163,7 +166,10 @@ def run_updater(update_info: Dict):
         ]
         
         logger.info(f"Iniciando o atualizador com os seguintes argumentos: {args}")
-        subprocess.Popen(args)
+        # No Windows, usar DETACHED_PROCESS desvincula o updater do processo pai,
+        # permitindo que o pai encerre sem afetar o filho.
+        creationflags = subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0
+        subprocess.Popen(args, creationflags=creationflags)
 
         logger.info("Aplicação principal encerrando para permitir a atualização...")
         sys.exit(0)
@@ -182,18 +188,22 @@ def handle_update_check():
     """
     # Só executa a verificação se estivermos em um ambiente compilado
     if not getattr(sys, 'frozen', False):
-        logger.debug("Verificação de atualização pulada (ambiente de desenvolvimento).")
+        logger.info("[DEBUG] Verificação de atualização pulada (ambiente de desenvolvimento).")
         return
 
     update_status = check_for_updates()
 
     if update_status.update_available:
+        logging.info("Atualização disponível. Mostrando diálogo para o usuário...")
         user_wants_to_update = _show_update_dialog(update_status)
+        logging.info(f"Escolha do usuário: Atualizar = {user_wants_to_update}")
         if user_wants_to_update:
+            logging.info("Usuário confirmou a atualização. Chamando run_updater...")
             run_updater(update_status.update_info)
         elif update_status.is_forced:
             # Se a atualização é forçada e o usuário fechou o diálogo (ou clicou não em um askyesno),
             # a aplicação deve fechar.
             logger.info("Usuário não prosseguiu com a atualização obrigatória. Encerrando aplicação.")
-            sys.exit(0)
+            sleep(1)
+            os._exit(0) # Força o encerramento de todo o processo
 

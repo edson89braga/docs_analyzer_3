@@ -13,9 +13,14 @@ import tkinter as tk
 from tkinter import messagebox
 from typing import List
 
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 # --- Configuração do Logging ---
 # Loga para o console e para um arquivo para facilitar a depuração
-LOG_FILE = "updater.log"
+LOG_FILE = os.path.join(BASE_DIR, "updater.log")
 
 # Limpa o log antigo se existir
 if os.path.exists(LOG_FILE):
@@ -196,5 +201,5 @@ def main():
 if __name__ == "__main__":
     main()
 
-# >>> pyinstaller --name updater --onefile --add-data "C:/path/to/your/venv/Lib/site-packages/psutil;psutil" updater.py
+# >>> pyinstaller --name updater --onefile --add-data "C:\Users\edson.eab\AppData\Local\pypoetry\Cache\virtualenvs\docs-analyzer-3-DJ3PQuGu-py3.13\Lib\site-packages\psutil;psutil" updater.py
 

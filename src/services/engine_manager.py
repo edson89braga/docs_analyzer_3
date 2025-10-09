@@ -52,17 +52,19 @@ class MLEngineManager:
             # Aguarda o servidor ficar pronto
             self._wait_for_server()
 
-        except Exception as e:
+        except (OSError, Exception) as e:
             logger.error(f"Falha ao iniciar o processo do motor de ML: {e}", exc_info=True)
             self.process = None
 
     def _wait_for_server(self, timeout: int = 180):
         """Aguarda o servidor da API se tornar disponível."""
+        logger.info(f"Aguardando o servidor de ML ficar pronto (timeout: {timeout}s)...")
         start_time = time.time()
         while time.time() - start_time < timeout:
             if self.is_running():
                 logger.info(f"Servidor de ML está pronto e respondendo em {self.api_url}.")
                 return
+            logger.debug(f"Aguardando servidor... {int(time.time() - start_time)}s")
             time.sleep(1)
         
         logger.error(f"Timeout! O servidor de ML não respondeu em {timeout} segundos.")
