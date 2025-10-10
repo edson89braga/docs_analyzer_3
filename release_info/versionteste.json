@@ -2,8 +2,8 @@
   "app": {
     "version": "9.9",
     "release_date": "2025-10-01",
-    "download_url": "https://github.com/edson89braga/docs_analyzer_3/releases/download/vTeste/test_updater.zip",
-    "filename": "test_updater.zip",
+    "download_url": "https://github.com/edson89braga/docs_analyzer_3/releases/download/vTeste/test_updater_app.zip",
+    "filename": "test_updater_app.zip",
     "notes": "Esta é uma atualização de teste com novas funcionalidades!"
   },
   "force_update_after_days": 7
