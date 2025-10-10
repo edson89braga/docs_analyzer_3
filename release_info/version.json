@@ -7,7 +7,7 @@
     "notes": "Correções na interface e melhorias de performance."
   },
   "ml_engine": {
-    "version": "0.1",
+    "version": "1.0",
     "release_date": "2025-10-01",
     "download_url": "https://drive.google.com/uc?export=download&id=SEU_FILE_ID_DO_ENGINE_ZIP",
     "filename": "ml_engine_v0.1.zip",
