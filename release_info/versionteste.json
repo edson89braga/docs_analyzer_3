@@ -1,7 +1,7 @@
 {
   "app": {
-    "version": "6.0",
-    "release_date": "2025-10-01",
+    "version": "6.1",
+    "release_date": "2025-10-09",
     "download_url": "https://github.com/edson89braga/docs_analyzer_3/releases/download/vTeste/test_updater_app.zip",
     "filename": "test_updater_app.zip",
     "notes": "Esta é uma atualização de teste com novas funcionalidades!"
