@@ -188,7 +188,7 @@ CHAT_PROMPTS_DEFAULTS_DOC_ID = "chat_prompts_defaults"
 # -----------------------------------------------------------------------------------------------------------------
 
 # --- Configurações do Atualizador Automático ---
-VERSION_INFO_URL = "https://drive.google.com/uc?export=download&id=1v574-XfMtYNvPXqIe-dp_41gyO9XhVKP"   # json teste
+VERSION_INFO_URL = "https://raw.githubusercontent.com/edson89braga/docs_analyzer_3/refs/heads/master/release_info/versionteste.json"   # json teste
 # VERSION_INFO_URL = "https://drive.google.com/uc?export=download&id=1ydE19l4bh3ZLLm5tNwHaFffxK8ZtCNmn" # json original
 
 # --- Configurações do Motor de ML Local ---

@@ -113,3 +113,6 @@ uploads_temp/
 
 test_updater_app2.py
 .gitignore
+test_updater_app.py
+test_updater_app.spec
+test_updater2.spec

@@ -3,7 +3,7 @@ import argparse
 import logging
 import os, sys, tempfile
 import requests, zipfile, re
-import shutil, time, gdown
+import shutil, time
 import subprocess, psutil
 import tkinter as tk
 from tkinter import messagebox
@@ -71,17 +71,26 @@ def kill_process(pid: int):
 
     logging.warning(f"Não foi possível encerrar o processo principal (PID: {pid}) após múltiplas tentativas, pode já ter sido fechado.")
 
-def download_file(url: str, dest_path: str):
+def download_file(url: str, dest_path: str, chunk_size=8192):
     """Baixa um arquivo da URL, exibindo o progresso no console."""
     logging.info(f"Baixando atualização de: {url}")
     try:
-        # Usa a biblioteca gdown, que é especializada em baixar do Google Drive
-        gdown.download(url, dest_path, quiet=False, fuzzy=True)
+        with requests.get(url, stream=True, timeout=60) as r:
+            r.raise_for_status()
+            total_size = int(r.headers.get('content-length', 0))
+            downloaded = 0
+            with open(dest_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=chunk_size):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if total_size > 0:
+                        progress = (downloaded / total_size) * 100
+                        print(f"\rProgresso: {downloaded // 1024} KB / {total_size // 1024} KB ({progress:.1f}%)", end="")
+        print("\nDownload concluído.")
         logging.info(f"Arquivo salvo em: {dest_path}")
-    except Exception as e:
-        error_msg = f"Erro ao baixar o arquivo com gdown: {e}"
-        logging.critical(error_msg, exc_info=True)
-        show_error_and_exit(error_msg)
+
+    except requests.RequestException as e:
+        show_error_and_exit(f"Erro de rede ao baixar a atualização: {e}")
 
 def perform_safe_update(zip_path: str, target_dir: str):
     """
