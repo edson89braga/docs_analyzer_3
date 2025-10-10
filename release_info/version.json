@@ -1,7 +1,7 @@
 {
   "app": {
     "version": "0.5",
-    "release_date": "2025-10-01",
+    "release_date": "2025-10-09",
     "download_url": "https://drive.google.com/uc?export=download&id=SEU_FILE_ID_DO_APP_ZIP",
     "filename": "opera_v0.5.zip",
     "notes": "Correções na interface e melhorias de performance."
