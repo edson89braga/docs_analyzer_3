@@ -1,16 +1,16 @@
 {
   "app": {
-    "version": "0.3",
+    "version": "0.2",
     "release_date": "2025-10-01",
     "download_url": "https://drive.google.com/uc?export=download&id=SEU_FILE_ID_DO_APP_ZIP",
-    "filename": "opera_v0.5.zip",
+    "filename": "opera_v0.2.zip",
     "notes": "Correções na interface e melhorias de performance."
   },
   "ml_engine": {
-    "version": "1.1",
+    "version": "1.0",
     "release_date": "2025-10-01",
-    "download_url": "https://drive.google.com/uc?export=download&id=SEU_FILE_ID_DO_ENGINE_ZIP",
-    "filename": "ml_engine_v0.1.zip",
+    "download_url": "https://github.com/edson89braga/docs_analyzer_3/releases/download/v0.2/ml_engine_v1.0.zip",
+    "filename": "ml_engine_v1.0.zip",
     "notes": "Versão inicial do motor de machine learning (vetorização)."
   },
   "force_update_after_days": 7
