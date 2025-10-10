@@ -1,3 +1,0 @@
-# teste_interativo.py
-
-...
