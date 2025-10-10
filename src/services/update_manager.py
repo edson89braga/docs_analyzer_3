@@ -80,7 +80,7 @@ def check_for_updates() -> UpdateStatus:
             return UpdateStatus(update_available=True, is_forced=is_forced, update_info=app_info)
         else:
             logger.info("A aplicação está atualizada.")
-            return UpdateStatus(update_available=False)
+            return UpdateStatus(update_available=False, update_info=app_info)
 
     except requests.RequestException as e:
         msg = f"Não foi possível verificar atualizações (erro de rede): {e}"

@@ -1,14 +1,10 @@
 # updater.py
 import argparse
 import logging
-import os
-import sys
-import requests
-import zipfile
-import shutil
-import time
-import subprocess
-import psutil
+import os, sys, tempfile
+import requests, zipfile, re
+import shutil, time, gdown
+import subprocess, psutil
 import tkinter as tk
 from tkinter import messagebox
 from typing import List
@@ -45,44 +41,47 @@ def show_error_and_exit(message: str):
     sys.exit(1)
 
 def kill_process(pid: int):
-    """Encerra o processo da aplicação principal pelo seu PID."""
-    try:
-        if psutil.pid_exists(pid):
-            logging.info(f"Encerrando a aplicação principal (PID: {pid})...")
-            process = psutil.Process(pid)
-            process.terminate()
-            process.wait(timeout=12)  # Espera até 12 segundos para o processo encerrar
-            logging.info("Aplicação principal encerrada.")
-    except psutil.NoSuchProcess:
-        logging.warning(f"Processo com PID {pid} não encontrado. Pode já ter sido fechado.")
-    except psutil.TimeoutExpired:
-        logging.warning(f"Timeout ao esperar o processo {pid} encerrar. Forçando o encerramento (kill)...")
-        psutil.Process(pid).kill()
-    except Exception as e:
-        logging.error(f"Erro ao tentar encerrar o processo principal: {e}")
-        # Continua mesmo assim, pois o processo pode já ter sido encerrado
+    """Aguarda um pouco e encerra o processo da aplicação principal pelo seu PID."""
+    # Adiciona uma pequena pausa para garantir que o processo pai tenha tempo de se registrar
+    # antes de tentarmos encerrá-lo, especialmente em modo de desenvolvimento.
+    time.sleep(1) 
+
+    for attempt in range(3): # Tenta por até 3 segundos
+        try:
+            if psutil.pid_exists(pid):
+                logging.info(f"Tentativa {attempt + 1}: Encerrando a aplicação principal (PID: {pid})...")
+                process = psutil.Process(pid)
+                process.terminate()
+                process.wait(timeout=5)
+                logging.info("Aplicação principal encerrada com sucesso.")
+                return # Sai da função se teve sucesso
+            else:
+                logging.info("Processo principal já não está mais em execução.")
+                return # Sai da função se o processo já terminou
+        except psutil.NoSuchProcess:
+            logging.warning(f"Processo com PID {pid} não encontrado na tentativa {attempt + 1}. Provavelmente já foi fechado.")
+            return # Processo já não existe
+        except psutil.TimeoutExpired:
+            logging.warning(f"Timeout ao esperar o processo {pid} encerrar. Forçando (kill)...")
+            psutil.Process(pid).kill()
+            return
+        except Exception as e:
+            logging.error(f"Erro ao tentar encerrar o processo principal: {e}")
+        time.sleep(1) # Espera 1 segundo antes de tentar novamente
+
+    logging.warning(f"Não foi possível encerrar o processo principal (PID: {pid}) após múltiplas tentativas, pode já ter sido fechado.")
 
 def download_file(url: str, dest_path: str):
     """Baixa um arquivo da URL, exibindo o progresso no console."""
     logging.info(f"Baixando atualização de: {url}")
     try:
-        with requests.get(url, stream=True, timeout=60) as r:
-            r.raise_for_status()
-            total_size = int(r.headers.get('content-length', 0))
-            block_size = 8192
-            downloaded = 0
-            with open(dest_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=block_size):
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if total_size > 0:
-                        progress = (downloaded / total_size) * 100
-                        # \r move o cursor para o início da linha
-                        print(f"\rProgresso: {downloaded // 1024} KB / {total_size // 1024} KB ({progress:.1f}%)", end="")
-        print("\nDownload concluído.")
+        # Usa a biblioteca gdown, que é especializada em baixar do Google Drive
+        gdown.download(url, dest_path, quiet=False, fuzzy=True)
         logging.info(f"Arquivo salvo em: {dest_path}")
-    except requests.RequestException as e:
-        show_error_and_exit(f"Erro de rede ao baixar a atualização: {e}")
+    except Exception as e:
+        error_msg = f"Erro ao baixar o arquivo com gdown: {e}"
+        logging.critical(error_msg, exc_info=True)
+        show_error_and_exit(error_msg)
 
 def perform_safe_update(zip_path: str, target_dir: str):
     """
@@ -93,19 +92,27 @@ def perform_safe_update(zip_path: str, target_dir: str):
     4. Limpa os backups se tudo der certo.
     5. Tenta reverter em caso de falha.
     """
-    temp_extract_dir = os.path.join(target_dir, "_update_temp")
-    if os.path.exists(temp_extract_dir):
-        shutil.rmtree(temp_extract_dir)
-    os.makedirs(temp_extract_dir)
+    # Usa o diretório temporário do sistema para extração
+    temp_extract_dir = tempfile.mkdtemp(prefix="update_")
 
-    logging.info(f"Extraindo '{zip_path}' para '{temp_extract_dir}'...")
+    logging.info(f"Diretório temporário de extração criado em: {temp_extract_dir}")
+    logging.info(f"Extraindo '{os.path.basename(zip_path)}' para o diretório temporário...")
+
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(temp_extract_dir)
     logging.info("Extração concluída.")
 
-    # A pasta extraída geralmente tem o nome do zip ou um nome de build.
-    # Vamos assumir que há apenas uma pasta dentro do diretório de extração.
-    source_items_dir = os.path.join(temp_extract_dir, os.listdir(temp_extract_dir)[0])
+    # --- Lógica para encontrar o diretório de origem ---
+    extracted_items = os.listdir(temp_extract_dir)
+    # Verifica se o ZIP continha uma única pasta raiz
+    if len(extracted_items) == 1 and os.path.isdir(os.path.join(temp_extract_dir, extracted_items[0])):
+        # Se sim, os arquivos de origem estão dentro dessa pasta
+        source_items_dir = os.path.join(temp_extract_dir, extracted_items[0])
+        logging.info(f"Conteúdo do ZIP extraído de uma pasta raiz: {source_items_dir}")
+    else:
+        # Se não, os arquivos de origem estão na raiz do diretório de extração
+        source_items_dir = temp_extract_dir
+        logging.info(f"Conteúdo do ZIP extraído diretamente para a raiz: {source_items_dir}")
 
     backup_files: List[str] = []
     try:
@@ -177,9 +184,9 @@ def main():
         kill_process(int(args.pid))
         
         # 2. Baixar o arquivo de atualização
-        temp_dir = os.path.join(args.target_dir, "_updater_downloads")
-        os.makedirs(temp_dir, exist_ok=True)
-        zip_path = os.path.join(temp_dir, args.filename)
+        # Usa o diretório temporário do sistema para downloads
+        temp_download_dir = tempfile.mkdtemp(prefix="updater_dl_")
+        zip_path = os.path.join(temp_download_dir, args.filename)
         download_file(args.url, zip_path)
 
         # 3. Executar a atualização segura
@@ -194,12 +201,13 @@ def main():
         show_error_and_exit(f"Um erro inesperado ocorreu durante a atualização: {e}")
     finally:
         # Limpeza final
-        if 'temp_dir' in locals() and os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+        if 'temp_download_dir' in locals() and os.path.exists(temp_download_dir):
+            shutil.rmtree(temp_download_dir, ignore_errors=True)
         logging.info("--- ATUALIZADOR FINALIZADO ---")
 
 if __name__ == "__main__":
     main()
+    # = input("Pressione qualquer tecla para sair...")
 
 # >>> pyinstaller --name updater --onefile --add-data "C:\Users\edson.eab\AppData\Local\pypoetry\Cache\virtualenvs\docs-analyzer-3-DJ3PQuGu-py3.13\Lib\site-packages\psutil;psutil" updater.py
 

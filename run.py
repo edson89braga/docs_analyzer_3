@@ -326,6 +326,11 @@ if __name__ == "__main__":
     def shutdown_server(cleanup_func):
         """Função que de fato encerra o processo do servidor."""
         logger.info(f"Janela de tolerância de {SHUTDOWN_GRACE_PERIOD}s expirou. Desligando o servidor.")
+
+        # --- Encerramento do Motor de ML ---
+        # Chama o método stop() explicitamente antes de finalizar a aplicação principal.
+        ml_engine_manager.stop()
+
         # Executa a limpeza da sessão Flet que foi capturada.
         if cleanup_func:
             cleanup_func(None)

@@ -2,12 +2,10 @@
 
 
 a = Analysis(
-    ['test_updater_app.py'],
+    ['test_updater_app2.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        (r'C:\Users\edson.eab\AppData\Local\pypoetry\Cache\virtualenvs\docs-analyzer-3-DJ3PQuGu-py3.13\Lib\site-packages\flet_web\web', 'flet_web/web')
-    ],
+    datas=[(r'C:\Users\edson.eab\AppData\Local\pypoetry\Cache\virtualenvs\docs-analyzer-3-DJ3PQuGu-py3.13\Lib\site-packages\flet_web\web', 'flet_web/web')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -24,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='test_updater',
+    name='test_updater2',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

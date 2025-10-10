@@ -965,7 +965,7 @@ def check_app_version() -> None:
 
         if not latest_version:
             logger.warning("Não foi possível encontrar o campo 'latest_version' no Firestore. Permitindo execução.")
-            return
+            return True
 
         logger.debug(f"Versão mais recente na nuvem: {latest_version}")
 
@@ -983,9 +983,10 @@ def check_app_version() -> None:
                 f"A versão necessária é a {latest_version}.\n\n"
                 "Por favor, contate o administrador para obter a nova versão."
             )
-            sys.exit(1)
+            return False
 
         logger.debug("Versão da aplicação compatível.")
+        return True
 
     except requests.exceptions.RequestException as e:
         logger.warning(f"Não foi possível verificar a versão do aplicativo online: {e}. Permitindo a execução para modo offline.")
