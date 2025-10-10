@@ -2,8 +2,8 @@
   "app": {
     "version": "9.9",
     "release_date": "2025-10-01",
-    "download_url": "https://drive.google.com/uc?export=download&id=SEU_FILE_ID_DO_APP_ZIP",
-    "filename": "opera_v0.5.zip",
+    "download_url": "https://drive.google.com/uc?export=download&id=1LiCAQi_k5Rrg7TsSCL8yTUHFQv8RAYsj",
+    "filename": "test_updater.zip",
     "notes": "Esta é uma atualização de teste com novas funcionalidades!"
   },
   "force_update_after_days": 7
