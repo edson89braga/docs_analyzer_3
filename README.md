@@ -19,7 +19,7 @@ O objetivo principal é reduzir o tempo de análise preliminar de documentos de 
 A plataforma possui uma arquitetura desacoplada, composta por três componentes principais:
 
 1.  **Aplicação Principal (Frontend/UI):** Desenvolvida com **Flet**, é o ponto de entrada para o usuário (`run.py`). Ela gerencia a interface, o estado da sessão e orquestra a comunicação com os outros componentes. Roda como uma aplicação web local no navegador do usuário.
-2.  **Motor de ML (Serviço Local):** Um servidor **FastAPI** (`ml_engine/engine.exe`) que expõe endpoints para tarefas de Machine Learning pesadas, como a geração de embeddings de texto. A aplicação principal gerencia o ciclo de vida (início/fim) deste serviço, que roda em segundo plano.
+2.  **Motor de ML (Serviço Local):** Um servidor **FastAPI** (`ml_engine/engine.exe`) que expõe endpoints para tarefas de Machine Learning pesadas, como a geração de embeddings de texto. A aplicação principal gerencia o ciclo de vida (início/fim) deste serviço, que roda em segundo plano. Repositório do engine: [Link](https://github.com/edson89braga/ml_engine)
 3.  **Painel de Administração (Dashboard):** Uma aplicação **Streamlit** (`run_admin_streamlit.py`) para administradores, permitindo o monitoramento de métricas de uso, visualização de logs, gerenciamento de usuários e configuração de prompts e provedores LLM.
 
 Claro. Aqui está a seção `README.md` redigida com base no resumo fornecido, formatada para ser incluída diretamente no seu arquivo.
