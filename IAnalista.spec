@@ -4,12 +4,11 @@ import os
 import shutil
 
 
-
 # --- Bloco 2: Análise principal da aplicação ---
 a = Analysis(
     ['run.py'],  # O ponto de entrada da sua aplicação
     pathex=[],
-    binaries=transformers_binaries + s_t_binaries + torch_binaries,
+    binaries=[],
     datas=[
         # 1. Inclui a pasta 'assets' principal do seu projeto.
         ('assets', 'assets'),
@@ -31,6 +30,7 @@ a = Analysis(
         'src.flet_ui.views.profile_view',
         'src.flet_ui.views.llm_settings_view',
         'src.flet_ui.views.nc_analyze_view',
+        'src.flet_ui.views.chat_view',
         'src.flet_ui.views.others_view',
         
         # Imports para garantir a robustez da validação JWT

@@ -294,7 +294,6 @@ class BaseSettingsDrawer(ft.Column):
         """
         # Apenas administradores podem alterar
         # if not self.page.session.get("is_admin"):
-            ...
             # show_snackbar(self.page, "Alteração de configurações restrita a administradores.", color=theme.COLOR_WARNING)
             # self.load_settings_into_controls() # Reverte
             # return

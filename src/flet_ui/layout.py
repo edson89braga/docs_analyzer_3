@@ -33,7 +33,7 @@ icones_navegacao: List[Dict[str, Any]] = [
         "route": "/analyze_pdf" # Nova rota para a funcionalidade principal
     },
     {
-        "label": "Chat with Docs",
+        "label": "Chat Documentos",
         "icon": ft.Icon(ft.Icons.QUESTION_ANSWER_OUTLINED,size=SIZE_ICONS_NAVRAIL),
         "selected_icon": ft.Icon(ft.Icons.QUESTION_ANSWER,size=SIZE_ICONS_NAVRAIL),
         "route": "/chat_docs"
