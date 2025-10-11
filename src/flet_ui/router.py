@@ -60,7 +60,6 @@ _view_module_map = {
     "/session-taken-over": ("src.flet_ui.views.others_view", "create_session_taken_over_view"),    
 }
 
-
 # Mapeamento para rotas parametrizadas (se houver)
 _parameterized_content_creators: Dict[str, Callable[[ft.Page, Any], Any]] = {
     # Ex: r"/products/(\d+)": create_product_detail_content,

@@ -483,8 +483,7 @@ def handle_logout(page: ft.Page) -> None:
 
         auth_keys_to_clear = [
             "auth_id_token", "auth_user_id", "auth_user_email",
-            "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at",
-            "is_admin"
+            "auth_display_name", "auth_refresh_token", "auth_id_token_expires_at" # "is_admin"
         ]
 
         # Busca e remove qualquer chave de API descriptografada da sessão

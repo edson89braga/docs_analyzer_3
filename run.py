@@ -2,6 +2,8 @@
 import logging, threading
 logger = logging.getLogger(__name__)
 
+from typing import Optional
+
 from time import perf_counter
 start_time = perf_counter()
 logger.info(f"{start_time:.4f}s - Iniciando run.py")
@@ -285,30 +287,33 @@ import flet as ft
 # Importa a função 'main' do módulo app dentro de flet_gui
 from src.flet_ui.app import main
 from src.flet_ui.views.others_view import create_session_taken_over_view
+from src.services.update_manager import UpdateStatus, check_for_component_update
+from src.settings import APP_VERSION, ML_ENGINE_VERSION
+
+# --- Variáveis globais para armazenar os status das verificações ---
+_APP_UPDATE_STATUS: Optional[UpdateStatus] = None
+_ENGINE_UPDATE_STATUS: Optional[UpdateStatus] = None
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
     
-    if getattr(sys, 'frozen', False):
-        # --- Verificação de Atualização (executa antes de tudo) ---
-        from src.services.update_manager import handle_update_check
-        handle_update_check()
-
     initialize_app()
-
-    # --- Gerenciamento do Motor de ML (Vetorização) (em background) ---
-    from src.services.engine_manager import MLEngineManager
+    from time import sleep
     from src.settings import get_resource_path
- 
-    if getattr(sys, 'frozen', False):
-        engine_executable_path = get_resource_path('ml_engine/engine.exe')
-    else:
-        engine_executable_path = get_resource_path('ml_engine/engine.exe')
- 
+    from src.services.engine_manager import MLEngineManager
+
+    engine_executable_path = get_resource_path('ml_engine/engine.exe')
     ml_engine_manager = MLEngineManager(engine_path=engine_executable_path)
-    # Inicia o motor de ML em uma thread separada para não bloquear a UI do Flet
-    ml_engine_thread = threading.Thread(target=ml_engine_manager.start, daemon=True)
-    ml_engine_thread.start()
+
+    if getattr(sys, 'frozen', False): 
+    # --- Verificação de Atualizações (executa antes de tudo) ---
+        logger.info("Verificando atualização da aplicação principal...")
+        _APP_UPDATE_STATUS = check_for_component_update("app", APP_VERSION)
+
+        # Só verifica o motor de ML se a aplicação principal não precisar ser atualizada
+        if not _APP_UPDATE_STATUS.update_available:
+            logger.info("Verificando atualização do motor de ML...")
+            _ENGINE_UPDATE_STATUS = check_for_component_update("ml_engine", ML_ENGINE_VERSION)
 
     # Cleanups movido para função on_disconnect:
     # register_temp_files_cleanup(UPLOAD_TEMP_DIR)
@@ -317,9 +322,6 @@ if __name__ == "__main__":
     # temp_exports_full_path = os.path.join(assets_dir_for_cleanup, WEB_TEMP_EXPORTS_SUBDIR)
     # os.makedirs(temp_exports_full_path, exist_ok=True) 
     # register_temp_files_cleanup(temp_exports_full_path)
-
-    execution_time = perf_counter() - start_time
-    logger.info(f"[DEBUG] Carregado RUN em {execution_time:.4f}s")
     
     original_main_function = main
 
@@ -337,34 +339,35 @@ if __name__ == "__main__":
         # Agora, encerra o processo.
         os._exit(0)
 
-    def main_singleton_wrapper(page: ft.Page):
+    def start_main_app_flow(page: ft.Page):
+        """Inicia a lógica principal da aplicação Flet após a verificação de atualização."""
         global _ACTIVE_SESSION_ID, _SHUTDOWN_TIMER
 
+        # --- Gerenciamento do Motor de ML (Vetorização) (em background) ---
+        # Inicia o motor de ML em uma thread separada para não bloquear a UI do Flet
+        ml_engine_thread = threading.Thread(target=ml_engine_manager.start, daemon=True)
+        ml_engine_thread.start()
+
         # Primeiro, chama o main original para que ele configure page.on_disconnect
-        # Isso anexa a lógica de limpeza de arquivos temporários ao evento on_disconnect.
         original_main_function(page)
         
-        # Agora, captura a função on_disconnect configurada por app.py
+        # Captura a função on_disconnect configurada por app.py
         original_on_disconnect_from_app = page.on_disconnect
 
         with _SESSION_LOCK:
-            # A primeira vez que este wrapper é chamado, define a sessão principal.
             if _ACTIVE_SESSION_ID is None:
                 _ACTIVE_SESSION_ID = page.session_id
                 logger.info(f"Sessão principal definida: {_ACTIVE_SESSION_ID}")
-            # Se uma sessão principal já existe e esta é uma sessão diferente, é uma duplicata.
             elif page.session_id != _ACTIVE_SESSION_ID:
                 logger.warning(f"Sessão duplicada detectada ({page.session_id}). Redirecionando.")
-                # Importante: A view precisa ser renderizada antes de `page.go` funcionar
                 page.views.append(create_session_taken_over_view(page))
                 page.update()
                 page.go("/session-taken-over")
-                return # Interrompe a configuração dos handlers de disconnect para esta aba
+                return
 
-        def on_page_connect(e): # Este handler agora serve apenas para cancelar o shutdown em um F5
-            global _ACTIVE_SESSION_ID, _SHUTDOWN_TIMER
+        def on_page_connect(e):
+            global _SHUTDOWN_TIMER
             with _SESSION_LOCK:
-                # Se uma nova conexão chega (F5), cancela qualquer desligamento agendado.
                 if _SHUTDOWN_TIMER is not None and page.session_id == _ACTIVE_SESSION_ID:
                     _SHUTDOWN_TIMER.cancel()
                     _SHUTDOWN_TIMER = None
@@ -378,13 +381,80 @@ if __name__ == "__main__":
                 if page.session_id == _ACTIVE_SESSION_ID:
                     _ACTIVE_SESSION_ID = None
                     logger.info(f"Sessão principal {page.session_id} desconectada. Agendando desligamento em {SHUTDOWN_GRACE_PERIOD}s.")
-                    # Agenda o desligamento em vez de encerrar imediatamente.
-                    # Passa a lógica de limpeza original para a função de desligamento.
                     _SHUTDOWN_TIMER = threading.Timer(SHUTDOWN_GRACE_PERIOD, shutdown_server, args=[original_on_disconnect_from_app])
                     _SHUTDOWN_TIMER.start()
                 else:
                     logger.info(f"Sessão inativa/duplicada {page.session_id} desconectada. Servidor permanece ativo.")                    
         page.on_disconnect = master_session_disconnect
+
+    def main_singleton_wrapper(page: ft.Page):
+        from src.services.update_manager import run_updater
+
+        # --- Lógica de Diálogo de Atualização ---
+        update_info_to_process: Optional[UpdateStatus] = None
+        component_to_update: Optional[str] = None
+
+        if _APP_UPDATE_STATUS and _APP_UPDATE_STATUS.update_available:
+            update_info_to_process = _APP_UPDATE_STATUS
+            component_to_update = "Aplicação Principal"
+        elif _ENGINE_UPDATE_STATUS and _ENGINE_UPDATE_STATUS.update_available:
+            update_info_to_process = _ENGINE_UPDATE_STATUS
+            component_to_update = "Motor de ML"
+
+        if component_to_update and update_info_to_process:
+            def on_update_confirm(e):
+                logger.info(f"Usuário confirmou a atualização do '{component_to_update}'. Iniciando o updater...")
+                # Garante que o motor de ML seja encerrado antes de tentar atualizar seus arquivos.
+                ml_engine_manager.stop()
+                sleep(1) # Pequena pausa para garantir que o processo seja encerrado
+
+                target_dir = None
+                if component_to_update == "Motor de ML":
+                    target_dir = get_resource_path('ml_engine')
+                
+                retorno = run_updater(update_info_to_process.update_info, target_dir_override=target_dir)
+                if retorno == 'exit':
+                    page.clean()
+                    shutdown_server(None)
+                    
+            dialog = None
+
+            def on_update_cancel(e):
+                dialog.open = False
+                page.update()
+                if update_info_to_process.is_forced:
+                    logger.warning(f"Atualização obrigatória do '{component_to_update}' cancelada pelo usuário. Encerrando.")
+                    os._exit(0)
+                else:
+                    logger.info(f"Atualização opcional do '{component_to_update}' adiada. Iniciando aplicação.")
+                    start_main_app_flow(page)
+
+            version = update_info_to_process.update_info.get('version', 'N/A')
+            notes = update_info_to_process.update_info.get('notes', 'Sem notas da versão.')
+            title = f"Atualização Obrigatória ({component_to_update})" if update_info_to_process.is_forced else f"Atualização Disponível ({component_to_update})"
+            message = (f"Uma nova versão ({version}) do componente '{component_to_update}' está disponível!\n\n"
+                       f"Notas da versão:\n{notes}")
+
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=ft.Text(title),
+                content=ft.Text(message),
+                actions=[
+                    ft.ElevatedButton("Atualizar Agora", on_click=on_update_confirm, width=180),
+                    ft.TextButton("Depois", on_click=on_update_cancel, visible=not update_info_to_process.is_forced, width=180),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+                on_dismiss=on_update_cancel # Trata o fechamento pelo 'X' ou Esc
+            )
+            dialog.open = True
+            page.overlay.append(dialog)
+            page.update()
+        else:
+            # Se não há atualização, inicia o fluxo normal da aplicação
+            start_main_app_flow(page)
+
+    execution_time = perf_counter() - start_time
+    logger.info(f"[DEBUG] Carregado RUN em {execution_time:.4f}s")
 
     # Configura e inicia a aplicação Flet
     ft.app(

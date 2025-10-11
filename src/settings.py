@@ -6,9 +6,6 @@ start_time = perf_counter()
 logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando settings.py")
 print(f"[DEBUG] {start_time:.4f}s - Iniciando settings.py")
 
-# --- Variáveis de Teste/Exemplo (Remover em produção) -----------------------------------------------------------------------
-api_key_test = '...'
-
 # --- Outras Variáveis globais temporárias (Remover em produção?)--------------------------------------------------------------
 cotacao_dolar_to_real = 6
 
@@ -47,9 +44,9 @@ TEMPLATES_DOCX_SUBDIR = "templates_docx"
 WEB_TEMP_EXPORTS_SUBDIR = "temp_docx_exports"
 
 # --- Configurações Gerais da Aplicação -------------------------------------------------------------------------------
-APP_NAME = "DocsAnalyzerPF"
+APP_NAME = "Sist_Opera"
+APP_TITLE = "ÓPERA - IA Assistente" # Análise de Documentos
 APP_VERSION = "0.2" # Versão inicial do MVP
-APP_TITLE = "IA Assistente - COR/SR/PF/SP" # Análise de Documentos
 ALLOWED_EMAIL_DOMAINS = ["pf.gov.br", "dpf.gov.br"]
 KEY_NAME_FLET_SECRET_KEY = "flet_secret_key"
 
@@ -85,6 +82,7 @@ FB_STORAGE_BUCKET = "docs-analyzer-a7430.firebasestorage.app"
 # Caminhos de configuração do FIRESTORE -----------------------------------
 APP_DEFAULT_SETTINGS_COLLECTION = "app_default_settings"
 ANALYZE_PDF_DEFAULTS_DOC_ID = "analyze_pdf_defaults"
+CHAT_DOCS_DEFAULTS_DOC_ID = "chat_docs_defaults"
 LLM_PROVIDERS_CONFIG_COLLECTION = "llm_providers_config" # Já existe como PROVIDERS_COLLECTION em llm_settings_view
 LLM_PROVIDERS_DEFAULT_DOC_ID = "default_list"          # Já existe como DEFAULT_PROVIDERS_DOC_ID em llm_settings_view
 LLM_EMBEDDINGS_CONFIG_COLLECTION = "llm_providers_config" # Pode ser a mesma coleção dos provedores
@@ -188,10 +186,10 @@ CHAT_PROMPTS_DEFAULTS_DOC_ID = "chat_prompts_defaults"
 # -----------------------------------------------------------------------------------------------------------------
 
 # --- Configurações do Atualizador Automático ---
-VERSION_INFO_URL = "https://raw.githubusercontent.com/edson89braga/docs_analyzer_3/refs/heads/master/release_info/versionteste.json"   # json teste
-# VERSION_INFO_URL = "https://drive.google.com/uc?export=download&id=1ydE19l4bh3ZLLm5tNwHaFffxK8ZtCNmn" # json original
+VERSION_INFO_URL = "https://raw.githubusercontent.com/edson89braga/docs_analyzer_3/refs/heads/master/release_info/version.json" # json original
 
 # --- Configurações do Motor de ML Local ---
+ML_ENGINE_VERSION = "1.0" # Versão local do motor de ML
 ML_ENGINE_API_URL = "http://127.0.0.1:8001"
 
 execution_time = perf_counter() - start_time

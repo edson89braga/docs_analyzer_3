@@ -14,7 +14,7 @@ import time, os, threading, jwt
 from typing import Optional
 
 from ..settings import (APP_TITLE, APP_VERSION, APP_DEFAULT_SETTINGS_COLLECTION,
-                        ANALYZE_PDF_DEFAULTS_DOC_ID, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS,
+                        ANALYZE_PDF_DEFAULTS_DOC_ID, CHAT_DOCS_DEFAULTS_DOC_ID, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS,
                         FALLBACK_ANALYSIS_SETTINGS, LLM_PROVIDERS_CONFIG_COLLECTION,
                         LLM_PROVIDERS_DEFAULT_DOC_ID, KEY_SESSION_LOADED_LLM_PROVIDERS,
                         LLM_EMBEDDINGS_CONFIG_COLLECTION, LLM_EMBEDDINGS_DEFAULT_DOC_ID,
@@ -59,7 +59,19 @@ def load_default_analysis_settings(page: ft.Page):
     # --- Carregamento de dados globais (Provedores, Custos, Padrões da Nuvem) ---
     # Esta parte é executada uma vez para popular a sessão com dados de referência.
     _load_global_providers_and_costs(page, user_token)
-    cloud_defaults = _load_cloud_defaults(page, user_token)
+
+    # Carrega os defaults base para nc_analyze
+    nc_analyze_defaults = _load_specific_cloud_defaults(
+        page, user_token, ANALYZE_PDF_DEFAULTS_DOC_ID
+    )
+    page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, nc_analyze_defaults.copy())
+
+    # Carrega os overrides para chat_docs e os mescla
+    chat_docs_overrides = _load_specific_cloud_defaults(
+        page, user_token, CHAT_DOCS_DEFAULTS_DOC_ID
+    )
+    chat_defaults = nc_analyze_defaults.copy()
+    chat_defaults.update(chat_docs_overrides) # Aplica as personalizações do chat
 
     # --- Carregamento das Configurações Específicas de cada View ---
     # 1. Carregar para NC Analyze View
@@ -68,7 +80,7 @@ def load_default_analysis_settings(page: ft.Page):
         page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, nc_analyze_settings)
         logger.info("Configurações para 'Análise de Documentos' carregadas do banco de dados local.")
     else:
-        page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, cloud_defaults.copy())
+        page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, nc_analyze_defaults.copy())
         logger.info("Configurações para 'Análise de Documentos' definidas a partir dos padrões da nuvem (não encontradas localmente).")
 
     # 2. Carregar para Chat View
@@ -77,7 +89,7 @@ def load_default_analysis_settings(page: ft.Page):
         page.session.set(KEY_SESSION_CHAT_SETTINGS, chat_settings)
         logger.info("Configurações para 'Chat com Documentos' carregadas do banco de dados local.")
     else:
-        page.session.set(KEY_SESSION_CHAT_SETTINGS, cloud_defaults.copy())
+        page.session.set(KEY_SESSION_CHAT_SETTINGS, chat_defaults.copy())
         logger.info("Configurações para 'Chat com Documentos' definidas a partir dos padrões da nuvem (não encontradas localmente).")
 
 def _load_global_providers_and_costs(page: ft.Page, user_token: str):
@@ -118,25 +130,26 @@ def _load_global_providers_and_costs(page: ft.Page, user_token: str):
         logger.error(f"Exceção ao carregar custos de embedding: {e}", exc_info=True)
     page.session.set(KEY_SESSION_MODEL_EMBEDDINGS_LIST, loaded_embeddings_list)
 
-def _load_cloud_defaults(page: ft.Page, user_token: str) -> dict:
-    """Carrega as configurações padrão de análise do Firestore, com fallback local."""
+def _load_specific_cloud_defaults(page: ft.Page, user_token: str, doc_id: str) -> dict:
+    """Carrega um documento de configurações específico do Firestore, com fallback local."""
     analysis_defaults = FALLBACK_ANALYSIS_SETTINGS.copy()
-    defaults_doc_path = f"{APP_DEFAULT_SETTINGS_COLLECTION}/{ANALYZE_PDF_DEFAULTS_DOC_ID}"
+    defaults_doc_path = f"{APP_DEFAULT_SETTINGS_COLLECTION}/{doc_id}"
     try:
         response = firestore_client._make_firestore_request("GET", user_token, defaults_doc_path)
         if response.status_code == 200:
             fields = response.json().get("fields", {})
             if fields:
                 raw_cloud_defaults = {k: _from_firestore_value(v) for k, v in fields.items()}
-                analysis_defaults.update(raw_cloud_defaults) # Simplesmente atualiza com o que veio da nuvem
-                logger.info("Configurações padrão de análise carregadas do Firestore.")
+                logger.info(f"Configurações padrão carregadas do Firestore (doc: {doc_id}).")
+                return raw_cloud_defaults # Retorna apenas os dados do Firestore
         else:
-            logger.warning(f"Documento de defaults não encontrado ou erro ({response.status_code}). Usando fallbacks locais.")
+            logger.warning(f"Documento de defaults '{doc_id}' não encontrado ou erro ({response.status_code}). Retornando dict vazio.")
+            return {}
     except Exception as e:
-        logger.error(f"Exceção ao carregar defaults de análise: {e}. Usando fallbacks locais.", exc_info=True)
+        logger.error(f"Exceção ao carregar defaults de '{doc_id}': {e}. Retornando dict vazio.", exc_info=True)
+        return {}
     
-    page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, analysis_defaults.copy())
-    return analysis_defaults
+    return {} # Retorna vazio em caso de falha, para que a base não seja sobrescrita por um fallback
 
 def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False) -> bool:
     """
@@ -282,7 +295,7 @@ def load_auth_state_from_storage(page: ft.Page):
     # A função check_and_refresh_token_if_needed irá operar sobre estes dados.
     page.session.set("auth_id_token", page.client_storage.get("auth_id_token"))
     page.session.set("auth_user_id", page.client_storage.get("auth_user_id"))
-    page.session.set("is_admin", page.client_storage.get("is_admin"))
+    #page.session.set("is_admin", page.client_storage.get("is_admin"))
     page.session.set("auth_refresh_token", page.client_storage.get("auth_refresh_token"))
     page.session.set("auth_id_token_expires_at", page.client_storage.get("auth_id_token_expires_at"))
     page.session.set("auth_user_email", page.client_storage.get("auth_user_email"))
@@ -541,9 +554,6 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         # Este é o ponto central que confirma uma sessão autenticada.        
         # Se autenticado, carrega as configurações em uma thread
         if page.session.contains_key("auth_id_token"):
-            from src.utils import check_app_version
-            check_app_version()
-
             logger.debug("Usuário autenticado. Disparando carregamento de settings em background.")
             # Inicia o pré-carregamento dos módulos pesados em uma thread separada.
             # Isso acontece tanto para sessões restauradas quanto para novos logins.

@@ -5,12 +5,9 @@ import os
 import json
 import requests
 import subprocess
-import tkinter as tk
-from tkinter import messagebox
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Dict
-from time import sleep
 
 # packaging é uma biblioteca robusta para comparar versões (ex: "1.10.0" > "1.9.0")
 # É uma dependência do Flet, então já deve estar disponível.
@@ -28,9 +25,9 @@ class UpdateStatus:
     update_info: Optional[Dict] = None
     error_message: Optional[str] = None
 
-def check_for_updates() -> UpdateStatus:
+def check_for_component_update(component_key: str, local_version_str: str) -> UpdateStatus:
     """
-    Verifica se há uma nova versão da aplicação disponível.
+    Verifica se há uma nova versão para um componente específico (ex: 'app' ou 'ml_engine').
 
     1. Baixa e lê o arquivo version.json.
     2. Compara a versão local com a remota.
@@ -39,29 +36,29 @@ def check_for_updates() -> UpdateStatus:
     Returns:
         UpdateStatus: Um objeto contendo o status da verificação.
     """
-    if not VERSION_INFO_URL:
+    if not VERSION_INFO_URL or not component_key or not local_version_str:
         msg = "URL de verificação de versão não configurada."
         logger.warning(msg)
         return UpdateStatus(error_message=msg)
 
     try:
-        logger.info(f"Verificando atualizações em: {VERSION_INFO_URL}")
+        logger.info(f"Verificando atualizações para o componente '{component_key}' em: {VERSION_INFO_URL}")
         response = requests.get(VERSION_INFO_URL, timeout=10)
         response.raise_for_status()
         remote_config = response.json()
 
-        app_info = remote_config.get("app", {})
-        remote_version_str = app_info.get("version")
+        component_info = remote_config.get(component_key, {})
+        remote_version_str = component_info.get("version")
         if not remote_version_str:
-            raise ValueError("'version' não encontrada na configuração remota da 'app'.")
+            raise ValueError(f"'version' não encontrada na configuração remota para '{component_key}'.")
 
-        local_version = parse_version(APP_VERSION)
+        local_version = parse_version(local_version_str)
         remote_version = parse_version(remote_version_str)
 
         if remote_version > local_version:
             logger.info(f"Nova versão encontrada: {remote_version} (local: {local_version})")
             
-            release_date_str = app_info.get("release_date")
+            release_date_str = component_info.get("release_date")
             force_update_days = remote_config.get("force_update_after_days", 7)
             is_forced = False
 
@@ -77,10 +74,10 @@ def check_for_updates() -> UpdateStatus:
                 except (ValueError, TypeError) as e:
                     logger.error(f"Formato de 'release_date' inválido no version.json: '{release_date_str}'. Erro: {e}")
 
-            return UpdateStatus(update_available=True, is_forced=is_forced, update_info=app_info)
+            return UpdateStatus(update_available=True, is_forced=is_forced, update_info=component_info)
         else:
-            logger.info("A aplicação está atualizada.")
-            return UpdateStatus(update_available=False, update_info=app_info)
+            logger.info(f"O componente '{component_key}' está atualizado.")
+            return UpdateStatus(update_available=False, update_info=component_info)
 
     except requests.RequestException as e:
         msg = f"Não foi possível verificar atualizações (erro de rede): {e}"
@@ -91,56 +88,14 @@ def check_for_updates() -> UpdateStatus:
         logger.error(msg)
         return UpdateStatus(error_message=msg)
 
-def _show_update_dialog(status: UpdateStatus) -> bool:
-    """
-    Exibe um diálogo para o usuário com base no status da atualização.
-    Usa tkinter para garantir que o diálogo apareça antes da UI do Flet.
-
-    Returns:
-        bool: True se o usuário decidiu atualizar, False caso contrário.
-    """
-    root = tk.Tk()
-    root.withdraw()  # Esconde a janela principal do tkinter
-
-    title = "Atualização Disponível"
-    version = status.update_info.get('version', 'N/A')
-    notes = status.update_info.get('notes', 'Sem notas da versão.')
-    
-    user_choice = False
-    try:
-        if status.is_forced:
-            title = "Atualização Obrigatória"
-            message = (
-                f"Sua versão ({APP_VERSION}) está desatualizada e precisa ser atualizada para a v{version}.\n\n"
-                f"Notas da versão:\n{notes}\n\nA aplicação será fechada para iniciar a atualização."
-            )
-            messagebox.showwarning(title, message)
-            user_choice = True  # A atualização é a única opção
-        else:
-            title = "Atualização Disponível"
-            message = (
-                f"Uma nova versão (v{version}) está disponível!\n\n"
-                f"Notas da versão:\n{notes}\n\nDeseja atualizar agora?"
-            )
-            user_choice = messagebox.askyesno(title, message)
-    finally:
-        root.destroy()
-    
-    return user_choice
-
-def run_updater(update_info: Dict):
+def run_updater(update_info: Dict, target_dir_override: Optional[str] = None):
     """
     Inicia o updater.exe, passando os argumentos necessários, e encerra a aplicação principal.
     """
     try:
-        # Determina o diretório da aplicação atual
-        if getattr(sys, 'frozen', False):
-            app_dir = os.path.dirname(sys.executable)
-            current_exe_name = os.path.basename(sys.executable)
-        else:
-            app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
-            current_exe_name = os.path.basename(sys.argv[0]) # ex: run.py
-        
+        # Usa o override do diretório de destino se fornecido, senão calcula o padrão.
+        app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(sys.argv[0]))   
+        target_dir = target_dir_override or app_dir     
         updater_path = os.path.join(app_dir, "updater.exe")
 
         if not os.path.exists(updater_path):
@@ -156,14 +111,23 @@ def run_updater(update_info: Dict):
             return
 
         # Argumentos para o updater.exe
-        args = [
-            updater_path,
+        args = [updater_path]
+
+        if getattr(sys, 'frozen', False):
+            current_exe_name = os.path.basename(sys.executable)
+            args.extend(["--restart-exe", current_exe_name])
+        else: # Modo de desenvolvimento
+            current_script_name = os.path.basename(sys.argv[0]) # ex: run.py
+            args.extend([
+                "--restart-exe", sys.executable, # python.exe
+                "--restart-arg", current_script_name # run.py
+            ])        
+        args.extend([
             "--url", download_url,
             "--filename", filename,
-            "--target-dir", app_dir,
-            "--restart-exe", current_exe_name,
+            "--target-dir", target_dir,
             "--pid", str(os.getpid()) # Passa o PID do processo atual
-        ]
+        ])
         
         logger.info(f"Iniciando o atualizador com os seguintes argumentos: {args}")
         # No Windows, usar DETACHED_PROCESS desvincula o updater do processo pai,
@@ -172,38 +136,10 @@ def run_updater(update_info: Dict):
         subprocess.Popen(args, creationflags=creationflags)
 
         logger.info("Aplicação principal encerrando para permitir a atualização...")
-        sys.exit(0)
+        return 'exit'
 
     except Exception as e:
         logger.critical(f"Falha crítica ao tentar executar o updater.exe: {e}", exc_info=True)
-        # Mostrar um diálogo de erro final
-        root = tk.Tk()
-        root.withdraw()
-        messagebox.showerror("Erro do Atualizador", f"Não foi possível iniciar o processo de atualização: {e}")
-        root.destroy()
 
-def handle_update_check():
-    """
-    Função principal que orquestra todo o processo de verificação de atualização.
-    """
-    # Só executa a verificação se estivermos em um ambiente compilado
-    if not getattr(sys, 'frozen', False):
-        logger.info("[DEBUG] Verificação de atualização pulada (ambiente de desenvolvimento).")
-        return
 
-    update_status = check_for_updates()
-
-    if update_status.update_available:
-        logging.info("Atualização disponível. Mostrando diálogo para o usuário...")
-        user_wants_to_update = _show_update_dialog(update_status)
-        logging.info(f"Escolha do usuário: Atualizar = {user_wants_to_update}")
-        if user_wants_to_update:
-            logging.info("Usuário confirmou a atualização. Chamando run_updater...")
-            run_updater(update_status.update_info)
-        elif update_status.is_forced:
-            # Se a atualização é forçada e o usuário fechou o diálogo (ou clicou não em um askyesno),
-            # a aplicação deve fechar.
-            logger.info("Usuário não prosseguiu com a atualização obrigatória. Encerrando aplicação.")
-            sleep(1)
-            os._exit(0) # Força o encerramento de todo o processo
 

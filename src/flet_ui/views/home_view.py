@@ -8,91 +8,6 @@ from typing import Optional
 import logging
 logger = logging.getLogger(__name__)
 
-
-def create_home_view(page: ft.Page) -> ft.Control:
-    """
-    Cria e retorna a primeira versão da view Home, exibindo informações básicas
-    e o logo do departamento.
-
-    Args:
-        page (ft.Page): A página Flet atual.
-
-    Returns:
-        ft.Control: O conteúdo principal da view Home.
-    """
-    logger.info("Criando o conteúdo da view Home.")
-
-    try:
-        department_logo = ft.Image(
-            src=PATH_IMAGE_LOGO_DEPARTAMENTO,
-            width=200, # Reduzido para dar espaço ao texto
-            height=200,
-            fit=ft.ImageFit.CONTAIN,
-            error_content=ft.Text("Erro ao carregar imagem do logo.", color=ft.Colors.RED)
-        )
-    except Exception as e:
-        logger.error(f"Erro ao tentar carregar a imagem do logo '{PATH_IMAGE_LOGO_DEPARTAMENTO}': {e}")
-        department_logo = ft.Container(
-            content=ft.Text(f"Não foi possível carregar a imagem do logo.",
-                            color=ft.Colors.ORANGE_ACCENT_700, style=ft.TextThemeStyle.BODY_LARGE),
-            padding=20,
-            alignment=ft.alignment.center
-        )
-
-    welcome_title = ft.Text(
-        f"Bem-vindo à {APP_TITLE}",
-        style=ft.TextThemeStyle.HEADLINE_LARGE, # Destaque maior
-        text_align=ft.TextAlign.CENTER,
-        weight=ft.FontWeight.BOLD,
-        color=theme.PRIMARY # Usando a cor primária do tema
-    )
-
-    intro_text_1 = ft.Text(
-        "Ferramenta inteligente para análise de documentos e otimização de rotinas da Polícia Federal.",
-        style=ft.TextThemeStyle.TITLE_MEDIUM, # Tamanho adequado para subtítulo
-        text_align=ft.TextAlign.CENTER,
-        color=ft.Colors.with_opacity(0.85, ft.Colors.ON_SURFACE) # Cor suave
-    )
-
-    intro_text_2 = ft.Text(
-        "Utilize o menu de navegação para acessar as funcionalidades disponíveis, como a Análise Inicial de Notícias-crime,\n"
-        "Chats com PDFs ou Banco de Dados, e outros Agentes de IA especializados.",
-        style=ft.TextThemeStyle.BODY_LARGE,
-        text_align=ft.TextAlign.CENTER,
-        width=1000, # Limita a largura para melhor legibilidade
-        color=ft.Colors.with_opacity(0.75, ft.Colors.ON_SURFACE)
-    )
-    
-    version_text = ft.Text(
-        f"Versão: {APP_VERSION}",
-        style=ft.TextThemeStyle.BODY_MEDIUM,
-        text_align=ft.TextAlign.CENTER,
-        italic=True,
-        color=ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)
-    )
-
-    main_content = ft.Column(
-        [
-            ft.Container(height=15),
-            department_logo,
-            ft.Container(height=20), # Espaçador
-            welcome_title,
-            ft.Container(height=10),
-            intro_text_1,
-            ft.Container(height=15),
-            intro_text_2,
-            ft.Container(height=30), # Maior espaçador antes da versão
-            version_text,
-        ],
-        alignment=ft.MainAxisAlignment.START,
-        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-        expand=True, 
-        spacing=5 # Espaçamento geral entre os elementos da coluna
-    )
-
-    return main_content
-
-
 def create_feature_card(page: ft.Page, title: str, description: str, icon: str, route: Optional[str] = None) -> ft.Container:
     """
     Cria um card clicável para destacar uma funcionalidade ou seção do aplicativo.
@@ -171,16 +86,22 @@ def create_home_view2(page: ft.Page) -> ft.Control:
         )
 
     welcome_title = ft.Text(
-        f"Bem-vindo à {APP_TITLE}",
+        f"Bem-vindo ao {APP_TITLE}",
         style=ft.TextThemeStyle.HEADLINE_LARGE,
         text_align=ft.TextAlign.CENTER,
         weight=ft.FontWeight.BOLD,
         color=theme.PRIMARY
     )
 
+    intro_text_0 = ft.Text(
+        "Sistema Operador de Processos e Respostas Automatizadas",
+        style=ft.TextThemeStyle.TITLE_MEDIUM, # Tamanho adequado para subtítulo
+        text_align=ft.TextAlign.CENTER,
+        color=ft.Colors.with_opacity(0.85, ft.Colors.ON_SURFACE) # Cor suave
+    )
+
     intro_text = ft.Text(
-        "Plataforma de Agentes de IA especializados e Chats inteligentes\n"
-        "para análise de documentos e procedimentos da Polícia Federal.\n"
+        "Plataforma de Agentes de IA especializados e Chats inteligentes para análise de documentos e procedimentos da Polícia Federal.\n"
         "\n"
         "Explore os módulos abaixo:",
         style=ft.TextThemeStyle.TITLE_MEDIUM,
@@ -202,7 +123,7 @@ def create_home_view2(page: ft.Page) -> ft.Control:
         "Chat com Documentos",
         "Chat inteligente com documentos para obtenção de respostas contextuais.",
         ft.Icons.QUESTION_ANSWER_OUTLINED,
-        "/chat_pdf"
+        "/chat_docs"
     )
     card3 = create_feature_card(
         page,
@@ -232,11 +153,13 @@ def create_home_view2(page: ft.Page) -> ft.Control:
             department_logo,
             ft.Container(height=15),
             welcome_title,
+            ft.Container(height=6),
+            intro_text_0,
             ft.Container(height=8),
             intro_text,
             ft.Container(height=18),
             feature_cards_row,
-            ft.Container(height=25),
+            ft.Container(height=18),
             ft.Container(
                 content=ft.Text(
                     "Uso Responsável da IA: Este sistema utiliza Inteligência Artificial como ferramenta de auxílio.\n"
@@ -252,7 +175,7 @@ def create_home_view2(page: ft.Page) -> ft.Control:
                 padding=20, border_radius=8,
                 # bgcolor=ft.Colors.with_opacity(0.05, theme.COLOR_INFO),
             ),
-            ft.Container(height=20, expand=True), # Espaçador flexível para empurrar a versão para baixo
+            ft.Container(height=12, expand=True), # Espaçador flexível para empurrar a versão para baixo
             version_text,
             #ft.Container(height=20, expand=True)
         ],

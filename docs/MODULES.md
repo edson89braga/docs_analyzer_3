@@ -1,4 +1,5 @@
 
+> Data de atualização das informações abaixo: 20/09/2025
 
 # nc_analyze_view.py
 

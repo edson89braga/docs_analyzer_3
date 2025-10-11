@@ -124,6 +124,7 @@ def perform_safe_update(zip_path: str, target_dir: str):
         logging.info(f"Conteúdo do ZIP extraído diretamente para a raiz: {source_items_dir}")
 
     backup_files: List[str] = []
+    newly_moved_items: List[str] = []
     try:
         # Etapa 1: Fazer backup dos itens existentes
         logging.info("Criando backups dos arquivos antigos...")
@@ -146,7 +147,9 @@ def perform_safe_update(zip_path: str, target_dir: str):
         # Etapa 2: Mover os novos itens
         logging.info("Movendo novos arquivos para o diretório da aplicação...")
         for item_name in os.listdir(source_items_dir):
-            shutil.move(os.path.join(source_items_dir, item_name), target_dir)
+            source_path = os.path.join(source_items_dir, item_name)
+            shutil.move(source_path, target_dir)
+            newly_moved_items.append(item_name)
         logging.info("Novos arquivos movidos com sucesso.")
 
         # Etapa 3: Limpar backups
@@ -162,6 +165,19 @@ def perform_safe_update(zip_path: str, target_dir: str):
         logging.error(f"ERRO durante a atualização: {e}", exc_info=True)
         # Etapa de Rollback
         logging.info("Tentando reverter a atualização (rollback)...")
+        # 1. Primeiro, remove os arquivos/pastas que acabaram de ser movidos
+        logging.info("Rollback: Removendo arquivos recém-movidos...")
+        for item_name in newly_moved_items:
+            path_to_remove = os.path.join(target_dir, item_name)
+            try:
+                if os.path.isdir(path_to_remove):
+                    shutil.rmtree(path_to_remove)
+                else:
+                    os.remove(path_to_remove)
+            except Exception as remove_err:
+                logging.error(f"ERRO no Rollback: não foi possível remover o novo item '{path_to_remove}'. Erro: {remove_err}")
+
+        # 2. Agora, restaura os backups        
         for backup_path in backup_files:
             original_path = backup_path.replace(".bak", "")
             try:
@@ -169,7 +185,7 @@ def perform_safe_update(zip_path: str, target_dir: str):
                     os.rename(backup_path, original_path)
                     logging.info(f"  - Restaurado: {os.path.basename(original_path)}")
             except Exception as rollback_err:
-                logging.error(f"ERRO CRÍTICO no rollback: não foi possível restaurar {backup_path}. A instalação pode estar corrompida. Erro: {rollback_err}")
+                logging.error(f"ERRO CRÍTICO no Rollback: não foi possível restaurar '{backup_path}'. A instalação pode estar corrompida. Erro: {rollback_err}")
         show_error_and_exit(f"Ocorreu um erro e a atualização falhou. Uma tentativa de restauração foi feita, mas a aplicação pode estar instável. Erro: {e}")
     finally:
         # Limpa a pasta de extração temporária
@@ -183,6 +199,7 @@ def main():
     parser.add_argument("--target-dir", required=True, help="Diretório de destino da aplicação.")
     parser.add_argument("--restart-exe", required=True, help="Nome do executável a ser reiniciado após a atualização.")
     parser.add_argument("--pid", required=True, help="PID do processo da aplicação principal a ser encerrado.")
+    parser.add_argument("--restart-arg", help="Argumento opcional para o executável a ser reiniciado.")
     args = parser.parse_args()
 
     logging.info("--- ATUALIZADOR INICIADO ---")
@@ -204,7 +221,11 @@ def main():
         # 4. Reiniciar a aplicação
         logging.info(f"Atualização concluída. Reiniciando '{args.restart_exe}'...")
         restart_path = os.path.join(args.target_dir, args.restart_exe)
-        subprocess.Popen([restart_path])
+        
+        command = [restart_path]
+        if args.restart_arg:
+            command.append(args.restart_arg)
+        subprocess.Popen(command)
 
     except Exception as e:
         show_error_and_exit(f"Um erro inesperado ocorreu durante a atualização: {e}")
@@ -216,7 +237,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-    # = input("Pressione qualquer tecla para sair...")
+    _ = input("Pressione qualquer tecla para encerrar...")
 
 # >>> pyinstaller --name updater --onefile --add-data "C:\Users\edson.eab\AppData\Local\pypoetry\Cache\virtualenvs\docs-analyzer-3-DJ3PQuGu-py3.13\Lib\site-packages\psutil;psutil" updater.py
 

@@ -137,9 +137,4 @@ O sistema oferece diferentes estratégias (`mode_main_filter`) para selecionar a
 ---
 
 
-# Pacotes removidos:: 
-- "spacy (>=3.8.7,<4.0.0)",
-- "spacy[lookups] (>=3.8.7,<4.0.0)",
-- "sentence-transformers (>=4.1.0,<5.0.0)",
-- "langchain-openai (>=0.3.16,<0.4.0)",
-- "langchain-community (>=0.3.24,<0.4.0)"
+
