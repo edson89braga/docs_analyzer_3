@@ -22,6 +22,8 @@ a = Analysis(
         'unidecode',                 # Para utils.py
         'langdetect',                # Para pdf_processor.py
         'docx', 'lxml',              # Para doc_generator.py
+        'tiktoken_ext.cl100k_base',
+        'jaraco.text',               # Para keyring
 
         # Imports dinâmicos das views (essencial para o roteador)
         'src.flet_ui.views.login_view',

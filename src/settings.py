@@ -46,7 +46,7 @@ WEB_TEMP_EXPORTS_SUBDIR = "temp_docx_exports"
 # --- Configurações Gerais da Aplicação -------------------------------------------------------------------------------
 APP_NAME = "Sist_Opera"
 APP_TITLE = "ÓPERA - IA Assistente" # Análise de Documentos
-APP_VERSION = "0.4" # Versão inicial do MVP
+APP_VERSION = "0.5" # Versão inicial do MVP
 ALLOWED_EMAIL_DOMAINS = ["pf.gov.br", "dpf.gov.br"]
 KEY_NAME_FLET_SECRET_KEY = "flet_secret_key"
 

@@ -107,8 +107,28 @@ def perform_safe_update(zip_path: str, target_dir: str):
     logging.info(f"Diretório temporário de extração criado em: {temp_extract_dir}")
     logging.info(f"Extraindo '{os.path.basename(zip_path)}' para o diretório temporário...")
 
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(temp_extract_dir)
+    #with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    #zip_ref.extractall(temp_extract_dir)
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            members = zip_ref.infolist()
+            total_uncompressed_size = sum(member.file_size for member in members)
+            extracted_size = 0
+
+            if total_uncompressed_size == 0:
+                zip_ref.extractall(temp_extract_dir)
+            else:
+                for member in members:
+                    zip_ref.extract(member, temp_extract_dir)
+                    extracted_size += member.file_size
+                    progress = (extracted_size / total_uncompressed_size) * 100
+                    bar_length = 50
+                    filled_length = int(bar_length * extracted_size // total_uncompressed_size)
+                    bar = '█' * filled_length + '-' * (bar_length - filled_length)
+                    print(f'\rProgresso da Extração: [{bar}] {progress:.1f}%', end="", flush=True)
+        print("\nExtração concluída.")
+    except Exception as e:
+        show_error_and_exit(f"Erro ao extrair o arquivo de atualização: {e}")
     logging.info("Extração concluída.")
 
     # --- Lógica para encontrar o diretório de origem ---
@@ -129,6 +149,9 @@ def perform_safe_update(zip_path: str, target_dir: str):
         # Etapa 1: Fazer backup dos itens existentes
         logging.info("Criando backups dos arquivos antigos...")
         for item_name in os.listdir(source_items_dir):
+            if item_name.lower() == 'updater.exe':
+                logging.debug("  - Ignorando o próprio atualizador (updater.exe) no processo de backup.")
+                continue            
             source_item_path = os.path.join(source_items_dir, item_name)
             target_item_path = os.path.join(target_dir, item_name)
             if os.path.exists(target_item_path):
@@ -147,6 +170,9 @@ def perform_safe_update(zip_path: str, target_dir: str):
         # Etapa 2: Mover os novos itens
         logging.info("Movendo novos arquivos para o diretório da aplicação...")
         for item_name in os.listdir(source_items_dir):
+            if item_name.lower() == 'updater.exe':
+                logging.debug("  - Ignorando a movimentação do novo atualizador (updater.exe).")
+                continue            
             source_path = os.path.join(source_items_dir, item_name)
             shutil.move(source_path, target_dir)
             newly_moved_items.append(item_name)
@@ -241,3 +267,6 @@ if __name__ == "__main__":
 
 # >>> pyinstaller --name updater --onefile --add-data "C:\Users\edson.eab\AppData\Local\pypoetry\Cache\virtualenvs\docs-analyzer-3-DJ3PQuGu-py3.13\Lib\site-packages\psutil;psutil" updater.py
 
+'''
+>>> python updater.py --url "https://github.com/edson89braga/docs_analyzer_3/releases/download/v0.5/OPERA_IA_Assistente_v0.4.zip" --filename "OPERA_IA_Assistente_v0.4.zip" --target-dir "C:\\Users\\edson.eab\\Downloads\\Compilacoes\\Py - IA Analista\\dist\\Teste" --restart-exe "dummy_app.exe" --pid "12345"
+'''

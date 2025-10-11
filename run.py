@@ -432,7 +432,7 @@ if __name__ == "__main__":
             version = update_info_to_process.update_info.get('version', 'N/A')
             notes = update_info_to_process.update_info.get('notes', 'Sem notas da versão.')
             title = f"Atualização Obrigatória ({component_to_update})" if update_info_to_process.is_forced else f"Atualização Disponível ({component_to_update})"
-            message = (f"Uma nova versão ({version}) do componente '{component_to_update}' está disponível!\n\n"
+            message = (f"Uma nova versão ({version}) de módulo está disponível!\n\n"
                        f"Notas da versão:\n{notes}")
 
             dialog = ft.AlertDialog(
