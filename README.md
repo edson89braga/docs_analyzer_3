@@ -4,6 +4,8 @@
 
 ## 📖 Visão Geral
 
+![Tela_inicial](https://github.com/edson89braga/docs_analyzer_3/blob/master/docs/PrintScreens%20Telas/v0.5/1-tela-home.png)
+
 O **ÓPERA - IA Assistente** é uma ferramenta de suporte à decisão projetada para acelerar o fluxo de trabalho de analistas e agentes. A plataforma centraliza múltiplos agentes de IA, cada um especializado em uma tarefa, com foco em segurança, modularidade e eficiência.
 
 O objetivo principal é reduzir o tempo de análise preliminar de documentos de horas para minutos, padronizando a extração de dados-chave, fornecendo resumos coesos e permitindo uma interação conversacional inteligente com o conteúdo processado.
@@ -18,13 +20,18 @@ A plataforma possui uma arquitetura desacoplada, composta por três componentes 
 
 1.  **Aplicação Principal (Frontend/UI):** Desenvolvida com **Flet**, é o ponto de entrada para o usuário (`run.py`). Ela gerencia a interface, o estado da sessão e orquestra a comunicação com os outros componentes. Roda como uma aplicação web local no navegador do usuário.
 2.  **Motor de ML (Serviço Local):** Um servidor **FastAPI** (`ml_engine/engine.exe`) que expõe endpoints para tarefas de Machine Learning pesadas, como a geração de embeddings de texto. A aplicação principal gerencia o ciclo de vida (início/fim) deste serviço, que roda em segundo plano.
-3.  **Painel de Administração (Dashboard):** Uma aplicação **Streamlit** (`run_admin_streamlit.py`) para administradores, permitindo o monitoramento de métricas de uso, visualização de logs, gerenciamento de usuários e configuração de prompts e provedores LLM.
+   <br>Repositório do engine: [Link](https://github.com/edson89braga/ml_engine)
+4.  **Painel de Administração (Dashboard):** Uma aplicação **Streamlit** (`run_admin_streamlit.py`) para administradores, permitindo o monitoramento de métricas de uso, visualização de logs, gerenciamento de usuários e configuração de prompts e provedores LLM.
 
 Claro. Aqui está a seção `README.md` redigida com base no resumo fornecido, formatada para ser incluída diretamente no seu arquivo.
 
 ## 🏛️ Arquitetura do Agente de Análise de Documentos
 
 O módulo inicial, "Agente Assistente de Autuação", foi projetado como um pipeline modular que executa um ciclo completo de análise de documentos, desde o recebimento de arquivos PDF até a geração de um relatório final. A arquitetura é uma referência útil para a construção de novos agentes no "Hub de Agentes de IA".
+
+![Print_tela_nc_analyze_1](https://github.com/edson89braga/docs_analyzer_3/blob/master/docs/PrintScreens%20Telas/v0.5/2-tela-nc-analyze.png)
+
+![Print_tela_nc_analyze_2](https://github.com/edson89braga/docs_analyzer_3/blob/master/docs/PrintScreens%20Telas/v0.2/6-llm1.jpg)
 
 O núcleo da lógica do agente pode ser entendido em quatro etapas sequenciais:
 
@@ -69,6 +76,10 @@ Com certeza. Com base na arquitetura e nos handlers implementados em `chat_view.
 ## 🏛️ Arquitetura do Módulo 'Chat com Documentos'
 
 O módulo "Chat com Documentos" permite uma interação conversacional com o conteúdo de um ou mais arquivos PDF. Sua arquitetura foi projetada para ser eficiente, configurável e responsiva, separando a lógica da interface do usuário da orquestração da IA.
+
+![Print_tela_chat_docs_1](https://github.com/edson89braga/docs_analyzer_3/blob/master/docs/PrintScreens%20Telas/v0.5/3-tela-chat-docs.png)
+
+![Print_tela_chat_docs_2](https://github.com/edson89braga/docs_analyzer_3/blob/master/docs/PrintScreens%20Telas/v0.5/4-tela-chat-docs-2.png)
 
 ### Fluxo de Trabalho do Usuário e Componentes
 
