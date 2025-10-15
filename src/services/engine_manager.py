@@ -23,10 +23,25 @@ class MLEngineManager:
     def is_running(self) -> bool:
         """Verifica se a API do motor de ML está respondendo."""
         try:
-            response = requests.get(f"{self.api_url}/health", timeout=1)
-            return response.status_code == 200
+            #response = requests.get(f"{self.api_url}/health", timeout=1)
+            #return response.status_code == 200
+
+            # Verificação mais robusta: tenta usar o endpoint /embed com um texto de teste.
+            # Se isso funcionar, o servidor está realmente pronto para o trabalho.
+            test_payload = {"text_list": ["teste"]}
+            response = requests.post(f"{self.api_url}/embed", json=test_payload, timeout=5)
+            
+            # Verifica se a resposta foi bem-sucedida e se contém o campo esperado.
+            if response.status_code == 200 and "embeddings" in response.json():
+                return True
+            # Se receber 503, significa que o servidor está no ar, mas não pronto. Retorna False.
+            if response.status_code == 503:
+                return False
+            return False            
         except requests.ConnectionError:
             return False
+        except requests.RequestException: # Captura outros erros de request (timeout, etc)
+            return False            
 
     def start(self):
         """Inicia o processo do motor de ML se ele ainda não estiver em execução."""
@@ -46,7 +61,15 @@ class MLEngineManager:
             if sys.platform == "win32":
                 creationflags = subprocess.CREATE_NO_WINDOW
             
-            self.process = subprocess.Popen([self.engine_path], creationflags=creationflags)
+            # Cria uma cópia do ambiente atual e remove as variáveis de proxy
+            # para evitar que o subprocesso as herde indevidamente.
+            env = os.environ.copy()
+            env.pop("HTTP_PROXY", None)
+            env.pop("HTTPS_PROXY", None)
+            env.pop("http_proxy", None)
+            env.pop("https_proxy", None)
+
+            self.process = subprocess.Popen([self.engine_path], creationflags=creationflags, env=env)
             logger.info(f"Processo do motor de ML iniciado com PID: {self.process.pid}.")
 
             # Aguarda o servidor ficar pronto
@@ -62,7 +85,11 @@ class MLEngineManager:
         start_time = time.time()
         while time.time() - start_time < timeout:
             if self.is_running():
-                logger.info(f"Servidor de ML está pronto e respondendo em {self.api_url}.")
+                # Adiciona uma pequena pausa extra mesmo após o primeiro "ok",
+                # para garantir que todos os recursos estejam alocados.
+                logger.info("Servidor de ML respondeu ao teste. Aguardando 1s extra para estabilização...")
+                time.sleep(1)
+                logger.info(f"Servidor de ML pronto e estável em {self.api_url}.")
                 return
             logger.debug(f"Aguardando servidor... {int(time.time() - start_time)}s")
             time.sleep(1)
