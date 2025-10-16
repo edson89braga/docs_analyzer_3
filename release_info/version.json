@@ -2,9 +2,9 @@
   "app": {
     "version": "0.5.1",
     "release_date": "2025-10-15",
-    "download_url": "https://github.com/edson89braga/docs_analyzer_3/releases/download/v0.5.1/OPERA_IA_Assistente_v0.51.zip",
-    "filename": "OPERA_IA_Assistente_v0.51.zip",
-    "notes": "Lançamento do Módulo 'Chat com PDFs'."
+    "download_url": "https://github.com/edson89braga/docs_analyzer_3/releases/download/v0.5.1/Opera-IAnalista_v0.51.zip",
+    "filename": "Opera-IAnalista_v0.51.zip",
+    "notes": "Correção: sobre uso de proxy no ambiente de rede da PF."
   },
   "ml_engine": {
     "version": "1.0",
