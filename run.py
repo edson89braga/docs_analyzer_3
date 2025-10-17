@@ -401,21 +401,54 @@ if __name__ == "__main__":
             update_info_to_process = _ENGINE_UPDATE_STATUS
             component_to_update = "Motor de ML"
 
-        if component_to_update and update_info_to_process:
-            def on_update_confirm(e):
-                logger.info(f"Usuário confirmou a atualização do '{component_to_update}'. Iniciando o updater...")
-                # Garante que o motor de ML seja encerrado antes de tentar atualizar seus arquivos.
-                ml_engine_manager.stop()
-                sleep(1) # Pequena pausa para garantir que o processo seja encerrado
+        def start_updater_and_exit(update_status: UpdateStatus, component_name: str):
+            """Função executada em thread para iniciar o updater e depois encerrar."""
+            logger.info(f"Usuário confirmou a atualização do '{component_name}'. Iniciando o updater...")
 
-                target_dir = None
-                if component_to_update == "Motor de ML":
-                    target_dir = get_resource_path('ml_engine')
-                
-                retorno = run_updater(update_info_to_process.update_info, target_dir_override=target_dir)
-                if retorno == 'exit':
-                    page.clean()
-                    shutdown_server(None)
+            # Garante que o motor de ML seja encerrado antes de tentar atualizar.
+            ml_engine_manager.stop()
+            sleep(1) # Pausa um pouco mais longa para garantir que o motor pare.
+
+            target_dir = None
+            if component_name == "Motor de ML":
+                target_dir = get_resource_path('ml_engine')
+
+            # Inicia o updater
+            retorno = run_updater(update_status.update_info, target_dir_override=target_dir)
+
+            # Tenta fechar a janela do navegador via JavaScript após um delay
+            try: page.launch_url("javascript:window.close();")
+            except Exception as e:
+                logger.error(f"Erro ao fechar a janela do navegador: {e}")
+            
+            if retorno == 'exit':
+                page.clean()
+
+            # Encerra o servidor Python de forma forçada
+            shutdown_server(None)
+
+        if component_to_update and update_info_to_process:
+
+            def on_update_confirm(e):
+                # 1. Atualiza a UI para uma tela de "Atualizando..."
+                page.controls.clear()
+                page.appbar = None
+                page.add(
+                    ft.Column(
+                        [
+                            ft.ProgressRing(),
+                            ft.Text("Atualizando... A aplicação será reiniciada em breve.", size=16),
+                            ft.Text("Esta aba pode ser fechada com segurança.", size=12, italic=True),
+                        ],
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        expand=True,
+                    )
+                )
+                page.update()
+
+                # 2. Inicia o updater em uma thread para não bloquear a UI
+                threading.Thread(target=start_updater_and_exit, args=(update_info_to_process, component_to_update)).start()
                     
             dialog = None
 

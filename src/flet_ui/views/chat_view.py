@@ -982,7 +982,7 @@ class ChatViewContent(ft.Column):
         Este é o processo de OTIMIZAÇÃO. Executado em uma thread separada.
         """
         try:
-
+            import requests
             # Usa os textos pré-extraídos
             files_info = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
             pdf_paths_ordered = [f['path_or_message'] for f in files_info]
@@ -1101,11 +1101,21 @@ class ChatViewContent(ft.Column):
 
             self.page.run_thread(update_ui_after_processing)
 
+        except requests.exceptions.ConnectionError as conn_err:
+            logger.warning(f"Erro de conexão ao tentar se comunicar com o motor de ML: {conn_err}")
+            def update_ui_on_conn_error():
+                hide_loading_overlay(self.page)
+                msg_amigavel = ("Não foi possível conectar ao motor de Vetorização. "
+                                "Ele pode ainda estar inicializando em segundo plano. "
+                                "Por favor, aguarde alguns instantes e tente novamente.")
+                show_snackbar(self.page, msg_amigavel, color=theme.COLOR_WARNING, duration=8000)
+            self.page.run_thread(update_ui_on_conn_error)
+
         except Exception as e:
             logger.error(f"Erro ao pré-processar documentos para o chat: {e}", exc_info=True)
             def update_ui_on_error(e: Exception):
                 hide_loading_overlay(self.page)
-                msg_error = f"Erro ao processar documentos: {e}"
+                msg_error = f"Ocorreu um erro inesperado durante o processamento: {e}"
                 logger.error(msg_error, exc_info=True)
                 show_snackbar(self.page, msg_error, color=theme.COLOR_ERROR)
             self.page.run_thread(update_ui_on_error(e))

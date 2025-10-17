@@ -2140,7 +2140,8 @@ class InternalAnalysisController:
   
         try:
             start_time = perf_counter()
- 
+            import requests
+
             logger.debug(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
             self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
  
@@ -2256,7 +2257,17 @@ class InternalAnalysisController:
                 # Se não vai para a LLM, a UI precisa ser atualizada agora com os resultados do processamento.
                 self.page.run_thread(self.parent_view._update_gui_from_state)
                 self.page.run_thread(show_snackbar, self.page, f"Conteúdo de '{batch_name}' processado. Pronto para análise LLM.", theme.COLOR_SUCCESS)
-        
+
+        except requests.exceptions.ConnectionError as conn_err:
+            logger.warning(f"Erro de conexão ao tentar se comunicar com o motor de ML: {conn_err}")
+            def update_ui_on_conn_error():
+                hide_loading_overlay(self.page)
+                msg_amigavel = ("Não foi possível conectar ao motor de Vetorização. "
+                                "Ele pode ainda estar inicializando em segundo plano. "
+                                "Por favor, aguarde alguns instantes e tente novamente.")
+                show_snackbar(self.page, msg_amigavel, color=theme.COLOR_WARNING, duration=8000)
+            self.page.run_thread(update_ui_on_conn_error)
+
         except Exception as ex_proc:
             logger.error(f"Thread: Erro no processamento de PDF para '{batch_name}': {ex_proc}", exc_info=True)
             self.page.run_thread(self._update_status_callback, f"Erro ao processar PDFs: {ex_proc}", True, True)

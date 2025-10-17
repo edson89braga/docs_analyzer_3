@@ -61,7 +61,7 @@ exe = EXE(
     a.scripts,
     [],
     [],
-    name='IAnalista',         # Nome distinto para o executável de debug
+    name='Opera-IAnalista',         # Nome distinto para o executável de debug
     debug=False,              # Habilita saídas de debug do bootloader
     bootloader_ignore_signals=False,
     strip=False,
@@ -78,12 +78,12 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=False,   
-    name='IAnalista'
+    name='Opera-IAnalista'
 )
 
 # --- Bloco 4: Script Pós-Build ---
 # Move a pasta 'assets' da subpasta '_internal' para o diretório raiz da aplicação.
-dist_path = os.path.join(DISTPATH, 'IAnalista')
+dist_path = os.path.join(DISTPATH, 'Opera-IAnalista')
 
 internal_assets_path = os.path.join(dist_path, '_internal', 'assets')
 root_assets_path = os.path.join(dist_path, 'assets')

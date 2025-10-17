@@ -134,6 +134,14 @@ def with_proxy(skip_ssl_verify: bool = True):
                         final_proxy_url = proxy_url_auth if proxy_url_auth else proxy_url_base
                         os.environ['HTTP_PROXY'] = final_proxy_url
                         os.environ['HTTPS_PROXY'] = final_proxy_url
+
+                        # CORREÇÃO: Garante que localhost e 127.0.0.1 sejam ignorados pelo proxy.
+                        original_no_proxy = os.environ.get("NO_PROXY", "")
+                        no_proxy_list = [item.strip() for item in original_no_proxy.split(",") if item.strip()]
+                        if "127.0.0.1" not in no_proxy_list: no_proxy_list.append("127.0.0.1")
+                        if "localhost" not in no_proxy_list: no_proxy_list.append("localhost")
+                        os.environ["NO_PROXY"] = ",".join(no_proxy_list)
+
                         logger.debug(f"Variáveis de ambiente HTTP_PROXY/HTTPS_PROXY definidas para: {final_proxy_url}")
 
                         # Aplicar desativação de SSL *condicionalmente*
@@ -285,7 +293,7 @@ def _initialize_heavy_utils():
     _utils_initialized = True
     logger.debug("Utilitários pesados (tiktoken, rouge, etc.) foram inicializados.")
 
-@with_proxy(skip_ssl_verify=False) # Usa proxy se configurado, mas não pula SSL para localhost
+# @with_proxy(skip_ssl_verify=False) # Usa proxy se configurado, mas não pula SSL para localhost
 def get_embeddings_from_engine(text_list: List[str]) -> np_ndarray:
     """
     Envia uma lista de textos para o serviço local ml_engine e retorna os embeddings.
@@ -301,9 +309,15 @@ def get_embeddings_from_engine(text_list: List[str]) -> np_ndarray:
     if not text_list:
         return np_array([])
 
+    # Define explicitamente para não usar proxy para esta chamada localhost.
+    proxies = {
+        "http": None,
+        "https": None,
+    }
+
     try:
         logger.info(f"Requisitando embeddings ao motor de ML para {len(text_list)} textos...")
-        response = requests.post(f"{ML_ENGINE_API_URL}/embed", json={"text_list": text_list}, timeout=180)
+        response = requests.post(f"{ML_ENGINE_API_URL}/embed", json={"text_list": text_list}, timeout=180, proxies=proxies)
         response.raise_for_status()
         data = response.json()
         return np_array(data.get("embeddings", []))

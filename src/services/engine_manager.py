@@ -22,6 +22,10 @@ class MLEngineManager:
 
     def is_running(self) -> bool:
         """Verifica se a API do motor de ML está respondendo."""
+        proxies = {
+            "http": None,
+            "https": None,
+        }        
         try:
             #response = requests.get(f"{self.api_url}/health", timeout=1)
             #return response.status_code == 200
@@ -29,7 +33,7 @@ class MLEngineManager:
             # Verificação mais robusta: tenta usar o endpoint /embed com um texto de teste.
             # Se isso funcionar, o servidor está realmente pronto para o trabalho.
             test_payload = {"text_list": ["teste"]}
-            response = requests.post(f"{self.api_url}/embed", json=test_payload, timeout=5)
+            response = requests.post(f"{self.api_url}/embed", json=test_payload, timeout=5, proxies=proxies)
             
             # Verifica se a resposta foi bem-sucedida e se contém o campo esperado.
             if response.status_code == 200 and "embeddings" in response.json():
@@ -56,11 +60,7 @@ class MLEngineManager:
             return
 
         try:
-            # No Windows, creationflags oculta a janela do console do subprocesso
-            creationflags = 0
-            if sys.platform == "win32":
-                creationflags = subprocess.CREATE_NO_WINDOW
-            
+                    
             # Cria uma cópia do ambiente atual e remove as variáveis de proxy
             # para evitar que o subprocesso as herde indevidamente.
             env = os.environ.copy()
@@ -69,7 +69,21 @@ class MLEngineManager:
             env.pop("http_proxy", None)
             env.pop("https_proxy", None)
 
-            self.process = subprocess.Popen([self.engine_path], creationflags=creationflags, env=env)
+            # --- CORREÇÃO CRÍTICA PARA HANDLES DE I/O EM SUBPROCESSOS NO WINDOWS ---
+            # Redireciona stdout/stderr para um arquivo de log e stdin para DEVNULL
+            # para evitar o bug de "handle inválido" do PyInstaller.
+            log_dir = os.path.dirname(self.engine_path)
+            log_file_path = os.path.join(log_dir, "ml_engine_output.log")
+            log_file = open(log_file_path, "w", encoding="utf-8")
+            
+             # No Windows, creationflags oculta a janela do console do subprocesso
+            creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+            self.process = subprocess.Popen(
+                [self.engine_path], env=env, stdin=subprocess.DEVNULL,
+                stdout=log_file, stderr=subprocess.STDOUT, creationflags=creationflags
+            )
+
             logger.info(f"Processo do motor de ML iniciado com PID: {self.process.pid}.")
 
             # Aguarda o servidor ficar pronto
