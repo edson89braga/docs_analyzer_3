@@ -10,7 +10,7 @@ LoggerSetup.initialize(routine_name="Admin_Dashboard_Streamlit", dev_mode=True)
 
 # Imports dos módulos de lógica admin
 from admin_py import dashboard_analyzer, dashboard_plotter, local_data_manager, export_data
-from admin_py import admin_llm_providers, upload_prompts, cleanup_cloud_logs
+from admin_py import admin_llm_providers, upload_prompts, cleanup_cloud_logs, user_verification
 from admin_py.set_admin import set_user_admin_status
 
 st.set_page_config(
@@ -185,6 +185,22 @@ elif page == "Usuários":
     if users_list:
         df_users = pd.DataFrame(users_list)
         st.dataframe(df_users, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.subheader("Gerar Link de Verificação de Email")
+        verification_email = st.text_input(
+            "Email do usuário para gerar o link:",
+            placeholder="Digite o e-mail do usuário não verificado"
+        )
+        if st.button("Gerar Link Manualmente"):
+            if verification_email:
+                with st.spinner(f"Gerando link para {verification_email}..."):
+                    success, result = user_verification.generate_verification_link(verification_email)
+                if success:
+                    st.success("Link gerado com sucesso! Copie e envie para o usuário.")
+                    st.code(result, language=None)
+                else:
+                    st.error(f"Falha ao gerar o link: {result}")
 
         st.subheader("Alterar Status de Administrador")
         selected_email = st.selectbox("Selecione o email do usuário:", options=[u['Email'] for u in users_list])

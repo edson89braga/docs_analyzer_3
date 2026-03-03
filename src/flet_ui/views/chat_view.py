@@ -518,22 +518,27 @@ class ChatViewContent(ft.Column):
             return
 
         settings = view.page.session.get(KEY_SESSION_CHAT_SETTINGS) or {}
-        api_key = view.page.session.get(f"decrypted_api_key_{settings.get('llm_provider', DEFAULT_LLM_PROVIDER)}") 
+        provider = settings.get('llm_provider', DEFAULT_LLM_PROVIDER)
         
-        if not api_key:
-            error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
-            logger.error(error_msg)
-            view = view_ref() # Re-verifica a referência
-            if view and view.page:
-                view.page.run_thread(lambda: view._update_last_message_text(error_msg, append=False))
-                view.page.run_thread(lambda: view._set_processing_state(False))
-            return
+        if provider == "llm_pf":
+            api_key = "EMPTY"
+        else:
+            api_key = view.page.session.get(f"decrypted_api_key_{provider}")
+            if not api_key:
+                error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
+                logger.error(error_msg)
+                view = view_ref() # Re-verifica a referência
+                if view and view.page:
+                    view.page.run_thread(lambda: view._update_last_message_text(error_msg, append=False))
+                    view.page.run_thread(lambda: view._set_processing_state(False))
+                return
 
         full_response_content = ""
         final_usage_data = {}
 
         try:
-            orchestrator_instance = ChatLLMOrchestrator() # Cria instância dentro da thread
+            provider = settings.get('llm_provider', DEFAULT_LLM_PROVIDER)
+            orchestrator_instance = ChatLLMOrchestrator(provider=provider) # Cria instância dentro da thread
             model_name = settings.get('llm_model', DEFAULT_LLM_MODEL) 
             response_generator = orchestrator_instance.generate_response(
                 api_key=api_key,
@@ -546,7 +551,8 @@ class ChatViewContent(ft.Column):
                 loaded_llm_providers=view.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS) or [],
                 temperature=settings.get('llm_temperature', DEFAULT_TEMPERATURE),
                 reasoning_mode=settings.get('reasoning_effort'),
-                verbosity_level=settings.get('verbosity_level')
+                verbosity_level=settings.get('verbosity_level'),
+                provider=provider
             )
 
             for response_part in response_generator:

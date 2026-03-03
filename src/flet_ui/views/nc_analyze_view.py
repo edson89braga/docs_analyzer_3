@@ -2398,12 +2398,15 @@ class InternalAnalysisController:
             logger.debug(f"Thread: Iniciando análise LLM para '{batch_name}'...")
             self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
  
-            decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
-            if decrypted_api_key:
-                logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+            if provider == "llm_pf":
+                decrypted_api_key = "EMPTY"
             else:
-                decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
-                assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
+                decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
+                if decrypted_api_key:
+                    logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
+                else:
+                    decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
+                    assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
  
             loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
  

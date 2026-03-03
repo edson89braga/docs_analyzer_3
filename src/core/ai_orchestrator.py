@@ -159,7 +159,82 @@ def calc_costs_llm_analysis(input_tokens, cached_tokens, output_tokens, provider
     #metadata_to_display["total_cost_usd"] = calculated_cost_usd 
     return calculated_cost_usd
 
+import json
+import re
 import tiktoken
+
+def extract_and_clean_json(response_text: str) -> str:
+    """
+    Extrai e limpa JSON de uma resposta, removendo delimitadores de markdown,
+    espaços em branco extras e tratando erros de formatação comuns.
+
+    Args:
+        response_text (str): Texto bruto da resposta que pode conter JSON.
+
+    Returns:
+        str: JSON limpo pronto para parsing.
+
+    Raises:
+        ValueError: Se nenhum JSON válido puder ser extraído.
+    """
+    if not response_text:
+        raise ValueError("Texto de resposta vazio fornecido.")
+
+    # Remove tags de thinking (< think > e < /think >)
+    cleaned = response_text.replace("<think>", "").replace("</think>", "").strip()
+    
+    # Tenta remover delimitadores de markdown (```json ... ```, ``` ... ```)
+    # Padrão 1: ```json ... ``` ou ```json ... ```
+    markdown_pattern = r'```(?:json)?\s*(.*?)\s*```'
+    match = re.search(markdown_pattern, cleaned, re.DOTALL)
+    if match:
+        cleaned = match.group(1).strip()
+        logger.debug("JSON extraído de delimitadores markdown.")
+    
+    # Tenta remover whitespace extra no início/fim
+    cleaned = cleaned.strip()
+    
+    # Tenta fazer um parse básico para validar
+    try:
+        json.loads(cleaned)
+        logger.debug("JSON validado com sucesso após limpeza.")
+        return cleaned
+    except json.JSONDecodeError as e:
+        logger.debug(f"Erro ao parsear JSON após limpeza inicial: {e}")
+    
+    # Fallback: tenta encontrar um objeto JSON dentro do texto
+    # Procura por { no início e } no final
+    brace_start = cleaned.find('{')
+    brace_end = cleaned.rfind('}')
+    
+    if brace_start != -1 and brace_end != -1 and brace_start < brace_end:
+        potential_json = cleaned[brace_start:brace_end + 1]
+        try:
+            json.loads(potential_json)
+            logger.debug("JSON extraído procurando por chaves { }.")
+            return potential_json
+        except json.JSONDecodeError as e:
+            logger.debug(f"Erro ao parsear JSON extraído por chaves: {e}")
+    
+    # Fallback: tenta encontrar um array JSON
+    bracket_start = cleaned.find('[')
+    bracket_end = cleaned.rfind(']')
+    
+    if bracket_start != -1 and bracket_end != -1 and bracket_start < bracket_end:
+        potential_json = cleaned[bracket_start:bracket_end + 1]
+        try:
+            json.loads(potential_json)
+            logger.debug("JSON array extraído procurando por colchetes [ ].")
+            return potential_json
+        except json.JSONDecodeError as e:
+            logger.debug(f"Erro ao parsear JSON array extraído por colchetes: {e}")
+    
+    # Se tudo falhar, loga o texto para debug e lança erro
+    logger.error(f"Não foi possível extrair JSON válido. Texto recebido:\n{cleaned[:500]}")
+    raise ValueError(
+        f"Não foi possível extrair JSON válido da resposta. "
+        f"Primeiro caractere: '{cleaned[0] if cleaned else 'VAZIO'}'."
+    )
 
 def contar_tokens(texto: Union[str, Any], model_name: str) -> int:
     """
@@ -319,8 +394,8 @@ def get_embeddings_from_api(
 
         # Reinstanciar o cliente se a chave mudou ou se não existe
         if client_openai is None or (api_key and client_openai.api_key != api_key) :
-             logger.debug("Instanciando ou reinstanciando o cliente OpenAI com a chave fornecida/ambiente.")
-             client_openai = OpenAI(api_key=key_to_use, timeout=180, max_retries=2)
+            logger.debug("Instanciando ou reinstanciando o cliente OpenAI com a chave fornecida/ambiente.")
+            client_openai = OpenAI(api_key=key_to_use, timeout=180, max_retries=2)
         
         for batch_de_textos, batch_de_indices_originais in batches_para_api:
             if not batch_de_textos: # Segurança, não deve acontecer se criar_batches for correta
@@ -562,11 +637,18 @@ def analyze_text_with_llm(
 
                 logger.info('[DEBUG]: Requisitando à API da Openai...')
                 # response = client_openai.responses.parse(**data_to_api)
+
                 response = client_openai.responses.create(**data_to_api)
+                
                 logger.info('[DEBUG]: Requisição concluída.')
                 
                 final_response_text = response.output_text
-                final_response = output_formats[prompt_name].model_validate_json(final_response_text)
+                try:
+                    final_response_text_clean = extract_and_clean_json(final_response_text)
+                    final_response = output_formats[prompt_name].model_validate_json(final_response_text_clean)
+                except (ValueError, json.JSONDecodeError) as e:
+                    logger.error(f"Erro ao processar JSON do OpenAI: {e}")
+                    raise
                 
                 # Obter informações sobre o uso de tokens
                 cb = response.usage # callback
@@ -582,10 +664,98 @@ def analyze_text_with_llm(
                                                                              provider, model_name, loaded_llm_providers)
             elif prompt_name == "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS":
                 # prompt_inicial_para_cache, main_tokens_count = _get_prompt_to_cache(prompts, "prompt_inicial_para_cache", "{input_text}", processed_text)
-                raise ValueError("Modo 'Prompt segmentado' ainda não implementado.")                
+                raise ValueError("Modo 'Prompt segmentado' não implementado.")                
 
         elif provider == "lang_chain_openai":
-            raise ValueError("Provedor LangChain OpenAI ainda não implementado.")
+            raise ValueError("Provedor LangChain OpenAI não implementado.")
+
+        elif provider == "llm_pf":
+            # Configurações para o endpoint interno da PF
+            base_url = "http://llm.pf.gov.br:31893/v1"
+            api_key_pf = "EMPTY"
+            model_pf = "Qwen3-8B-AWQ"  # Modelo fixo para este endpoint
+            
+            # Instancia o cliente OpenAI com base_url customizada
+            client_pf = OpenAI(
+                api_key=api_key_pf,
+                base_url=base_url,
+                timeout=180,
+                max_retries=2
+            )
+            
+            if prompt_name == "PROMPT_UNICO_for_INITIAL_ANALYSIS":
+                prompt_list_dicts = prompts[prompt_name]
+                # Anexar /no_think ao processed_text para llm_pf
+                processed_text_with_no_think = processed_text + " /no_think"
+                messages = []
+                for msg_dict in prompt_list_dicts:
+                    modified_msg_dict = {key: value.replace("{input_text}", processed_text_with_no_think) for key, value in msg_dict.items()}
+                    messages.append(modified_msg_dict)
+
+                # Converter a classe Pydantic para JSON schema
+                json_schema = output_formats[prompt_name].model_json_schema()
+                json_schema["required"] = list(json_schema["properties"].keys())
+                json_schema["additionalProperties"] = False
+                
+                response_format = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": output_formats[prompt_name].__name__,
+                        "schema": json_schema,
+                        "strict": True
+                    }
+                }
+                
+                # Chamada para chat completions
+                logger.info('[DEBUG]: Requisitando à API do endpoint PF...')
+                response = client_pf.chat.completions.create(
+                    model=model_pf,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=32000,  # Ajustar conforme necessário
+                    response_format=response_format
+                )
+                logger.info('[DEBUG]: Requisição concluída.')
+                
+                # Extrair o conteúdo da resposta
+                final_response_text = response.choices[0].message.content
+
+                logger.info(f"[DEBUG]: final_response_text obtido: \n{final_response_text}\n")
+                
+                try:
+                    final_response_text_clean = extract_and_clean_json(final_response_text)
+                    final_response = output_formats[prompt_name].model_validate_json(final_response_text_clean)
+                except (ValueError, json.JSONDecodeError) as e:
+                    logger.error(f"Erro ao processar JSON do endpoint PF: {e}", exc_info=True)
+                    raise
+                
+                # Obter informações sobre o uso de tokens (se disponível)
+                usage = response.usage
+                if usage:
+                    token_usage_info = {
+                        "input_tokens": usage.prompt_tokens if hasattr(usage, 'prompt_tokens') else 0,
+                        "cached_tokens": 0,  # Endpoint PF pode não suportar cache
+                        "output_tokens": usage.completion_tokens if hasattr(usage, 'completion_tokens') else 0,
+                        "reasoning_tokens": 0,
+                        "total_tokens": usage.total_tokens if hasattr(usage, 'total_tokens') else 0,
+                        "successful_requests": 1,
+                    }
+                    token_usage_info["total_cost_usd"] = 0.0  # Custos não aplicáveis ou calcular se houver config
+                else:
+                    token_usage_info = {
+                        "input_tokens": 0,
+                        "cached_tokens": 0,
+                        "output_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "total_tokens": 0,
+                        "successful_requests": 1,
+                        "total_cost_usd": 0.0
+                    }
+                    
+            elif prompt_name == "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS":
+                raise ValueError("Modo 'Prompt segmentado' não implementado para provider 'llm_pf'.")
+            
+        # --- Adicionar blocos `elif provider == "azure":` etc. aqui no futuro ---
             
         # --- Adicionar blocos `elif provider == "azure":` etc. aqui no futuro ---
         # elif provider == "azure":
@@ -594,7 +764,7 @@ def analyze_text_with_llm(
         #    # Configurar endpoint, deployment_name etc.
         #    # llm = AzureChatOpenAI(...)
         #    # ... (resto da configuração da cadeia) ...
-        #    logger.warning("Provedor Azure ainda não implementado.")
+        #    logger.warning("Provedor Azure não implementado.")
         #    return None # Por enquanto
 
         else:

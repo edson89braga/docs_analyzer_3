@@ -759,8 +759,12 @@ class PDFDocumentAnalyzer:
                 assert len(ready_embeddings) == len(all_texts_for_analysis_list)
                 embedding_vectors_combined = ready_embeddings
             elif model_embedding == 'all-MiniLM-L6-v2':
-                raise ValueError("Função get_vectors descontinuada; PDF_Processor deve receber os vetores prontos.")
-                embedding_vectors_combined = get_vectors(all_texts_for_analysis_list, model_embedding=model_embedding)
+                # Esta chamada foi movida de nc_analyze_view.py para cá para centralizar a lógica.
+                from src.utils import get_embeddings_from_engine
+                embedding_vectors_combined = get_embeddings_from_engine(all_texts_for_analysis_list)
+                # CRÍTICO: Verificar se a obtenção dos embeddings falhou.
+                if embedding_vectors_combined.size == 0:
+                    raise ValueError("Falha ao gerar vetores de embedding a partir do motor de ML.")
             else: # 'tfidf_vectorizer'
                 # Deve ser None para não causar erro no método filter_and_classify_pages ao comandar get_similarity_matrix
                 embedding_vectors_combined = None 

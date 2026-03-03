@@ -23,22 +23,39 @@ class ChatLLMOrchestrator:
     """
     Orquestra a conversa entre o usuário e o LLM, com base no contexto de um documento.
     """
-    def __init__(self):
+    def __init__(self, provider: str = "openai"):
         """
         Inicializa o orquestrador de chat.
+        
+        Args:
+            provider: O provedor LLM a ser usado (ex: "openai" ou "llm_pf").
         """
+        self.provider = provider
         self.client: Optional[openai.OpenAI] = None
 
     def _initialize_client(self, api_key: str):
-        """Inicializa o cliente OpenAI se necessário."""
-        if self.client is None or self.client.api_key != api_key:
-            if not api_key:
-                msg_error = "A chave da API da OpenAI deve ser fornecida."
-                logger.error(msg_error)
-                raise ValueError(msg_error)
-            
-            logger.debug("Inicializando ou atualizando cliente OpenAI para o chat.")
-            self.client = openai.OpenAI(api_key=api_key)
+        """Inicializa o cliente OpenAI ou compatível se necessário."""
+        if self.provider == "openai":
+            if self.client is None or self.client.api_key != api_key:
+                if not api_key:
+                    msg_error = "A chave da API da OpenAI deve ser fornecida."
+                    logger.error(msg_error)
+                    raise ValueError(msg_error)
+                
+                logger.debug("Inicializando ou atualizando cliente OpenAI para o chat.")
+                self.client = openai.OpenAI(api_key=api_key)
+        elif self.provider == "llm_pf":
+            # Para llm_pf, usar base_url customizada e api_key fixa
+            base_url = "http://llm.pf.gov.br:31893/v1"
+            api_key_pf = "EMPTY"
+            if self.client is None or self.client.base_url != base_url:
+                logger.debug("Inicializando cliente para endpoint llm_pf.")
+                self.client = openai.OpenAI(
+                    api_key=api_key_pf,
+                    base_url=base_url
+                )
+        else:
+            raise ValueError(f"Provedor '{self.provider}' não suportado.")
 
     def _build_input_items(
         self,
@@ -92,19 +109,21 @@ class ChatLLMOrchestrator:
         loaded_llm_providers: List[Dict[str, Any]],
         temperature: float = 1.0,
         reasoning_mode: str = None,
-        verbosity_level: str = None
+        verbosity_level: str = None,
+        provider: str = "openai"
     ) -> Generator[Dict[str, Any], None, None]:
         """
-        Gera uma resposta do LLM via streaming usando a Responses API.
+        Gera uma resposta do LLM via streaming usando a API apropriada.
 
         Args:
-            api_key: A chave da API da OpenAI.
-            model_name: O nome do modelo a ser usado (ex: "gpt-4o-mini").
+            api_key: A chave da API (para OpenAI) ou ignorada (para llm_pf).
+            model_name: O nome do modelo a ser usado (ex: "gpt-4o-mini" ou "Qwen3-8B-AWQ").
             temperature: A temperatura para a geração da resposta.
             instructions: As instruções de sistema para o modelo.
             document_context: O texto completo do documento a ser analisado.
             history: O histórico da conversa atual.
             user_question: A nova pergunta do usuário.
+            provider: O provedor LLM ("openai" ou "llm_pf").
 
         Yields:
             Dict[str, Any]: Dicionários contendo o status e os dados.
@@ -112,9 +131,73 @@ class ChatLLMOrchestrator:
         self._initialize_client(api_key)
         
         if not self.client:
-            yield {"type": "error", "content": "Cliente OpenAI não inicializado."}
+            yield {"type": "error", "content": "Cliente não inicializado."}
             return
         
+        start_time = time.perf_counter()
+
+        # Lógica específica para llm_pf usando Chat Completions API
+        if provider == "llm_pf":
+            model_name = "Qwen3-8B-AWQ"  # Modelo fixo para llm_pf
+            # Anexar /no_think à pergunta do usuário
+            user_question_with_no_think = user_question + " /no_think"
+            messages = self._build_input_items(document_context, history, user_question_with_no_think, instructions=instructions)
+            
+            try:
+                response = self.client.chat.completions.create(
+                    model=model_name,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=32000,
+                    stream=False  # Desabilita streaming
+                )
+                
+                # Processa resposta não-streaming (response é um objeto, não um iterador)
+                full_response_content = ""
+                if hasattr(response, 'choices') and response.choices:
+                    for choice in response.choices:
+                        if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
+                            content = choice.message.content
+                            if content:
+                                full_response_content += content
+                                yield {"type": "chunk", "content": content}
+                elif hasattr(response, 'content'):
+                    # Fallback direto para propriedade content se choices não estiver disponível
+                    full_response_content = response.content
+                    full_response_content = full_response_content.replace("<think>", "").replace("</think>", "").strip("\n")
+                    if full_response_content:
+                        yield {"type": "chunk", "content": full_response_content}
+                else:
+                    logger.warning("[DEBUG] Resposta do llm_pf não contém choices ou content esperados.")
+                
+                logger.info(f"[DEBUG] Resposta completa do llm_pf:\n{full_response_content}\n")  # Log da resposta completa (início)
+
+                final_usage_data = response.usage
+
+                if final_usage_data:
+                    token_usage_info = {
+                        "input_tokens":  final_usage_data.prompt_tokens or 0,
+                        "cached_tokens": 0, 
+                        "output_tokens": final_usage_data.completion_tokens or 0,
+                        "reasoning_tokens": 0, 
+                        "total_tokens":  final_usage_data.total_tokens or 0,
+                    }
+                    token_usage_info["total_cost_usd"] = 0
+                    token_usage_info["previous_response_id"] = None
+
+                    total_time = round(time.perf_counter() - start_time, 2)       
+                    logger.info(f"Resposta do chat recebida. Model: {model_name}; Tempo de resposta: {total_time}s; Métricas: {token_usage_info}")
+                    yield {"type": "final_metrics", "data": token_usage_info}
+                else:
+                    logger.warning("Não foi possível obter métricas de uso da resposta do chat.")
+                    yield {"type": "final_metrics", "data": {}}
+                
+            except Exception as e:
+                logger.error(f"Erro no provider llm_pf: {e}", exc_info=True)
+                yield {"type": "error", "content": f"Erro no endpoint llm_pf: {e}"}
+            return
+        
+        # Lógica para OpenAI (Responses API)
         logger.info(f'[DEBUG CACHE] Previous_response_id: {previous_response_id}')
 
         if not previous_response_id:
@@ -166,7 +249,6 @@ class ChatLLMOrchestrator:
 
             logger.info(f"[DEBUG] Enviando request para OpenAI com kwargs: \n{request_kwargs_str}") # TODO: suprimir esse log
 
-            start_time = time.perf_counter()
             try:
                 response = self.client.responses.create(**request_kwargs)
 

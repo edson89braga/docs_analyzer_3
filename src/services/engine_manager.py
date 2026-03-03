@@ -109,6 +109,9 @@ class MLEngineManager:
             time.sleep(1)
         
         logger.error(f"Timeout! O servidor de ML não respondeu em {timeout} segundos.")
+        # Adiciona uma mensagem de log mais detalhada para o usuário
+        log_file_path = os.path.join(os.path.dirname(self.engine_path), "ml_engine_output.log")
+        logger.critical(f"VERIFIQUE O ARQUIVO DE LOG: '{log_file_path}' para encontrar a causa do erro no motor de ML.")        
         self.stop() # Tenta parar o processo se ele não respondeu
 
     def stop(self):

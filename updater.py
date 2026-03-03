@@ -247,7 +247,13 @@ def main():
         # 4. Reiniciar a aplicação
         logging.info(f"Atualização concluída. Reiniciando '{args.restart_exe}'...")
         restart_path = os.path.join(args.target_dir, args.restart_exe)
-        
+
+        # Adiciona um parâmetro aleatório à URL para forçar uma nova sessão no Flet Web
+        # Se for um app web, o 'restart_arg' será a URL.
+        if args.restart_arg and (args.restart_arg.startswith("http://") or args.restart_arg.startswith("https://")):
+            import time
+            args.restart_arg = f"{args.restart_arg}?_v={int(time.time())}"
+
         command = [restart_path]
         if args.restart_arg:
             command.append(args.restart_arg)
