@@ -4,9 +4,9 @@ import sys
 
 # Adiciona o diretório raiz ao path para encontrar 'src'
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.services.firebase_manager import FbManagerFirestore, inicializar_firebase
-from src.logger.logger import LoggerSetup
-from src.settings import PROMPTS_COLLECTION, PROMPTS_DOCUMENT_ID
+from SOURCE.services.firebase_manager import FbManagerFirestore, inicializar_firebase
+from SOURCE.logger.logger import LoggerSetup
+from SOURCE.settings import PROMPTS_COLLECTION, PROMPTS_DOCUMENT_ID
 # A GUI admin deve ter seu próprio arquivo de prompts ou um método para carregá-los.
 # Para manter a modularidade, o ideal é que os dados dos prompts sejam passados como argumento.
 # No entanto, mantendo a estrutura original, o import de repo_prompts continua.

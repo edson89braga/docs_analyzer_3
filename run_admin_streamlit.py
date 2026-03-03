@@ -5,7 +5,7 @@ import io, json
 from datetime import datetime, date
 
 # Configuração do Logger (deve ser a primeira coisa)
-from src.logger.logger import LoggerSetup
+from SOURCE.logger.logger import LoggerSetup
 LoggerSetup.initialize(routine_name="Admin_Dashboard_Streamlit", dev_mode=True)
 
 # Imports dos módulos de lógica admin
@@ -169,7 +169,7 @@ elif page == "Dados & Logs":
 elif page == "Usuários":
     st.title("👥 Gerenciamento de Usuários")
     
-    from src.services.firebase_manager import FbManagerAdminAuth
+    from SOURCE.services.firebase_manager import FbManagerAdminAuth
     auth_manager = FbManagerAdminAuth()
 
     users_list = []
@@ -219,7 +219,7 @@ elif page == "Usuários":
 
 elif page == "Configurações":
     st.title("⚙️ Configurações da Aplicação")
-    from src.services.firebase_manager import FbManagerFirestore
+    from SOURCE.services.firebase_manager import FbManagerFirestore
     fs_manager_admin = FbManagerFirestore()
 
     with st.expander("Manutenção", expanded=True):

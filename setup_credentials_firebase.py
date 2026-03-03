@@ -6,11 +6,11 @@ from tkinter import filedialog, messagebox
 # Configura o logger ANTES de importar outros módulos do projeto
 # para garantir que as mensagens de log sejam capturadas.
 import logging
-from src.logger.logger import LoggerSetup
+from SOURCE.logger.logger import LoggerSetup
 LoggerSetup.initialize(routine_name="CredentialsSetup", dev_mode=True)
 logger = logging.getLogger(__name__)
 
-from src.services import credentials_manager
+from SOURCE.services import credentials_manager
 
 def run_credentials_setup():
     """

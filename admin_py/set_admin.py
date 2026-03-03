@@ -5,8 +5,8 @@ from typing import Optional
 
 # Adiciona o diretório raiz ao path para encontrar 'src'
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.services.firebase_manager import FbManagerAdminAuth, inicializar_firebase
-from src.logger.logger import LoggerSetup
+from SOURCE.services.firebase_manager import FbManagerAdminAuth, inicializar_firebase
+from SOURCE.logger.logger import LoggerSetup
 
 logger = LoggerSetup.get_logger(__name__)
 

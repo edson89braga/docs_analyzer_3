@@ -5,8 +5,8 @@ from datetime import datetime, timedelta, timezone
 
 # Adiciona o diretório raiz ao path para encontrar 'src'
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.services.firebase_manager import FbManagerStorage, inicializar_firebase
-from src.logger.logger import LoggerSetup
+from SOURCE.services.firebase_manager import FbManagerStorage, inicializar_firebase
+from SOURCE.logger.logger import LoggerSetup
 
 logger = LoggerSetup.get_logger(__name__)
 
@@ -34,7 +34,7 @@ def get_cloud_log_stats(days_to_keep: int=30) -> dict:
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
 
     try:
-        from src.settings import CLOUD_LOGGER_FOLDER
+        from SOURCE.settings import CLOUD_LOGGER_FOLDER
         blobs_iterator = storage_manager.bucket.list_blobs(prefix=CLOUD_LOGGER_FOLDER)
         
         for blob in blobs_iterator:

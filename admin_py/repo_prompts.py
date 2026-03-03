@@ -947,7 +947,7 @@ def return_parse_prompt(dados_respostas: List[str]) -> List[Dict[str, str]]:
 ### FUNÇÕES AUXILIARES:
 import json, sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.utils import (get_sigla_uf, get_municipios_por_uf_cached, obter_string_normalizada_em_lista, clean_and_convert_to_float, convert_to_list_of_strings)
+from SOURCE.utils import (get_sigla_uf, get_municipios_por_uf_cached, obter_string_normalizada_em_lista, clean_and_convert_to_float, convert_to_list_of_strings)
 
 dict_corregedorias_uf = {
     'AC': 'COR/SR/PF/AC', 

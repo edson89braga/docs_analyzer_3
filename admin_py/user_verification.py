@@ -2,7 +2,7 @@
 
 import logging
 from firebase_admin import auth as firebase_auth
-from src.services.firebase_manager import inicializar_firebase
+from SOURCE.services.firebase_manager import inicializar_firebase
 
 logger = logging.getLogger(__name__)
 

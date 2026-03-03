@@ -8,9 +8,7 @@ __pycache__/
 
 .Python
 
-build/
 develop-eggs/
-dist/
 eggs/
 .eggs/
 lib/
@@ -74,7 +72,12 @@ logs/
 /assets_demo/*
 /ml_engine
 /tests_in_dev
+/tests_scripts
 /notebooks
+
+/pyinstaller_files
+/build
+/dist
 
 credentials_fb.json
 api_key.txt
@@ -111,8 +114,4 @@ uploads_temp/
 
 *dict_prompts.json*
 
-test_updater_app.py
-test_updater_app2.py
-test_updater_app.spec
-test_updater2.spec
 .gitignore

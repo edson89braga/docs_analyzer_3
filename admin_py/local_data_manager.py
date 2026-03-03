@@ -6,7 +6,7 @@ import re
 from datetime import date, datetime, timezone
 from typing import List, Dict, Any, Set, Tuple, Optional
 
-from src.services.firebase_manager import (
+from SOURCE.services.firebase_manager import (
     inicializar_firebase, FbManagerFirestore, FbManagerStorage, FbManagerAdminAuth
 )
 
@@ -104,7 +104,7 @@ def sync_cloud_data_to_local() -> Tuple[bool, str]:
         auth_manager = FbManagerAdminAuth()
         
         # Sincronizar Logs do Storage
-        from src.settings import CLOUD_LOGGER_FOLDER
+        from SOURCE.settings import CLOUD_LOGGER_FOLDER
         logger.info("Verificando logs no Firebase Storage...")
         all_logs_blobs = storage_manager.bucket.list_blobs(prefix=CLOUD_LOGGER_FOLDER)
         for blob in all_logs_blobs:

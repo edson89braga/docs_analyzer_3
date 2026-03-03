@@ -34,7 +34,7 @@ if getattr(sys, 'frozen', False):
 
 DEBUG_LEVEL = False # Constam outras constantes de inicialização em app.py e pdf_processor.py
 
-from src.logger.logger import LoggerSetup
+from SOURCE.logger.logger import LoggerSetup
 
 try:
     LoggerSetup.initialize(
@@ -104,7 +104,7 @@ def get_or_create_secret_key():
     2. Keyring (persistência local)
     3. Gera nova chave e salva no Keyring
     """
-    from src.settings import APP_NAME, KEY_NAME_FLET_SECRET_KEY
+    from SOURCE.settings import APP_NAME, KEY_NAME_FLET_SECRET_KEY
     
     try:
         # 1. Primeiro, tenta ler da variável de ambiente
@@ -243,8 +243,8 @@ def initialize_app():
 
 
 # ===============================================================================
-from src.settings import UPLOAD_TEMP_DIR, ASSETS_DIR 
-from src import app_cache
+from SOURCE.settings import UPLOAD_TEMP_DIR, ASSETS_DIR 
+from SOURCE import app_cache
 
 def load_to_utils():
     # Antecipando, sob load_progressing_gui, outros imports que serão utilizados em utils.py:
@@ -285,10 +285,10 @@ _SESSION_LOCK = threading.Lock()
 
 import flet as ft
 # Importa a função 'main' do módulo app dentro de flet_gui
-from src.flet_ui.app import main
-from src.flet_ui.views.others_view import create_session_taken_over_view
-from src.services.update_manager import UpdateStatus, check_for_component_update
-from src.settings import APP_VERSION, ML_ENGINE_VERSION
+from SOURCE.flet_ui.app import main
+from SOURCE.flet_ui.views.others_view import create_session_taken_over_view
+from SOURCE.services.update_manager import UpdateStatus, check_for_component_update
+from SOURCE.settings import APP_VERSION, ML_ENGINE_VERSION
 
 # --- Variáveis globais para armazenar os status das verificações ---
 _APP_UPDATE_STATUS: Optional[UpdateStatus] = None
@@ -299,8 +299,8 @@ if __name__ == "__main__":
     
     initialize_app()
     from time import sleep
-    from src.settings import get_resource_path
-    from src.services.engine_manager import MLEngineManager
+    from SOURCE.settings import get_resource_path
+    from SOURCE.services.engine_manager import MLEngineManager
 
     engine_executable_path = get_resource_path('ml_engine/engine.exe')
     ml_engine_manager = MLEngineManager(engine_path=engine_executable_path)
@@ -388,7 +388,7 @@ if __name__ == "__main__":
         page.on_disconnect = master_session_disconnect
 
     def main_singleton_wrapper(page: ft.Page):
-        from src.services.update_manager import run_updater
+        from SOURCE.services.update_manager import run_updater
 
         # --- Lógica de Diálogo de Atualização ---
         update_info_to_process: Optional[UpdateStatus] = None

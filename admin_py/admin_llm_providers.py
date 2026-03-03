@@ -7,7 +7,7 @@ from typing import List, Dict, Any, Optional
 
 # Adiciona o diretório raiz ao path para encontrar o pacote 'src'
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from src.services.firebase_manager import FbManagerFirestore
+from SOURCE.services.firebase_manager import FbManagerFirestore
 
 logger = logging.getLogger(__name__)
 
