@@ -1,9 +1,9 @@
 {
   "app": {
-    "version": "0.5",
+    "version": "0.5.2",
     "release_date": "2025-10-15",
-    "download_url": "https://github.com/edson89braga/docs_analyzer_3/releases/download/v0.5.1/Opera-IAnalista_v0.51.zip",
-    "filename": "Opera-IAnalista_v0.51.zip",
+    "download_url": "https://github.com/edson89braga/docs_analyzer_3/releases/download/v0.5.2/Opera-IAnalista_v0.52.zip",
+    "filename": "Opera-IAnalista_v0.52.zip",
     "notes": "Correção: sobre uso de proxy no ambiente de rede da PF."
   },
   "ml_engine": {

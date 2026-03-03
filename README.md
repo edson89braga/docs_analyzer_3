@@ -1,6 +1,6 @@
 # ÓPERA - IA Assistente
 
-> **O**perador de **P**rocessos e **R**espostas **A**utomatizadas: Uma plataforma de software inteligente, desenvolvida em Python, para servir como um hub de agentes de IA e assistentes especializados, otimizando rotinas de análise e processos investigativos da Polícia Federal.
+**O**perador de **P**rocessos e **R**espostas **A**utomatizadas: Uma plataforma de baseada em inteligência artifical, desenvolvida em Python, para servir como um hub de agentes de IA e assistentes especializados, otimizando rotinas de análise e processos investigativos da Polícia Federal.
 
 ## 📖 Visão Geral
 
@@ -23,11 +23,9 @@ A plataforma possui uma arquitetura desacoplada, composta por três componentes 
    <br>Repositório do engine: [Link](https://github.com/edson89braga/ml_engine)
 4.  **Painel de Administração (Dashboard):** Uma aplicação **Streamlit** (`run_admin_streamlit.py`) para administradores, permitindo o monitoramento de métricas de uso, visualização de logs, gerenciamento de usuários e configuração de prompts e provedores LLM.
 
-Claro. Aqui está a seção `README.md` redigida com base no resumo fornecido, formatada para ser incluída diretamente no seu arquivo.
-
 ## 🏛️ Arquitetura do Agente de Análise de Documentos
 
-O módulo inicial, "Agente Assistente de Autuação", foi projetado como um pipeline modular que executa um ciclo completo de análise de documentos, desde o recebimento de arquivos PDF até a geração de um relatório final. A arquitetura é uma referência útil para a construção de novos agentes no "Hub de Agentes de IA".
+O módulo inicial, "Agente Assistente de Autuação", foi projetado como um pipeline modular que executa um ciclo completo de análise de documentos, desde o recebimento de arquivos PDF até a geração de um documento conclusivo. A arquitetura é uma referência útil para a construção de novos agentes no "Hub de Agentes de IA".
 
 ![Print_tela_nc_analyze_1](https://github.com/edson89braga/docs_analyzer_3/blob/master/docs/PrintScreens%20Telas/v0.5/2-tela-nc-analyze.png)
 
@@ -70,8 +68,6 @@ Este módulo lida com a saída da análise, transformando os dados estruturados 
 
 *   **Gerenciamento de Credenciais (`src/services/credentials_manager.py`):** Implementa uma abordagem de segurança robusta para o armazenamento de chaves na máquina do usuário, utilizando **Keyring** para a chave de criptografia principal e criptografia **Fernet** para os arquivos de credenciais.
 *   **Fluxo de Feedback do Usuário (`src/flet_ui/views/nc_analyze_view.py`):** Contém uma implementação de referência para coletar feedback sobre a precisão da IA. O sistema compara a resposta original da LLM com a versão final editada pelo usuário, calcula a similaridade textual (**ROUGE-L**) e registra esses dados como métricas para aprimoramento contínuo do modelo.
-
-Com certeza. Com base na arquitetura e nos handlers implementados em `chat_view.py` e `chat_llm_orchestrator.py`, redigi uma nova seção detalhada para o seu `README.md`.
 
 ## 🏛️ Arquitetura do Módulo 'Chat com Documentos'
 
@@ -259,7 +255,7 @@ Contribuições são bem-vindas. Por favor, siga os passos:
 5.  Abra um **Pull Request**.
 
 ## 🗺️ Roadmap e Próximos Passos
--   [ ] **Fase 3.2 (RAG e Interação Avançada):** Implementar *Retrieval-Augmented Generation* (RAG) para otimizar o chat com documentos muito longos, utilizando LlamaIndex e sumarização de conteúdo com grafos.
+-   [ ] **Fase 3.2 (RAG e Interação Avançada):** Implementar *Retrieval-Augmented Generation* (RAG) para otimizar o chat com documentos grandes, utilizando LlamaIndex e sumarização de conteúdo com grafos.
 -   [ ] **Fase 4 (Segurança e Atualizações):** Implementar o módulo de anonimização de dados sensíveis (NER com spaCy) antes do envio para APIs externas.
 -   [ ] **Fase 5 e 6 (Integrações e Offline):** Criar uma API para integração com sistemas externos (RPA) e adicionar suporte a LLMs que rodam localmente (Ollama, Llama.cpp).
 -   [ ] **Melhorias Contínuas:** Expandir a suíte de testes, aprimorar o dashboard de administração e refinar a experiência do usuário com base no feedback.
