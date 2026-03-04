@@ -220,7 +220,7 @@ streamlit run run_admin_streamlit.py
 .
 ├── ml_engine/                # Código-fonte e executável do Motor de ML (FastAPI)
 ├── release_info/             # Arquivos de configuração para o atualizador automático
-├── src/
+├── SOURCE/
 │   ├── core/                 # Módulos centrais da lógica de negócio (processamento, IA)
 │   ├── flet_ui/              # Componentes da interface gráfica com Flet
 │   │   ├── components/       # Componentes de UI reutilizáveis (cards, diálogos)
