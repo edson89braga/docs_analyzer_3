@@ -1,0 +1,13 @@
+# Nome do arquivo: docker-compose.yml
+services:
+  opera-app:
+    build: .
+    container_name: opera-ia-assistente
+    ports:
+      - "80:8550"   # Mapeia porta 80 do container para o mundo
+      - "8001:8001" # Engine de ML
+      - "8501:8501" # Admin Streamlit
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1

@@ -45,19 +45,19 @@ _content_creators = {}
 
 # Em vez disso, vamos mapear as rotas para o CAMINHO do módulo e o NOME da função.
 _view_module_map = {
-    "/login": ("src.flet_ui.views.login_view", "create_login_view"),
-    "/signup": ("src.flet_ui.views.signup_view", "create_signup_view"),
-    "/home": ("src.flet_ui.views.home_view", "create_home_view2"),
-    "/profile": ("src.flet_ui.views.profile_view", "create_profile_view"),
-    #"/settings/proxy": ("src.flet_ui.views.proxy_settings_view", "create_proxy_settings_content"),
-    "/settings/llm": ("src.flet_ui.views.llm_settings_view", "create_llm_settings_view"),
-    "/analyze_pdf": ("src.flet_ui.views.nc_analyze_view", "create_analyze_pdf_content"),
-    "/chat_docs": ("src.flet_ui.views.chat_view", "create_chat_view_content"),
-    "/knowledge_base": ("src.flet_ui.views.others_view", "create_knowledge_base_content"),
-    "/wiki_rotinas": ("src.flet_ui.views.others_view", "create_wiki_rotinas_content"),
-    "/correicao_processos": ("src.flet_ui.views.others_view", "create_correicao_processos_content"),
-    "/roteiro_investigacoes": ("src.flet_ui.views.others_view", "create_roteiro_investigacoes_content"),
-    "/session-taken-over": ("src.flet_ui.views.others_view", "create_session_taken_over_view"),    
+    "/login": ("SOURCE.flet_ui.views.login_view", "create_login_view"),
+    "/signup": ("SOURCE.flet_ui.views.signup_view", "create_signup_view"),
+    "/home": ("SOURCE.flet_ui.views.home_view", "create_home_view2"),
+    "/profile": ("SOURCE.flet_ui.views.profile_view", "create_profile_view"),
+    #"/settings/proxy": ("SOURCE.flet_ui.views.proxy_settings_view", "create_proxy_settings_content"),
+    "/settings/llm": ("SOURCE.flet_ui.views.llm_settings_view", "create_llm_settings_view"),
+    "/analyze_pdf": ("SOURCE.flet_ui.views.nc_analyze_view", "create_analyze_pdf_content"),
+    "/chat_docs": ("SOURCE.flet_ui.views.chat_view", "create_chat_view_content"),
+    "/knowledge_base": ("SOURCE.flet_ui.views.others_view", "create_knowledge_base_content"),
+    "/wiki_rotinas": ("SOURCE.flet_ui.views.others_view", "create_wiki_rotinas_content"),
+    "/correicao_processos": ("SOURCE.flet_ui.views.others_view", "create_correicao_processos_content"),
+    "/roteiro_investigacoes": ("SOURCE.flet_ui.views.others_view", "create_roteiro_investigacoes_content"),
+    "/session-taken-over": ("SOURCE.flet_ui.views.others_view", "create_session_taken_over_view"),    
 }
 
 # Mapeamento para rotas parametrizadas (se houver)

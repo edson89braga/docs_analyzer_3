@@ -209,7 +209,7 @@ class LoggerSetup:
         console_level = logging.DEBUG if dev_mode else logging.INFO
 
         # Usamos ['src'] como padrão para filtrar apenas os módulos do seu projeto.
-        allowed_prefixes = modules_to_log if modules_to_log is not None else ['src', '__main__']
+        allowed_prefixes = modules_to_log if modules_to_log is not None else ['SOURCE', '__main__']
 
         # Cria o nome do arquivo de log com base no nome da rotina
         safe_routine_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in routine_name)

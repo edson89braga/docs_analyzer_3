@@ -293,39 +293,6 @@ def _initialize_heavy_utils():
     _utils_initialized = True
     logger.debug("Utilitários pesados (tiktoken, rouge, etc.) foram inicializados.")
 
-# @with_proxy(skip_ssl_verify=False) # Usa proxy se configurado, mas não pula SSL para localhost
-def get_embeddings_from_engine(text_list: List[str]) -> np_ndarray:
-    """
-    Envia uma lista de textos para o serviço local ml_engine e retorna os embeddings.
-
-    Args:
-        text_list (List[str]): A lista de textos a serem vetorizados.
-
-    Returns:
-        np.ndarray: Um array numpy com os embeddings. Retorna array vazio em caso de erro.
-    """
-    import requests
-
-    if not text_list:
-        return np_array([])
-
-    # Define explicitamente para não usar proxy para esta chamada localhost.
-    proxies = {
-        "http": None,
-        "https": None,
-    }
-
-    try:
-        logger.info(f"Requisitando embeddings ao motor de ML para {len(text_list)} textos...")
-        response = requests.post(f"{ML_ENGINE_API_URL}/embed", json={"text_list": text_list}, timeout=180, proxies=proxies)
-        response.raise_for_status()
-        data = response.json()
-        return np_array(data.get("embeddings", []))
-    except requests.RequestException as e:
-        logger.error(f"Não foi possível conectar ao motor de ML em '{ML_ENGINE_API_URL}'. Erro: {e}", exc_info=True)
-        # Aqui, poderíamos tentar reiniciar o motor de ML no futuro.
-        return np_array([])
-
 ### ========================================================================================================
 import collections.abc
 from time import time

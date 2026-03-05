@@ -1,0 +1,45 @@
+# --- Baseado no seu .gitignore ---
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+env
+.env*
+logs/
+uploads_temp/
+ml_engine/
+*.exe
+.idea/
+.vscode/
+dist/
+build/
+*.tar
+*.xlsx
+*.db
+*.tmp
+poppler-22.04.0/
+modelos_ocr/
+admin_data/
+context_exports/
+*.ipynb
+*.pyproj
+*.pyuser
+*.user
+
+# --- Artefatos de Desenvolvimento e Testes ---
+/tests_in_dev
+/tests_scripts
+/notebooks
+/docs
+extract_pyfiles*.py
+teste_int.py
+pyinstaller_files
+python_files_consolidated*.txt
+*.bat
+
+# --- Dados sensíveis ---
+credentials_fb.json
+api_key.txt

@@ -1034,7 +1034,7 @@ class ChatViewContent(ft.Column):
                                                                                      all_texts_list, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
 
             elif vectorization_model == "all-MiniLM-L6-v2":
-                from SOURCE.utils import get_embeddings_from_engine
+                from SOURCE.services.ml_client import get_embeddings_from_engine
                 logger.info("Requisitando get_embeddings_from_engine ...")
                 ready_embeddings = get_embeddings_from_engine(all_texts_list)
                 logger.info("Requisição concluída.")

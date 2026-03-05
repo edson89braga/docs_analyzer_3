@@ -72,7 +72,7 @@ if FIREBASE_WEB_API_KEY == "SUA_FIREBASE_WEB_API_KEY_AQUI":
     logger.warning(
         "A variável FIREBASE_WEB_API_KEY não foi definida. "
         "A autenticação NÃO funcionará. "
-        "Defina-a no arquivo 'src/config/settings.py' ou como variável de ambiente."
+        "Defina-a no arquivo 'SOURCE/config/settings.py' ou como variável de ambiente."
     )
 
 PROJECT_ID = "docs-analyzer-a7430"

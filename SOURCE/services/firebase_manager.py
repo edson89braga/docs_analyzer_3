@@ -329,7 +329,7 @@ class FbManagerFirestore:
             logger.error(f"Erro ao obter settings do Firestore para {user_id}: {e}", exc_info=True)
             return None
         
-# No arquivo src/services/firebase_manager.py, após a classe FbManagerFirestore, adicione:
+# No arquivo SOURCE/services/firebase_manager.py, após a classe FbManagerFirestore, adicione:
 
 class FbManagerAdminAuth:
     """

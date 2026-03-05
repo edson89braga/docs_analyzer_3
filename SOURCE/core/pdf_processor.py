@@ -760,7 +760,7 @@ class PDFDocumentAnalyzer:
                 embedding_vectors_combined = ready_embeddings
             elif model_embedding == 'all-MiniLM-L6-v2':
                 # Esta chamada foi movida de nc_analyze_view.py para cá para centralizar a lógica.
-                from SOURCE.utils import get_embeddings_from_engine
+                from SOURCE.services.ml_client import get_embeddings_from_engine
                 embedding_vectors_combined = get_embeddings_from_engine(all_texts_for_analysis_list)
                 # CRÍTICO: Verificar se a obtenção dos embeddings falhou.
                 if embedding_vectors_combined.size == 0:

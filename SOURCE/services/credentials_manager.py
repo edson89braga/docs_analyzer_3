@@ -1,4 +1,4 @@
-# src/utils/fb_credentials_manager.py
+# SOURCE/utils/fb_credentials_manager.py
 
 import logging
 logger = logging.getLogger(__name__)
@@ -7,7 +7,8 @@ from time import perf_counter
 start_time = perf_counter()
 logger.debug(f"{start_time:.4f}s - Iniciando credentials_manager.py")
 
-import keyring, json, os
+import json, os
+from SOURCE.config.provider import get_secret, set_secret, is_local_mode
 from cryptography.fernet import Fernet, InvalidToken
 from typing import Optional
 from flet import Page as ft_Page
@@ -45,7 +46,7 @@ def get_encryption_key() -> Optional[bytes]:
     """
     logger.debug(f"Buscando chave Fernet do Keyring (Service: {KEYRING_SERVICE_FIREBASE}, User: {KEYRING_USER_ENCRYPTION_KEY})")
     try:
-        key_str = keyring.get_password(KEYRING_SERVICE_FIREBASE, KEYRING_USER_ENCRYPTION_KEY)
+        key_str = get_secret(KEYRING_SERVICE_FIREBASE, KEYRING_USER_ENCRYPTION_KEY)
         if key_str:
             logger.debug("Chave de criptografia encontrada no Keyring.")
             # Keyring retorna string, Fernet precisa de bytes. Assume UTF-8 ou compatível.
@@ -70,7 +71,7 @@ def _save_encryption_key(key: bytes):
     logger.info(f"Salvando chave Fernet no Keyring (Service: {KEYRING_SERVICE_FIREBASE}, User: {KEYRING_USER_ENCRYPTION_KEY})")
     try:
         # Keyring armazena strings. Assume UTF-8 ou compatível.
-        keyring.set_password(KEYRING_SERVICE_FIREBASE, KEYRING_USER_ENCRYPTION_KEY, key.decode('utf-8'))
+        set_secret(KEYRING_SERVICE_FIREBASE, KEYRING_USER_ENCRYPTION_KEY, key.decode('utf-8') )
         logger.info("Chave de criptografia salva com sucesso no Keyring.")
     except Exception as e:
         logger.error(f"Erro ao salvar chave de criptografia no Keyring: {e}", exc_info=True)
