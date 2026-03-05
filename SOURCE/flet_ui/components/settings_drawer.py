@@ -300,10 +300,11 @@ class BaseSettingsDrawer(ft.Column):
 
         new_settings = self._get_settings_from_controls()
         self.page.session.set(self.session_key, new_settings)
+        user_id = self.page.session.get("auth_user_id")
         if delete_on_local_db:
-            self.db_manager.delete_setting(self.session_key) # Apaga o registro do DB local
+            self.db_manager.delete_setting(self.session_key, user_id=user_id) # Apaga o registro do DB local
         else:
-            self.db_manager.save_setting(self.session_key, new_settings)
+            self.db_manager.save_setting(self.session_key, new_settings, user_id=user_id)
         logger.info(f"[DEBUG] Configurações da sessão atualizadas: {new_settings}")
         if self.on_settings_changed:
             self.on_settings_changed()        
@@ -487,7 +488,8 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
 
         if session_key == "custom":
             # Para custom, tenta o cache primeiro, depois o DB
-            custom_prompt = self.user_cache.get(cache_key) or self.db_manager.get_custom_prompt("chat_custom")
+            user_id = self.page.session.get("auth_user_id")
+            custom_prompt = self.user_cache.get(cache_key) or self.db_manager.get_custom_prompt("chat_custom", user_id=user_id)
             if custom_prompt:
                 self.user_cache[cache_key] = custom_prompt # Garante que está em cache
                 logger.info(f"[DEBUG] GetActivePrompt: Chave ativa='{session_key}' - '{cache_key}' -> Texto: '{custom_prompt[:60]}...'")
@@ -593,7 +595,8 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
                 custom_text_to_save = prompt_editor_tf.value
                 self.user_cache[KEY_SESSION_CHAT_PROMPT_CUSTOM] = custom_text_to_save
                 logger.info(f"[DEBUG] Salvando texto customizado na sessão: '{custom_text_to_save[:60]}...'")
-                self.db_manager.save_custom_prompt("chat_custom", custom_text_to_save)
+                user_id = self.page.session.get("auth_user_id")
+                self.db_manager.save_custom_prompt("chat_custom", custom_text_to_save, user_id=user_id)
             
             # Atualiza o campo principal na drawer
             self.gui_controls["instructions_prompt_tf"].value = self._get_active_prompt_text()

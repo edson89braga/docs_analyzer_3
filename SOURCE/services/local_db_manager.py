@@ -4,6 +4,7 @@ import logging, threading, sqlite3, json
 from typing import Optional
 from pathlib import Path
 
+from SOURCE.config.provider import is_local_mode
 from SOURCE.settings import APP_DATA_DIR
 
 logger = logging.getLogger(__name__)
@@ -75,14 +76,21 @@ class LocalDBManager:
         except sqlite3.Error as e:
             logger.error(f"Erro ao criar tabelas no banco de dados local: {e}")
 
-    def save_custom_prompt(self, key: str, content: str) -> bool:
+    def _get_scoped_key(self, key: str, user_id: str = None) -> str:
+        """Garante isolamento de chaves entre usuários no modo servidor."""
+        if not is_local_mode() and user_id:
+            return f"{user_id}_{key}"
+        return key
+
+    def save_custom_prompt(self, key: str, content: str, user_id: str = None) -> bool:
         """Salva ou atualiza um prompt customizado no banco de dados."""
         if not self.conn: return False
+        scoped_key = self._get_scoped_key(key, user_id)
         try:
             self.cursor.execute('''
                 INSERT OR REPLACE INTO custom_prompts (key, content, last_updated)
                 VALUES (?, ?, CURRENT_TIMESTAMP)
-            ''', (key, content))
+            ''', (scoped_key, content))
             self.conn.commit()
             logger.debug(f"Prompt customizado com chave '{key}' salvo no banco de dados local.")
             return True
@@ -90,11 +98,12 @@ class LocalDBManager:
             logger.error(f"Erro ao salvar prompt customizado '{key}': {e}")
             return False
 
-    def get_custom_prompt(self, key: str) -> Optional[str]:
+    def get_custom_prompt(self, key: str, user_id: str = None) -> Optional[str]:
         """Recupera um prompt customizado do banco de dados."""
         if not self.conn: return None
+        scoped_key = self._get_scoped_key(key, user_id)
         try:
-            self.cursor.execute("SELECT content FROM custom_prompts WHERE key = ?", (key,))
+            self.cursor.execute("SELECT content FROM custom_prompts WHERE key = ?", (scoped_key,))
             row = self.cursor.fetchone()
             if row:
                 logger.debug(f"Prompt customizado com chave '{key}' recuperado do banco de dados local.")
@@ -104,14 +113,15 @@ class LocalDBManager:
             logger.error(f"Erro ao recuperar prompt customizado '{key}': {e}")
             return None
 
-    def save_setting(self, key: str, value: dict) -> bool:
+    def save_setting(self, key: str, value: dict, user_id: str = None) -> bool:
         """Salva uma configuração (dicionário) como JSON no banco de dados."""
         if not self.conn: return False
+        scoped_key = self._get_scoped_key(key, user_id)
         try:
             json_value = json.dumps(value)
             self.cursor.execute('''
                 INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)
-            ''', (key, json_value))
+            ''', (scoped_key, json_value))
             self.conn.commit()
             logger.debug(f"Configuração '{key}' salva no banco de dados local.")
             return True
@@ -119,11 +129,12 @@ class LocalDBManager:
             logger.error(f"Erro ao salvar configuração '{key}': {e}")
             return False
 
-    def delete_setting(self, key: str) -> bool:
+    def delete_setting(self, key: str, user_id: str = None) -> bool:
         """Deleta uma configuração da tabela app_settings."""
         if not self.conn: return False
+        scoped_key = self._get_scoped_key(key, user_id)
         try:
-            self.cursor.execute("DELETE FROM app_settings WHERE key = ?", (key,))
+            self.cursor.execute("DELETE FROM app_settings WHERE key = ?", (scoped_key,))
             self.conn.commit()
             # Verifica se alguma linha foi de fato afetada
             if self.cursor.rowcount > 0:
@@ -133,11 +144,12 @@ class LocalDBManager:
             logger.error(f"Erro ao deletar configuração '{key}': {e}")
             return False
 
-    def get_setting(self, key: str) -> Optional[dict]:
+    def get_setting(self, key: str, user_id: str = None) -> Optional[dict]:
         """Recupera uma configuração do banco de dados e a converte de JSON."""
         if not self.conn: return None
+        scoped_key = self._get_scoped_key(key, user_id)
         try:
-            self.cursor.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+            self.cursor.execute("SELECT value FROM app_settings WHERE key = ?", (scoped_key,))
             row = self.cursor.fetchone()
             if row and row[0]:
                 logger.debug(f"Configuração '{key}' recuperada do banco de dados local.")

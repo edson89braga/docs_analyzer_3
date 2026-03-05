@@ -599,7 +599,11 @@ class ManagedFilePicker:
         if not self.file_picker:
             raise RuntimeError("ManagedFilePicker: Instância global de ft.FilePicker não encontrada em page.data.")
         
-        self.upload_dir = os.path.abspath(upload_dir)
+        # Isola o diretório de upload por sessão de usuário no servidor
+        from SOURCE.config.provider import is_local_mode
+        session_folder = "" if is_local_mode() else self.page.session_id
+        self.upload_dir = os.path.abspath(os.path.join(upload_dir, session_folder))
+
         self.allowed_extensions = [ext.lower().lstrip('.') for ext in allowed_extensions] if allowed_extensions else None
         self.on_upload_progress = on_upload_progress
         self.upload_url_expiry_seconds = upload_url_expiry_seconds

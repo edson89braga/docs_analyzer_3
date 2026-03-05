@@ -75,7 +75,7 @@ def load_default_analysis_settings(page: ft.Page):
 
     # --- Carregamento das Configurações Específicas de cada View ---
     # 1. Carregar para NC Analyze View
-    nc_analyze_settings = db_manager.get_setting(KEY_SESSION_NC_ANALYZE_SETTINGS)
+    nc_analyze_settings = db_manager.get_setting(KEY_SESSION_NC_ANALYZE_SETTINGS, user_id=user_id)
     if nc_analyze_settings:
         page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, nc_analyze_settings)
         logger.info("Configurações para 'Análise de Documentos' carregadas do banco de dados local.")
@@ -84,7 +84,7 @@ def load_default_analysis_settings(page: ft.Page):
         logger.info("Configurações para 'Análise de Documentos' definidas a partir dos padrões da nuvem (não encontradas localmente).")
 
     # 2. Carregar para Chat View
-    chat_settings = db_manager.get_setting(KEY_SESSION_CHAT_SETTINGS)
+    chat_settings = db_manager.get_setting(KEY_SESSION_CHAT_SETTINGS, user_id=user_id)
     if chat_settings:
         page.session.set(KEY_SESSION_CHAT_SETTINGS, chat_settings)
         logger.info("Configurações para 'Chat com Documentos' carregadas do banco de dados local.")

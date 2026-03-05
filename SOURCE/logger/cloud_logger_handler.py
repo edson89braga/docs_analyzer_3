@@ -7,7 +7,7 @@ logger.debug(f"{start_time:.4f}s - Iniciando cloud_logger_handler.py")
 
 import atexit, os, re
 from threading import Thread, Lock, Event
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from pathlib import Path
 from time import sleep
@@ -18,9 +18,13 @@ CLOUD_LOGGER_MAX_RETRIES, CLOUD_LOGGER_RETRY_DELAY, APP_VERSION)
 from SOURCE.services.firebase_client import FirebaseClientStorage
 from SOURCE.services.firebase_manager import FbManagerStorage
 from abc import ABC, abstractmethod
-
+import contextvars
 from pathlib import Path
 PATH_LOGS_DIR = Path(PATH_LOGS_DIR)
+
+# Variáveis de contexto para manter isolamento entre requisições concorrentes
+user_token_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_token_ctx", default=None)
+user_id_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_id_ctx", default="anonymous_user")
 
 class LogUploaderStrategy(ABC):
     @abstractmethod
@@ -42,33 +46,24 @@ class LogUploaderStrategy(ABC):
 class ClientLogUploader(LogUploaderStrategy):
     def __init__(self, client_storage: FirebaseClientStorage): # Forward reference para FirebaseClientStorage
         self.client_storage = client_storage
-        self._current_user_token: Optional[str] = None
-        self._current_user_id: Optional[str] = None
         
-    def set_user_context(self, token: Optional[str], user_id: Optional[str]):
-        self._current_user_token = token
-        self._current_user_id = user_id
-        logger.debug(f"ClientLogUploader: Contexto do usuário atualizado - ID: {'presente' if user_id else 'ausente'}")
-
     def get_existing_logs(self, base_log_folder: Path, log_filename: str) -> str:
-        if not self.client_storage or not self._current_user_token or not self._current_user_id:
-            logger.warning("ClientLogUploader: Contexto de usuário ou cliente ausente para get_existing_logs.")
-            return ""
-        
+        user_token = user_token_ctx.get()
+        user_id = user_id_ctx.get()
+
         path_suffix = (base_log_folder / log_filename).as_posix()
 
         try:
             return self.client_storage.get_text_user(
-                self._current_user_token, self._current_user_id, path_suffix
+                user_token, user_id, path_suffix
             ) or ""
         except Exception as e:
             logger.warning(f"ClientLogUploader: Erro ao obter log existente: {e}")
             return ""
 
     def upload_logs(self, logs_batch: List[str], full_cloud_path: str) -> bool:
-        if not self.client_storage or not self._current_user_token or not self._current_user_id:
-            logger.warning("ClientLogUploader: Contexto de usuário ou cliente ausente para upload.")
-            return False
+        user_token = user_token_ctx.get()
+        user_id = user_id_ctx.get()        
 
         # Removemos get_existing_logs porque mudamos a estratégia de salvar um grande arquivo por dia 
         # para salvar múltiplos arquivos pequenos e únicos ao longo do dia.
@@ -79,7 +74,7 @@ class ClientLogUploader(LogUploaderStrategy):
         log_data_to_upload = "\n".join(logs_batch) + "\n"
 
         return self.client_storage.upload_text_user(
-            self._current_user_token, self._current_user_id, log_data_to_upload, full_cloud_path
+            user_token, user_id, log_data_to_upload, full_cloud_path
         )
 
 class AdminLogUploader(LogUploaderStrategy):
@@ -115,7 +110,8 @@ class CloudLogHandler(logging.Handler):
     Handler personalizado para enviar logs para o CloudStorage.
     Gerencia um buffer interno e uma thread para upload periódico/em lote.
     """
-    log_buffer: List[str] = []
+    # Dicionário para isolar buffers por usuário: { "user_id": {"token": str, "logs": List[str]} }
+    log_buffers: Dict[str, Dict[str, Any]] = {}    
     upload_thread: Optional[Thread] = None
     stop_thread_flag: bool = False
     buffer_lock: Lock = Lock()
@@ -162,8 +158,14 @@ class CloudLogHandler(logging.Handler):
                 return # Ignora mensagens vazias
 
             with CloudLogHandler.buffer_lock:
-                CloudLogHandler.log_buffer.append(log_message_utf8)
-                buffer_size = len(CloudLogHandler.log_buffer)
+                uid = user_id_ctx.get() or "anonymous_user"
+                token = user_token_ctx.get()
+                
+                if uid not in CloudLogHandler.log_buffers:
+                    CloudLogHandler.log_buffers[uid] = {"token": token, "logs": []}
+                    
+                CloudLogHandler.log_buffers[uid]["logs"].append(log_message_utf8)
+                buffer_size = sum(len(data["logs"]) for data in CloudLogHandler.log_buffers.values())
 
             if buffer_size >= CLOUD_LOGGER_MAX_BUFFER_SIZE:
                 CloudLogHandler.upload_event.set() # Sinaliza a thread fora do lock
@@ -181,32 +183,39 @@ class CloudLogHandler(logging.Handler):
                 logger.debug("CloudLogHandler: Sinal de parada recebido na thread (estática).")
                 break
 
-            current_logs_batch = []
+            snapshot_buffers = {}
             with CloudLogHandler.buffer_lock:
-                if CloudLogHandler.log_buffer:
-                    current_logs_batch = CloudLogHandler.log_buffer[:]
-                    # CloudLogHandler.log_buffer.clear()
+                if CloudLogHandler.log_buffers:
+                    # Faz uma cópia rasa do estado atual e limpa o global
+                    snapshot_buffers = CloudLogHandler.log_buffers.copy()
+                    CloudLogHandler.log_buffers.clear()
             
             if signaled: CloudLogHandler.upload_event.clear()
 
-            if current_logs_batch:
-                upload_completed_successfully = False
+            for uid, data in snapshot_buffers.items():
+                current_logs_batch = data["logs"]
+                current_token = data["token"]
+                
+                if not current_logs_batch:
+                    continue
+
                 try:
-                    upload_completed_successfully = handler_instance._perform_upload(current_logs_batch)
-
-                    if upload_completed_successfully:
-                        with CloudLogHandler.buffer_lock: # Limpa o buffer SÓ SE teve sucesso
-                            if CloudLogHandler.log_buffer and CloudLogHandler.log_buffer[:len(current_logs_batch)] == current_logs_batch:
-                                    CloudLogHandler.log_buffer = CloudLogHandler.log_buffer[len(current_logs_batch):]
-                            else: # Se o buffer mudou enquanto processava, seja mais cuidadoso (raro)
-                                    logger.warning("CloudLogHandler: Buffer modificado durante upload. Limpeza pode ser imprecisa.")
-                                    CloudLogHandler.log_buffer.clear() # Fallback para limpar tudo
-                    # Se não teve sucesso (upload_completed_successfully é False),
-                    # os logs permanecem no CloudLogHandler.log_buffer para a próxima tentativa.
-                    # A lógica de backup local dentro de _perform_upload já cuida dos casos de falha real.
-
+                    # Injeta o contexto da thread original na thread de background temporariamente
+                    user_id_ctx.set(uid)
+                    user_token_ctx.set(current_token)
+                    
+                    success = handler_instance._perform_upload(current_logs_batch)
+                    
+                    # Se falhar, devolve pro buffer principal para a próxima iteração
+                    if not success:
+                        with CloudLogHandler.buffer_lock:
+                            if uid not in CloudLogHandler.log_buffers:
+                                CloudLogHandler.log_buffers[uid] = {"token": current_token, "logs": []}
+                            # Insere os logs que falharam no início da fila
+                            CloudLogHandler.log_buffers[uid]["logs"] = current_logs_batch + CloudLogHandler.log_buffers[uid]["logs"]
+                
                 except Exception as e:
-                    logger.error(f"Erro no upload de logs pela thread (estática): {e}", exc_info=True)
+                    logger.error(f"Erro no upload de logs do usuário {uid} pela thread: {e}", exc_info=True)
         logger.debug("CloudLogHandler: Thread de upload (estática) encerrada.")
 
     def _perform_upload(self, logs_batch: List[str]) -> bool:
@@ -224,11 +233,9 @@ class CloudLogHandler(logging.Handler):
          # Correção regex para múltiplos underscores/hífens/pontos
         username_pc_safe = re.sub(r'[_.-]+', '_', username_pc_safe)
 
-        # Determina o user_id para o nome do arquivo. Usa "anonymous" se não autenticado.
-        user_id_for_filename = "anonymous_user"
-        if isinstance(self.uploader, ClientLogUploader) and self.uploader._current_user_id:
-            user_id_for_filename = self.uploader._current_user_id
-        
+        # Determina o user_id para o nome do arquivo via ContextVar
+        user_id_for_filename = user_id_ctx.get()        
+
         # Estrutura de pasta baseada em data
         now = datetime.now(timezone.utc)
         base_log_folder_in_cloud = Path(CLOUD_LOGGER_FOLDER) / now.strftime('%Y/%m/%d')
@@ -245,10 +252,8 @@ class CloudLogHandler(logging.Handler):
         # Verifica se podemos tentar o upload, especialmente para o ClientUploader
         can_attempt_upload = False
         if isinstance(self.uploader, ClientLogUploader):
-            if self.uploader._current_user_token and self.uploader._current_user_id:
-                can_attempt_upload = True
-            else:
-                logger.debug("CloudLogHandler: Upload via cliente adiado, aguardando contexto do usuário.")
+            # Agora validamos através do contextvar atual
+            can_attempt_upload = bool(user_token_ctx.get())
         elif isinstance(self.uploader, AdminLogUploader):
             can_attempt_upload = True # Admin sempre pode tentar
 

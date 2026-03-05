@@ -14,7 +14,7 @@ from rich.logging import RichHandler
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Any, TYPE_CHECKING
 
-from .cloud_logger_handler import CloudLogHandler, ClientLogUploader, AdminLogUploader
+from .cloud_logger_handler import CloudLogHandler, ClientLogUploader, AdminLogUploader, user_token_ctx, user_id_ctx
 from SOURCE.settings import (PATH_LOGS_DIR, CLOUD_LOGGER_FOLDER, APP_VERSION)
 
 from SOURCE.services.firebase_manager import FbManagerStorage
@@ -141,15 +141,11 @@ class LoggerSetup:
     @classmethod
     def set_cloud_user_context(cls, user_token: Optional[str], user_id: Optional[str]):
         """
-        Define o contexto do usuário (token e ID) para o ClientLogUploader.
+        Define o contexto do usuário para a thread atual através de contextvars,
+        garantindo isolamento em requisições de servidor (multithreading).
         """
-        if cls._client_uploader_instance:
-            cls._client_uploader_instance.set_user_context(user_token, user_id)
-            # Se o CloudLogHandler ativo estiver usando o ClientUploader, ele refletirá a mudança.
-            # Se um novo CloudLogHandler for criado (ex: se o logger for reinicializado),
-            # ele pegará o uploader com o contexto mais recente.
-        # else: Não imprime warning aqui, add_cloud_logging cuidará da criação.
-        #    logger.debug("WARNING: ClientLogUploader não inicializado. Contexto do usuário não pode ser definido.")
+        user_token_ctx.set(user_token)
+        user_id_ctx.set(user_id if user_id else "anonymous_user")
 
     @classmethod
     def _setup_temporary_logger(cls, logger_name):

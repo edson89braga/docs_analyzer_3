@@ -275,6 +275,7 @@ Para mais detalhes, consulte:
             else:
                 page.update()
 
+    from SOURCE.config.provider import is_local_mode
     app_bar_actions = [
         ft.PopupMenuButton(
             tooltip="Configurações do Usuário",
@@ -285,8 +286,8 @@ Para mais detalhes, consulte:
                 ft.PopupMenuItem(text="Perfil", icon=ft.Icons.PERSON_OUTLINE, on_click=lambda _: page.go("/profile")),
                 ft.PopupMenuItem(text="Histórico de Uso", icon=ft.Icons.HISTORY, on_click=show_history_placeholder),
                 ft.PopupMenuItem(text="Provedores LLM", icon=ft.Icons.MODEL_TRAINING_OUTLINED, on_click=lambda _: page.go("/settings/llm")),
-                #ft.PopupMenuItem(text="Configs. Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=lambda _: page.go("/settings/proxy")),
-                ft.PopupMenuItem(text="Configs. Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=handle_proxy_settings_click, disabled=True),
+                # Oculta opções de proxy no modo servidor
+                *( [ft.PopupMenuItem(text="Configs. Proxy", icon=ft.Icons.VPN_KEY_OUTLINED, on_click=handle_proxy_settings_click, disabled=True)] if is_local_mode() else [] ),
                 ft.PopupMenuItem(text="Termos e Condições", icon=ft.Icons.POLICY_OUTLINED, on_click=show_terms_dialog),
                 ft.PopupMenuItem(),
                 ft.PopupMenuItem(text="Sair", icon=ft.Icons.LOGOUT, on_click=lambda _: handle_logout(page))

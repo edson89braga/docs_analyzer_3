@@ -51,16 +51,16 @@ ALLOWED_EMAIL_DOMAINS = ["pf.gov.br", "dpf.gov.br"]
 KEY_NAME_FLET_SECRET_KEY = "flet_secret_key"
 
 # Calcula o diretório de dados da aplicação:
-try:
-    assert os.name == 'nt' # Windows
-    APP_DATA_DIR = os.path.join(os.getenv('APPDATA', ''), APP_NAME)
-    os.makedirs(APP_DATA_DIR, exist_ok=True) # Garante que exista
-except Exception as e:
-    logger.critical(f"Erro crítico ao determinar/criar o diretório de dados da aplicação: {e}", exc_info=True)
-    # Define um fallback para o diretório atual se tudo mais falhar, mas loga criticamente
-    APP_DATA_DIR = os.path.join(os.getcwd(), f".{APP_NAME}_data")
-    os.makedirs(APP_DATA_DIR, exist_ok=True)
-    logger.warning(f"Usando diretório de dados fallback: {APP_DATA_DIR}")
+# Em modo server, respeita variável de ambiente para montagem de volume (ex: /app/data)
+if os.getenv("APP_MODE") == "server":
+    APP_DATA_DIR = os.getenv("SERVER_DATA_DIR", "/app/data")
+else:
+    if os.name == 'nt':
+        APP_DATA_DIR = os.path.join(os.getenv('APPDATA', ''), APP_NAME)
+    else:
+        APP_DATA_DIR = os.path.join(os.path.expanduser('~'), f".{APP_NAME}_data")
+
+os.makedirs(APP_DATA_DIR, exist_ok=True)
 
 ENCRYPTED_SERVICE_KEY_FILENAME = "firebase_service_key.enc"
 ENCRYPTED_SERVICE_KEY_PATH = os.path.join(APP_DATA_DIR, ENCRYPTED_SERVICE_KEY_FILENAME)
