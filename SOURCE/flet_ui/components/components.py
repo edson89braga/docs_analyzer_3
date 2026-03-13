@@ -600,9 +600,9 @@ class ManagedFilePicker:
             raise RuntimeError("ManagedFilePicker: Instância global de ft.FilePicker não encontrada em page.data.")
         
         # Isola o diretório de upload por sessão de usuário no servidor
-        from SOURCE.config.provider import is_local_mode
-        session_folder = "" if is_local_mode() else self.page.session_id
-        self.upload_dir = os.path.abspath(os.path.join(upload_dir, session_folder))
+        # from SOURCE.config.provider import is_local_mode
+        # session_folder = "" if is_local_mode() else self.page.session_id
+        self.upload_dir = upload_dir # os.path.abspath(os.path.join(upload_dir, session_folder))
 
         self.allowed_extensions = [ext.lower().lstrip('.') for ext in allowed_extensions] if allowed_extensions else None
         self.on_upload_progress = on_upload_progress
@@ -745,6 +745,9 @@ class ManagedFilePicker:
             file_name = selected_file.name
             original_file_path_on_client = selected_file.path
 
+            # Apenas o nome do arquivo. O Flet deposita na raiz do upload_dir
+            upload_url = self.page.get_upload_url(file_name, self.upload_url_expiry_seconds)
+
             logger.debug(f"Processando da fila: '{file_name}', Path cliente: '{original_file_path_on_client}'")
 
             if self._is_uploading_map.get(file_name):
@@ -781,12 +784,13 @@ class ManagedFilePicker:
                     except OSError as e_rem: logger.warning(f"Não foi possível remover arquivo anterior '{server_target_path}': {e_rem}")
 
                 try:
-                    upload_url = self.page.get_upload_url(file_name, self.upload_url_expiry_seconds)
+                    #upload_url = self.page.get_upload_url(file_name, self.upload_url_expiry_seconds)
                     if not upload_url: raise ValueError("URL de upload vazia.")
                     
                     if self.on_upload_progress: self.on_upload_progress(file_name, 0.0)
                     
-                    self.file_picker.upload([ft.FilePickerUploadFile(id=file_name, name=file_name, upload_url=upload_url)])
+                    # self.file_picker.upload([ft.FilePickerUploadFile(id=file_name, name=file_name, upload_url=upload_url)])
+                    self.file_picker.upload([ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)])
                     
                     update_lock = self.page.data.get("global_update_lock")
                     if update_lock:
@@ -839,7 +843,16 @@ class ManagedFilePicker:
 
         # Upload para Flet concluído (progress é 1.0 ou None, sem erro)
         logger.debug(f"Upload para Flet de '{e.file_name}' parece concluído. Verificando no servidor...")
-        server_final_path = os.path.join(self.upload_dir, e.file_name)
+
+        # O Flet salvou na raiz. Se você quer mover para a pasta da sessão:
+        session_folder = os.path.join(self.upload_dir, self.page.session_id)
+        os.makedirs(session_folder, exist_ok=True)
+        dest_path = os.path.join(session_folder, e.file_name)
+        
+        # Move do temp raiz para a pasta da sessão
+        shutil.move(os.path.join(self.upload_dir, e.file_name), dest_path)
+        server_final_path = dest_path
+
         file_found_on_server = False
         max_retries = 5
         retry_delay_seconds = 0.3

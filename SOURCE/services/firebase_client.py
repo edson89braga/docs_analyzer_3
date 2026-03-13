@@ -922,7 +922,7 @@ class FbManagerAuth:
             # Verificar se auth_time existe (para tokens de autenticação)
             auth_time = decoded_token.get('auth_time')
             if auth_time and current_time - auth_time > 86400:  # 24 horas
-                logger.warning(f"Autenticação muito antiga: {current_time - auth_time} segundos")
+                logger.debug(f"Autenticação muito antiga: {current_time - auth_time} segundos")
             
             logger.debug(f"Token JWT verificado com sucesso para usuário: {decoded_token.get('user_id')}")
             return decoded_token

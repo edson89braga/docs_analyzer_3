@@ -1,13 +1,38 @@
-# Nome do arquivo: docker-compose.yml
+# /Proj_App -- LLM-API - Docs_Analyzer_3/docker-compose.yml
+version: '3.8'
+
 services:
+  # 1. Aplicação Principal (Frontend Flet)
   opera-app:
     build: .
-    container_name: opera-ia-assistente
+    container_name: opera-ia-frontend
     ports:
-      - "80:8550"   # Mapeia porta 80 do container para o mundo
-      - "8001:8001" # Engine de ML
-      - "8501:8501" # Admin Streamlit
+      - "8550:8550"
     volumes:
-      - .:/app
+      - opera_data:/app/data
+    environment:
+      - APP_MODE=server
+      - PORT=8550
+      - FLET_SECRET_KEY=oTSHabCz0q5slF4OjKHUmh1zr/fVZDvtoZMECrwYJRI=
+      - ML_ENGINE_URL=http://ml-engine:8001
+      - SERVER_DATA_DIR=/app/data
+      # Chave Mestra do Servidor para criptografar as APIs dos usuários
+      - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=      
+    depends_on:
+      - ml-engine
+
+  # 2. Motor de Machine Learning (FastAPI)
+  ml-engine:
+    # Ajuste o 'context' para o caminho RELATIVO de onde está a pasta do Vector_Engine_2
+    # Exemplo: se as pastas são irmãs, o caminho é '../Proj_App   -- LLM-API - Vector_Engine_2'
+    build: 
+      context: ../Proj_App   -- LLM-API - Vector_Engine_2
+    container_name: opera-ia-ml-engine
+    ports:
+      - "8001:8001"
     environment:
       - PYTHONUNBUFFERED=1
+
+volumes:
+  opera_data:
+    name: opera_persistent_data

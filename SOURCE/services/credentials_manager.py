@@ -348,8 +348,9 @@ def decrypt(encrypted_bytes: bytes) -> Optional[str]:
         decrypted_str = _decrypt_data(encrypted_bytes, fernet_instance)
         return decrypted_str
     except InvalidToken:
-         logger.error("Falha na descriptografia pública: Token inválido (chave errada ou dados corrompidos).")
-         return None
+        #logger.error("Falha na descriptografia pública: Token inválido (chave errada ou dados corrompidos).")
+        logger.error("Falha na descriptografia: Token inválido. Tente recadastrar sua(s) API Key(s).")
+        return None
     except Exception as e:
         logger.error(f"Falha durante a descriptografia pública: {e}", exc_info=True)
         return None

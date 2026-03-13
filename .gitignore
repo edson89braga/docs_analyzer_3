@@ -101,6 +101,10 @@ extract_pyfiles2.py
 teste_int.py
 teste_int.ipynb
 
+lista_arqs_repo.txt
+Dockerfile.txt
+docker-compose.txt
+
 # Outros:
 *.xlsx
 *.bat

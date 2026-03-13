@@ -31,6 +31,7 @@ from SOURCE import app_cache
 from SOURCE.services import credentials_manager
 from SOURCE.services.firebase_client import FbManagerAuth, FirebaseClientFirestore, _from_firestore_value
 from SOURCE.services.local_db_manager import LocalDBManager
+from SOURCE.config.provider import is_local_mode
 from SOURCE.logger.logger import LoggerSetup
 
 auth_manager = FbManagerAuth()
@@ -442,28 +443,35 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         encerra completamente o processo do servidor para evitar que ele
         continue rodando em segundo plano.
         """
-        from SOURCE.config_manager import set_final_keyring_proxy
         from SOURCE.utils import cleanup_old_temp_files, clear_user_cache
         from SOURCE.settings import UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR 
-        from SOURCE.logger.cloud_logger_handler import CloudLogHandler
-
+        
         logger.info("Cliente desconectado ou aplicação Flet fechando...")
 
         # --- Bloco de Limpeza Manual ---
         try:
-            # 1. Limpeza do Keyring do Proxy
-            logger.debug("Executando limpeza manual: set_final_keyring_proxy()")
-            set_final_keyring_proxy()
+            if is_local_mode():
+                from SOURCE.config_manager import set_final_keyring_proxy
+                from SOURCE.logger.cloud_logger_handler import CloudLogHandler
+                
+                # 1. Limpeza do Keyring do Proxy
+                logger.debug("Executando limpeza manual: set_final_keyring_proxy()")
+                set_final_keyring_proxy()
 
             # 2. Limpeza de Arquivos Temporários
             temp_exports_path = os.path.join(ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDIR)
             cleanup_old_temp_files(temp_exports_path)
             cleanup_old_temp_files(UPLOAD_TEMP_DIR)
             
-            # 3. Flush e Encerramento SEGURO do Logger da Nuvem
-            if LoggerSetup._active_cloud_handler_instance:
-                logger.debug("Executando desligamento completo do CloudLogHandler...")
-                CloudLogHandler._force_upload_on_exit_static(LoggerSetup._active_cloud_handler_instance)
+            if is_local_mode():
+                # 3. Flush e Encerramento SEGURO do Logger da Nuvem
+                if LoggerSetup._active_cloud_handler_instance:
+                    logger.debug("Executando desligamento completo do CloudLogHandler...")
+                    CloudLogHandler._force_upload_on_exit_static(LoggerSetup._active_cloud_handler_instance)
+            else:
+                if LoggerSetup._active_cloud_handler_instance:
+                    LoggerSetup._active_cloud_handler_instance.flush()
+                # 3. Apenas faz FLUSH dos logs pendentes deste usuário (Não desliga o logger global!)
         
         except:
             pass
@@ -471,16 +479,22 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         LoggerSetup.set_cloud_user_context(None, None)
         logger.debug("Contexto do logger de nuvem limpo ao desconectar.")
 
-        # Para a thread de renovação de token
-        if _token_refresh_thread_stop_event:
-            logger.debug("Sinalizando parada para a thread de renovação proativa de token...")
-            _token_refresh_thread_stop_event.set()
-        if _token_refresh_thread_instance and _token_refresh_thread_instance.is_alive():
-            logger.debug("Aguardando thread de renovação de token finalizar...")
-            _token_refresh_thread_instance.join(timeout=6) # Espera um pouco
-            if _token_refresh_thread_instance.is_alive():
-                logger.warning("Thread de renovação de token não finalizou a tempo.")
-        
+        if is_local_mode():
+            # Para a thread de renovação de token
+            if _token_refresh_thread_stop_event:
+                logger.debug("Sinalizando parada para a thread de renovação proativa de token...")
+                _token_refresh_thread_stop_event.set()
+            if _token_refresh_thread_instance and _token_refresh_thread_instance.is_alive():
+                logger.debug("Aguardando thread de renovação de token finalizar...")
+                _token_refresh_thread_instance.join(timeout=6) # Espera um pouco
+                if _token_refresh_thread_instance.is_alive():
+                    logger.warning("Thread de renovação de token não finalizou a tempo.")
+        else:
+            # Encerra apenas a thread de renovação DESTA aba específica
+            stop_event = page.data.get("refresh_stop_event")
+            if stop_event:
+                stop_event.set()  
+                          
         clear_user_cache(page)
 
         # Pausa opcional para garantir que o flush tenha tempo de iniciar o upload
@@ -561,15 +575,15 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             threading.Thread(target=threaded_load_settings, args=(page,), daemon=True).start()
             
             # Inicia thread de renovação de token (isso já é non-blocking)
-            global _token_refresh_thread_instance, _token_refresh_thread_stop_event
-            if _token_refresh_thread_instance is None or not _token_refresh_thread_instance.is_alive():
-                _token_refresh_thread_stop_event = threading.Event()
-                _token_refresh_thread_instance = threading.Thread(
+            if "refresh_thread" not in page.data or not page.data["refresh_thread"].is_alive():
+                stop_event = threading.Event()
+                page.data["refresh_stop_event"] = stop_event
+                page.data["refresh_thread"] = threading.Thread(
                     target=_proactive_token_refresh_loop,
-                    args=(page, _token_refresh_thread_stop_event),
+                    args=(page, stop_event),
                     daemon=True
                 )
-                _token_refresh_thread_instance.start()
+                page.data["refresh_thread"].start()            
             
             # Navega para a home imediatamente após verificar a autenticação
             final_route = "/home"

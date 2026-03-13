@@ -67,6 +67,14 @@ if __name__ == "__main__":
     
     execution_time = perf_counter() - start_time
     logger.info(f"Setup do servidor concluído em {execution_time:.4f}s")
+
+    # Garante o diretório de uploads e define permissões 777 (necessário para Flet Web)
+    if not os.path.exists(UPLOAD_TEMP_DIR):
+        os.makedirs(UPLOAD_TEMP_DIR, exist_ok=True)
+    try:
+        os.chmod(UPLOAD_TEMP_DIR, 0o777)
+    except Exception as e:
+        logger.warning(f"Não foi possível aplicar chmod 777 na pasta de upload: {e}")
     
     ft.app(
         target=server_main,
@@ -75,4 +83,5 @@ if __name__ == "__main__":
         host="0.0.0.0", # Permite acesso externo ao container
         assets_dir=ASSETS_DIR, 
         upload_dir=UPLOAD_TEMP_DIR
+        #, web_renderer=ft.WebRenderer.HTML
     )

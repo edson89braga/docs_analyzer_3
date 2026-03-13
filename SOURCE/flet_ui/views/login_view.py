@@ -272,8 +272,10 @@ def create_login_view(page: ft.Page) -> ft.View:
 
                 logger.info(f"Contexto do logger de nuvem atualizado para usuário {user_id}.")
 
-                from SOURCE.utils import check_app_version
-                check_app_version()
+                from SOURCE.config.provider import is_local_mode
+                if is_local_mode():
+                    from SOURCE.utils import check_app_version
+                    check_app_version()
 
                 page.go("/home")
 

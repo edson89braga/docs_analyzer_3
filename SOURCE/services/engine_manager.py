@@ -93,7 +93,7 @@ class MLEngineManager:
             logger.error(f"Falha ao iniciar o processo do motor de ML: {e}", exc_info=True)
             self.process = None
 
-    def _wait_for_server(self, timeout: int = 180):
+    def _wait_for_server(self, timeout: int = 300):
         """Aguarda o servidor da API se tornar disponível."""
         logger.info(f"Aguardando o servidor de ML ficar pronto (timeout: {timeout}s)...")
         start_time = time.time()

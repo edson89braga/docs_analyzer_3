@@ -33,7 +33,7 @@ def get_embeddings_from_engine(text_list: List[str]) -> np.ndarray:
         response = requests.post(
             f"{target_url}/embed", 
             json={"text_list": text_list}, 
-            timeout=180, 
+            timeout=300, 
             proxies=proxies
         )
         response.raise_for_status()

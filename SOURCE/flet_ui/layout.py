@@ -474,7 +474,8 @@ def handle_logout(page: ft.Page) -> None:
             uploader_in_use = LoggerSetup._active_cloud_handler_instance.uploader
             # Só faz flush se o uploader for o ClientLogUploader, pois ele depende do token do usuário
             # que está prestes a ser removido. O AdminLogUploader pode continuar logando depois.
-            if isinstance(uploader_in_use, ClientLogUploader) and uploader_in_use._current_user_token:
+            from SOURCE.logger.cloud_logger_handler import user_token_ctx
+            if isinstance(uploader_in_use, ClientLogUploader) and user_token_ctx.get():                
                 logger.debug("Logout: Forçando flush do CloudLogHandler para logs do usuário atual (ClientUploader)...")
                 try:
                     LoggerSetup._active_cloud_handler_instance.flush()
