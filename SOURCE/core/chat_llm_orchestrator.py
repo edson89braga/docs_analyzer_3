@@ -12,10 +12,11 @@ logger = logging.getLogger(__name__)
 import time
 from typing import List, Dict, Any, Optional, Generator, Tuple
 
-import openai
+import openai, httpx
 from openai import AuthenticationError, APIError
 
 from SOURCE.utils import with_proxy
+from SOURCE.config.provider import is_local_mode
 from SOURCE.core.ai_orchestrator import calc_costs_llm_analysis
 from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
 
@@ -45,15 +46,27 @@ class ChatLLMOrchestrator:
                 logger.debug("Inicializando ou atualizando cliente OpenAI para o chat.")
                 self.client = openai.OpenAI(api_key=api_key)
         elif self.provider == "llm_pf":
-            # Para llm_pf, usar base_url customizada e api_key fixa
-            base_url = "http://llm.pf.gov.br:31893/v1"
-            api_key_pf = "EMPTY"
-            if self.client is None or self.client.base_url != base_url:
-                logger.debug("Inicializando cliente para endpoint llm_pf.")
-                self.client = openai.OpenAI(
-                    api_key=api_key_pf,
-                    base_url=base_url
-                )
+            if is_local_mode():
+                # Para llm_pf, usar base_url customizada e api_key fixa
+                base_url = "http://llm.pf.gov.br:31893/v1"
+                api_key_pf = "EMPTY"
+                if self.client is None or self.client.base_url != base_url:
+                    logger.debug("Inicializando cliente para endpoint llm_pf.")
+                    self.client = openai.OpenAI(
+                        api_key=api_key_pf,
+                        base_url=base_url
+                    )
+            else:
+                custom_http_client = httpx.Client(trust_env=False)
+                base_url = "http://10.2.2.10:31893/v1"
+                api_key_pf = "EMPTY"
+                if self.client is None or self.client.base_url != base_url:
+                    logger.debug("Inicializando cliente para endpoint llm_pf.")
+                    self.client = openai.OpenAI(
+                        api_key=api_key_pf,
+                        base_url=base_url,
+                        http_client=custom_http_client
+                    )                
         else:
             raise ValueError(f"Provedor '{self.provider}' não suportado.")
 

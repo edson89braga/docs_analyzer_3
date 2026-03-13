@@ -1666,7 +1666,10 @@ class LLMStructuredResultDisplay(ft.Column):
 
         self.gui_fields["pessoas_envolvidas"] = ft.TextField(
             label="Pessoas Envolvidas (Nome - CPF/CNPJ - Tipo)", 
-            value="\n".join(self.data.pessoas_envolvidas) if self.data.pessoas_envolvidas else "", 
+            value="\n".join([
+                f"{p.nome} - {p.cpf or p.cnpj or 'S/CPF/CNPJ'} - {p.papel}" 
+                for p in self.data.pessoas_envolvidas
+            ]) if self.data.pessoas_envolvidas else "", 
             multiline=True, min_lines=2, 
             hint_text="Uma pessoa por linha: Nome - CPF/CNPJ - Tipo (conforme lista de referência)", 
             dense=True, expand=True
@@ -2422,7 +2425,12 @@ class InternalAnalysisController:
                 self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE] = llm_response_data
                 self.page.session.set(KEY_SESSION_HAS_LLM_REPONSE, True)
                 # A flag 'is_new_llm_response' será passada para a sessão para ser usada por _update_ui_from_state
-                self.page.session.set("is_new_llm_response_flag", True)
+
+                # Se a resposta veio como string bruta (fallback), removemos a flag de nova resposta estruturada
+                if isinstance(llm_response_data, str):
+                    self.page.session.remove("is_new_llm_response_flag")
+                else:
+                    self.page.session.set("is_new_llm_response_flag", True)
                 
                 llm_meta_for_gui = token_usage_info if token_usage_info else {}
                 llm_meta_for_gui.update({

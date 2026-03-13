@@ -1,0 +1,90 @@
+>>> ssh usuario_da_vm@IP_DA_VM 
+-> >>> ssh sti@10.11.8.25 
+-> >>> Responder com password...
+
+=========================================================
+# Para transferir pastas e arquivos do computador local para a VM:
+
+>>> scp -r "C:\Caminho\Para\Deploy_PF" usuario_da_vm@IP_DA_VM:/home/usuario_da_vm/
+
+=========================================================
+proj_app--llm-api-docs_analyzer_3-opera-app   latest    71fcda98119b   13 hours ago   2.04GB
+proj_app--llm-api-docs_analyzer_3-ml-engine   latest    459d549efcc3   44 hours ago   1.85GB
+
+=========================================================
+
+# Etapas para construir o ambiente Docker a partir das imagens .tar:
+
+## 1. Acesse via SSH
+ssh usuario_da_vm@IP_DA_VM
+
+## 2. Entre na pasta que você acabou de transferir
+cd /home/usuario_da_vm/Deploy_PF
+
+## 3. Carregue as imagens para dentro do Docker da VM
+sudo docker load -i opera_app_image.tar
+sudo docker load -i ml_engine_image.tar
+
+## 3.1
+Alterar o arquivo docker-compose:
+```
+ services:
+   opera-app:
+-    build: .
++    image: <NOME_DA_IMAGEM_OPERA_APP> 
+...
+   opera-admin:
+-    build: .
++    image: <NOME_DA_IMAGEM_OPERA_APP>  # Usa a mesma imagem do Frontend
+...
+   ml-engine:
+-    build: 
+-      context: ../Proj_App   -- LLM-API - Vector_Engine_2
++    image: <NOME_DA_IMAGEM_ML_ENGINE>  # Ex: proj_app--llm-api-docs_analyzer_3-ml-engine:latest
+     container_name: opera-ia-ml-engine
+...
+```
+
+## 4. Suba a infraestrutura completa (Flet, Admin e ML-Engine) em background
+sudo docker-compose up -d
+
+ou sudo docker-compose up -d --force-recreate
+
+## 5. Verifique se os 3 contêineres estão rodando
+sudo docker ps
+
+=========================================================
+
+>>> sudo docker logs -f opera-ia-frontend # Para acompanhar logs
+-> ctrl+c para sair da visualização de logs
+
+>>> sudo docker logs --tail 100 opera-ia-frontend # opção para ver somente últimas 100 linhas
+
+>>> sudo docker-compose down # Para desligar o container antes de um novo 'sudo docker-compose up -d'
+
+
+=========================================================
+
+
+# Etapas para reiniciar a Aplicação em Docker com alterações/atualizações no código:
+
+1. Alterar o código no Windows local
+2. Transferir o(s) arquivo(s) .py alterado(s) para a VM (WinSCP/SCP).
+   >>> scp -r SOURCE sti@10.11.8.25:/home/sti/Deploy_PF
+3. >>> sudo docker-compose restart opera-app
+
+
+=========================================================
+
+# Como visualizar as pastas geradas dinamicamente pela aplicação:
+
+## Entra no terminal interativo do container principal
+sudo docker exec -it opera-ia-frontend /bin/bash
+
+## Agora você está dentro do diretório /app do container!
+ls -la
+cd logs
+cat nome_do_arquivo.log
+
+## Para sair e voltar para a VM, digite:
+exit

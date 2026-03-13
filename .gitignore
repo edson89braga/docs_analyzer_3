@@ -102,6 +102,7 @@ teste_int.py
 teste_int.ipynb
 
 lista_arqs_repo.txt
+Dockerfile_0.txt
 Dockerfile.txt
 docker-compose.txt
 
@@ -117,6 +118,7 @@ modelos_ocr/
 admin_data/
 uploads_temp/
 context_exports/
+Deploy_PF/
 
 *dict_prompts.json*
 

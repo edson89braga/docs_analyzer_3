@@ -1,6 +1,5 @@
-# /Proj_App -- LLM-API - Docs_Analyzer_3/docker-compose.yml
 version: '3.8'
-
+ 
 services:
   # 1. Aplicação Principal (Frontend Flet)
   opera-app:
@@ -10,21 +9,47 @@ services:
       - "8550:8550"
     volumes:
       - opera_data:/app/data
+      # Mapeamento de código (Hot-reload no servidor)
+      - ./SOURCE:/app/SOURCE
+      - ./run_server.py:/app/run_server.py
     environment:
       - APP_MODE=server
       - PORT=8550
       - FLET_SECRET_KEY=oTSHabCz0q5slF4OjKHUmh1zr/fVZDvtoZMECrwYJRI=
       - ML_ENGINE_URL=http://ml-engine:8001
       - SERVER_DATA_DIR=/app/data
-      # Chave Mestra do Servidor para criptografar as APIs dos usuários
       - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=      
+      # --- Configuração de Proxy Corporativo ---
+      # Descomente e preencha com os dados da rede (ex: http://usuario:senha@10.x.x.x:porta)
+      - HTTP_PROXY=http://proxy.dpf.gov.br:8080
+      - HTTPS_PROXY=http://proxy.dpf.gov.br:8080
+      # Impede que o tráfego interno (motor de ML) seja enviado para o proxy corporativo:
+      - NO_PROXY=localhost,127.0.0.1,10.2.2.10,10.2.2.10:31893,ml-engine
     depends_on:
       - ml-engine
 
-  # 2. Motor de Machine Learning (FastAPI)
+  # 2. Painel Administrativo (Streamlit)
+  opera-admin:
+    build: . # Usa exatamente a mesma imagem do opera-app
+    container_name: opera-ia-admin
+    # Sobrescreve o CMD do Dockerfile para rodar o Streamlit
+    command: ["streamlit", "run", "run_admin_streamlit.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    ports:
+      - "8501:8501"
+    volumes:
+      - opera_data:/app/data
+      # Mapeamento de código
+      - ./SOURCE:/app/SOURCE
+      - ./admin_py:/app/admin_py
+      - ./run_admin_streamlit.py:/app/run_admin_streamlit.py
+    environment:
+      - SERVER_DATA_DIR=/app/data
+      - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=
+    depends_on:
+      - ml-engine
+
+  # 3. Motor de Machine Learning (FastAPI)
   ml-engine:
-    # Ajuste o 'context' para o caminho RELATIVO de onde está a pasta do Vector_Engine_2
-    # Exemplo: se as pastas são irmãs, o caminho é '../Proj_App   -- LLM-API - Vector_Engine_2'
     build: 
       context: ../Proj_App   -- LLM-API - Vector_Engine_2
     container_name: opera-ia-ml-engine
@@ -32,6 +57,9 @@ services:
       - "8001:8001"
     environment:
       - PYTHONUNBUFFERED=1
+    # O engine de ML muda pouco, mas se quiser mapear o código dele também:
+    # volumes:
+    #   - ../Proj_App   -- LLM-API - Vector_Engine_2/engine.py:/app/engine.py
 
 volumes:
   opera_data:

@@ -226,7 +226,13 @@ def route_change_content_only(
     if "/__/auth/action" in route:
         logger.debug("Rota de ação do Firebase detectada. Ignorando para manipulação pelo cliente.")
         return
-    
+
+    # Intercepta a rota raiz e redireciona para a página inicial (evita ValueError)
+    if route == "/":
+        logger.debug(f"Rota raiz acessada. Redirecionando para {initial_route}.")
+        page.go(initial_route)
+        return
+
     # --- 1. Validações e Redirecionamento ---
     upload_dir_base_url_path = f"/{Path(UPLOAD_TEMP_DIR).name}/"
     if route.startswith(upload_dir_base_url_path):

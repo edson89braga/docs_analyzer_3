@@ -97,6 +97,11 @@ def with_proxy(skip_ssl_verify: bool = True):
                 # Obter configurações do config_manager
                 proxy_config = config_manager.get_proxy_settings()
 
+                # Se estivermos em modo servidor (Docker), ignoramos a lógica do config_manager
+                # e mantemos as variáveis de ambiente definidas no docker-compose.
+                if os.environ.get("APP_MODE") == "server":
+                    return func(*args, **kwargs)
+
                 if proxy_config.get(K_PROXY_ENABLED):
                     ip = proxy_config.get(K_PROXY_IP_URL)
                     port = proxy_config.get(K_PROXY_PORT)

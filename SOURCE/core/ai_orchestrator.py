@@ -12,13 +12,13 @@ from time import perf_counter
 start_time = perf_counter()
 logger.debug(f"{start_time:.4f}s - Iniciando ai_orchestrator.py")
 
-import os
+import os, openai, httpx
 from typing import Optional, Dict, Any, List, Tuple, Union
 from openai import OpenAI, AuthenticationError, APIError # Para tratamento específico de erros OpenAI
 
 # Imports do Projeto
 from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
-
+from SOURCE.config.provider import is_local_mode
 from SOURCE.utils import with_proxy
 from SOURCE.core.prompts import (output_formats, review_function, normalizing_function, # prompts
                                 formatted_initial_analysis, try_convert_to_pydantic_format, return_parse_prompt)
@@ -648,7 +648,13 @@ def analyze_text_with_llm(
                     final_response = output_formats[prompt_name].model_validate_json(final_response_text_clean)
                 except (ValueError, json.JSONDecodeError) as e:
                     logger.error(f"Erro ao processar JSON do OpenAI: {e}")
-                    raise
+                    # raise
+                    # Fallback: Retorna o texto bruto se o JSON falhar
+                    logger.warning("Retornando resposta bruta devido a falha no parsing JSON.")
+                    final_response = final_response_text_clean
+                    # Opcional: Adicionar marcação que a resposta não está formatada
+                    if hasattr(final_response, "observacoes"):
+                        final_response.observacoes = f"[AVISO: Resposta não formatada corretamente pela IA]\n{final_response.observacoes}"                
                 
                 # Obter informações sobre o uso de tokens
                 cb = response.usage # callback
@@ -670,18 +676,31 @@ def analyze_text_with_llm(
             raise ValueError("Provedor LangChain OpenAI não implementado.")
 
         elif provider == "llm_pf":
-            # Configurações para o endpoint interno da PF
-            base_url = "http://llm.pf.gov.br:31893/v1"
-            api_key_pf = "EMPTY"
-            model_pf = "Qwen3-8B-AWQ"  # Modelo fixo para este endpoint
-            
-            # Instancia o cliente OpenAI com base_url customizada
-            client_pf = OpenAI(
-                api_key=api_key_pf,
-                base_url=base_url,
-                timeout=180,
-                max_retries=2
-            )
+            if is_local_mode():
+                # Configurações para o endpoint interno da PF
+                base_url = "http://llm.pf.gov.br:31893/v1"
+                api_key_pf = "EMPTY"
+                model_pf = "Qwen3-8B-AWQ"  # Modelo fixo para este endpoint
+                # Instancia o cliente OpenAI com base_url customizada
+                client_pf = OpenAI(
+                    api_key=api_key_pf,
+                    base_url=base_url,
+                    timeout=180,
+                    max_retries=2
+                )
+            else:
+                custom_http_client = httpx.Client(trust_env=False)
+                base_url = "http://10.2.2.10:31893/v1"
+                api_key_pf = "EMPTY"
+                model_pf = "Qwen3-8B-AWQ"  
+
+                client_pf = OpenAI(
+                    api_key=api_key_pf,
+                    base_url=base_url,
+                    timeout=180,
+                    max_retries=2,
+                    http_client=custom_http_client
+                )                
             
             if prompt_name == "PROMPT_UNICO_for_INITIAL_ANALYSIS":
                 prompt_list_dicts = prompts[prompt_name]
@@ -727,8 +746,14 @@ def analyze_text_with_llm(
                     final_response = output_formats[prompt_name].model_validate_json(final_response_text_clean)
                 except (ValueError, json.JSONDecodeError) as e:
                     logger.error(f"Erro ao processar JSON do endpoint PF: {e}", exc_info=True)
-                    raise
-                
+                    # raise
+                    # Fallback: Retorna o texto bruto se o JSON falhar
+                    logger.warning("Retornando resposta bruta devido a falha no parsing JSON.")
+                    final_response = final_response_text_clean
+                    # Opcional: Adicionar marcação que a resposta não está formatada
+                    if hasattr(final_response, "observacoes"):
+                        final_response.observacoes = f"[AVISO: Resposta não formatada corretamente pela IA]\n{final_response.observacoes}"
+
                 # Obter informações sobre o uso de tokens (se disponível)
                 usage = response.usage
                 if usage:

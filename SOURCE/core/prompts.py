@@ -80,6 +80,13 @@ def get_prompts_for_initial_analysis(all_lists_dict, all_prompts_dict):
 ### FORMATOS das saídas estruturadas:
 from pydantic import BaseModel, Field 
 
+class PessoaEnvolvida(BaseModel):
+    """Modelo para representar pessoas ou entidades envolvidas."""
+    nome: str
+    cpf: Optional[str] = None
+    cnpj: Optional[str] = None
+    papel: str
+
 class formatted_initial_analysis(BaseModel):
     """
     Modelo Pydantic para a análise inicial formatada de um documento.
@@ -101,7 +108,7 @@ class formatted_initial_analysis(BaseModel):
     destinacao: str
     tipo_a_autuar: str
     assunto_re: Optional[str] = "Não aplicável" # Consta resposta padrão se não aplicável
-    pessoas_envolvidas: Optional[List[str]]
+    pessoas_envolvidas: Optional[List[PessoaEnvolvida]] = None
     linha_do_tempo: Optional[List[str]]
     observacoes: Optional[str] = ""
 
@@ -142,7 +149,7 @@ class formatted_part_2(BaseModel):
     municipio_fato: str
     tipo_local: str
     valor_apuracao: float = Field(default=0.0) # Consta resposta padrão 0 se não aplicável
-    pessoas_envolvidas: Optional[List[str]]
+    pessoas_envolvidas: Optional[List[PessoaEnvolvida]] = None
     linha_do_tempo: Optional[List[str]]
     observacoes: str = Field(default="")
 
