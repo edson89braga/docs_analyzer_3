@@ -49,6 +49,7 @@ _initialize_heavy_utils()
 
 from SOURCE.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
 import SOURCE.core.ai_orchestrator as ai_orchestrator
+from SOURCE.core.ai_orchestrator import ContextLengthExceededError
 from SOURCE.core.doc_generator import DocxExporter
 
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
@@ -1978,9 +1979,33 @@ class LLMStructuredResultDisplay(ft.Column):
             # Tratamentos específicos de tipo (continua como antes)
             if field_name == "valor_apuracao":
                 value = clean_and_convert_to_float(value)
-            elif field_name in ["pessoas_envolvidas", "linha_do_tempo"] and isinstance(value, str):
+            elif field_name == "linha_do_tempo" and isinstance(value, str):
                 value = convert_to_list_of_strings(value)
-            
+            elif field_name == "pessoas_envolvidas" and isinstance(value, str):
+                parsed_pessoas = []
+                for line in value.split('\n'):
+                    line = line.strip()
+                    if not line: continue
+                    parts = [p.strip() for p in line.split(' - ')]
+                    nome = parts[0] if len(parts) > 0 else line
+                    doc = ""
+                    papel = ""
+                    if len(parts) == 2:
+                        papel = parts[1]
+                    elif len(parts) >= 3:
+                        papel = parts[-1]
+                        doc = " - ".join(parts[1:-1])
+                    
+                    pessoa_dict = {"nome": nome, "papel": papel, "cpf": None, "cnpj": None}
+                    if doc and doc.upper() not in ["S/CPF/CNPJ", "NONE", "NULL", ""]:
+                        clean_doc = ''.join(filter(str.isdigit, doc))
+                        if len(clean_doc) > 11:
+                            pessoa_dict["cnpj"] = doc
+                        else:
+                            pessoa_dict["cpf"] = doc
+                    parsed_pessoas.append(pessoa_dict)
+                value = parsed_pessoas    
+
             collected_values_from_ui[field_name] = value
  
         if validate_for_export and invalid_fields_for_export:
@@ -2459,7 +2484,23 @@ class InternalAnalysisController:
             logger.error(f"Thread: Erro na análise LLM para '{batch_name}': {ex_llm}", exc_info=True)
             self.parent_view._analysis_requested = False
             self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
-            self.page.run_thread(self._update_status_callback,  f"Erro na consulta à LLM: {ex_llm}", True, True)
+            if isinstance(ex_llm, ContextLengthExceededError):
+                _msg_status = (
+                    f"Documento muito longo para o modelo atual.\n{ex_llm}"
+                )
+                _msg_snack = (
+                    f"⚠ Limite de contexto atingido — {ex_llm} "
+                    "Reduza os filtros de conteúdo, divida o documento ou selecione "
+                    "um modelo com maior context window nas Configurações LLM."
+                )
+                self.page.run_thread(self._update_status_callback, _msg_status, True, True)
+                self.page.run_thread(show_snackbar, self.page, _msg_snack,
+                                     theme.COLOR_WARNING)
+            else:
+                self.page.run_thread(self._update_status_callback,
+                                     f"Erro na consulta à LLM: {ex_llm}", True, True)
+                self.page.run_thread(show_snackbar, self.page,
+                                     "Erro inesperado na consulta à LLM.", theme.COLOR_ERROR)            
         finally:
             self.parent_view.file_list_manager.collapse_container()
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True

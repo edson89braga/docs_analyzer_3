@@ -14,7 +14,7 @@ logger.debug(f"{start_time:.4f}s - Iniciando ai_orchestrator.py")
 
 import os, openai, httpx
 from typing import Optional, Dict, Any, List, Tuple, Union
-from openai import OpenAI, AuthenticationError, APIError # Para tratamento específico de erros OpenAI
+from openai import OpenAI, AuthenticationError, APIError, InternalServerError
 
 # Imports do Projeto
 from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
@@ -437,6 +437,26 @@ def get_embeddings_from_api(
 
     return lista_final_embeddings_ordenada, total_tokens_api, cost_usd
 
+def _make_strict_schema(model: Any) -> Dict[str, Any]:
+    """
+    Gera o JSON schema de um modelo Pydantic garantindo que
+    ``additionalProperties: false`` e ``required`` estejam presentes
+    em TODOS os objetos do schema — raiz e quaisquer submodelos em ``$defs``.
+
+    A OpenAI Responses API exige isso em cada nó do tipo ``object``,
+    não apenas na raiz. Antes de ``PessoaEnvolvida`` ser introduzida o
+    schema não tinha ``$defs``, então o bug era invisível.
+    """
+    schema = model.model_json_schema()
+    for def_schema in schema.get("$defs", {}).values():
+        if def_schema.get("type") == "object" and "properties" in def_schema:
+            def_schema["required"] = list(def_schema["properties"].keys())
+            def_schema["additionalProperties"] = False
+    if "properties" in schema:
+        schema["required"] = list(schema["properties"].keys())
+    schema["additionalProperties"] = False
+    return schema
+
 def convert_pydantic_to_json_schema(formatted_initial_pydantic: Any) -> Dict[str, Any]:
     """
     Converte um modelo Pydantic para um esquema JSON compatível com a API OpenAI.
@@ -447,13 +467,13 @@ def convert_pydantic_to_json_schema(formatted_initial_pydantic: Any) -> Dict[str
     Returns:
         Dict[str, Any]: Um dicionário representando o esquema JSON para a API OpenAI.
     """
-    schema = formatted_initial_pydantic.model_json_schema()
+    schema = _make_strict_schema(formatted_initial_pydantic)
     response_format = {
         "type": "json_schema",
         "json_schema": {
             "name": "formatted_initial_pydantic",
             "schema": schema,
-            "strict": False
+            "strict": True,
         }
     }
     return response_format
@@ -552,6 +572,15 @@ def _get_token_usage_info(dados_segmentados: List[Any], waited_cached_tokens: in
     logger.debug("Procedido: _get_token_usage_info")
     return token_usage_info
 
+
+class ContextLengthExceededError(Exception):
+    """
+    Levantada quando o prompt enviado à LLM excede o context window do modelo.
+    Carrega uma mensagem já formatada para exibição direta na UI.
+    """
+    pass
+    
+
 # --- Função Principal de Análise ---
 @with_proxy()
 def analyze_text_with_llm(
@@ -614,11 +643,8 @@ def analyze_text_with_llm(
                     modified_msg_dict = {key: value.replace("{input_text}", processed_text) for key, value in msg_dict.items()}
                     modified_prompt_list.append(modified_msg_dict)
 
-                # Converter a classe Pydantic para JSON schema
-                json_schema = output_formats[prompt_name].model_json_schema()
-                json_schema = output_formats[prompt_name].model_json_schema()
-                json_schema["required"] = list(json_schema["properties"].keys())
-                json_schema["additionalProperties"] = False
+                # Converter a classe Pydantic para JSON schema (strict, inclui $defs)
+                json_schema = _make_strict_schema(output_formats[prompt_name])
                 data_to_api = {
                     "model": model_name,
                     "input": modified_prompt_list, # Lista única
@@ -711,10 +737,8 @@ def analyze_text_with_llm(
                     modified_msg_dict = {key: value.replace("{input_text}", processed_text_with_no_think) for key, value in msg_dict.items()}
                     messages.append(modified_msg_dict)
 
-                # Converter a classe Pydantic para JSON schema
-                json_schema = output_formats[prompt_name].model_json_schema()
-                json_schema["required"] = list(json_schema["properties"].keys())
-                json_schema["additionalProperties"] = False
+                # Converter a classe Pydantic para JSON schema (strict, inclui $defs)
+                json_schema = _make_strict_schema(output_formats[prompt_name])
                 
                 response_format = {
                     "type": "json_schema",
@@ -731,7 +755,7 @@ def analyze_text_with_llm(
                     model=model_pf,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=32000,  # Ajustar conforme necessário
+                    max_tokens=30000,  # Ajustar conforme necessário
                     response_format=response_format
                 )
                 logger.info('[DEBUG]: Requisição concluída.')
@@ -799,9 +823,27 @@ def analyze_text_with_llm(
     except AuthenticationError as auth_err:
         logger.error(f"Erro de Autenticação com a API {provider}: {auth_err}. Verifique a chave API.", exc_info=True)
         # A GUI deve notificar o usuário sobre a chave inválida.
-    except APIError as api_err:
+    except (APIError, InternalServerError) as api_err:
         logger.error(f"Erro da API {provider}: {api_err}. Pode ser um problema temporário ou de input.", exc_info=True)
-        # Pode ser útil retornar a mensagem de erro para a UI.
+        # Detecta context length exceeded — mensagem vinda do vLLM/OpenAI
+        # Exemplos conhecidos:
+        #   vLLM/llm_pf : "The decoder prompt (length N) is longer than the maximum model length of M."
+        #   OpenAI API   : "This model's maximum context length is M tokens. However, your messages resulted in N tokens."
+        err_str = str(api_err).lower()
+        if ("longer than the maximum model length" in err_str
+                or "maximum context length" in err_str
+                or "context_length_exceeded" in err_str):
+            import re
+            # Ignora o primeiro número se for o código de erro 500
+            nums = re.findall(r"\d+", str(api_err))
+            filtered_nums = [n for n in nums if n != '500']
+            if len(filtered_nums) >= 2:
+                prompt_len, max_len = filtered_nums[0], filtered_nums[1]
+                detail = (f"Documento filtrado com {int(prompt_len):,} tokens excede o limite de "
+                          f"{int(max_len):,} tokens do modelo selecionado.")
+            else:
+                detail = "O documento filtrado excede o limite de tokens do modelo selecionado."
+            raise ContextLengthExceededError(detail) from api_err
     except Exception as e:
         logger.error(f"Erro inesperado durante a execução de Analyze_text_with_LLM ({provider}): {e}", exc_info=True)
     

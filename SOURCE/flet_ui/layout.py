@@ -19,50 +19,22 @@ from SOURCE.logger.logger import LoggerSetup
 
 SIZE_ICONS_NAVRAIL = 30
 
+# ATENÇÃO: os ft.Icon NÃO podem ser instanciados aqui (nível de módulo).
+# No modo servidor do Flet, múltiplas sessões compartilham o mesmo processo Python
+# e, portanto, o mesmo módulo já carregado em memória. Cada controle Flet carrega
+# um `uid` atribuído na primeira sessão. Quando a segunda sessão tenta montar sua
+# árvore de controles com essas mesmas instâncias (mesmo uid), o Flet não as
+# renderiza — causando ícones ausentes e elementos quebrados.
+# Solução: guardar apenas dados serializáveis (strings/ints) e instanciar os
+# ft.Icon dentro de create_navigation_rail, a cada chamada por sessão.
 icones_navegacao: List[Dict[str, Any]] = [
-    {
-        "label": "Início", # Imagem do departamento
-        "icon": ft.Icon(ft.Icons.HOME_OUTLINED, size=SIZE_ICONS_NAVRAIL),
-        "selected_icon": ft.Icon(ft.Icons.HOME, size=SIZE_ICONS_NAVRAIL),
-        "route": "/home"
-    },
-    {
-        "label": "Análise Inicial", # Antiga "Análise Inicial"
-        "icon": ft.Icon(ft.Icons.FIND_IN_PAGE_OUTLINED, size=SIZE_ICONS_NAVRAIL),
-        "selected_icon": ft.Icon(ft.Icons.FIND_IN_PAGE, size=SIZE_ICONS_NAVRAIL),
-        "route": "/analyze_pdf" # Nova rota para a funcionalidade principal
-    },
-    {
-        "label": "Chat Documentos",
-        "icon": ft.Icon(ft.Icons.QUESTION_ANSWER_OUTLINED,size=SIZE_ICONS_NAVRAIL),
-        "selected_icon": ft.Icon(ft.Icons.QUESTION_ANSWER,size=SIZE_ICONS_NAVRAIL),
-        "route": "/chat_docs"
-    },
-    {
-        "label": "Banco Pareceres",
-        "icon": ft.Icon(ft.Icons.LIBRARY_BOOKS_OUTLINED,size=SIZE_ICONS_NAVRAIL),
-        "selected_icon": ft.Icon(ft.Icons.LIBRARY_BOOKS,size=SIZE_ICONS_NAVRAIL),
-        "route": "/knowledge_base"
-    },
-
-    {
-        "label": "Wiki PF - Rotinas",
-        "icon": ft.Icon(ft.Icons.MENU_BOOK_OUTLINED, size=SIZE_ICONS_NAVRAIL),
-        "selected_icon": ft.Icon(ft.Icons.MENU_BOOK, size=SIZE_ICONS_NAVRAIL),
-        "route": "/wiki_rotinas"
-    },
-    {
-        "label": "Correições", 
-        "icon": ft.Icon(ft.Icons.RULE_FOLDER_OUTLINED,size=SIZE_ICONS_NAVRAIL),
-        "selected_icon": ft.Icon(ft.Icons.RULE_FOLDER,size=SIZE_ICONS_NAVRAIL),
-        "route": "/correicao_processos"
-    },
-    {
-        "label": "Roteiros Investigação", 
-        "icon": ft.Icon(ft.Icons.MAP_OUTLINED, size=SIZE_ICONS_NAVRAIL),
-        "selected_icon": ft.Icon(ft.Icons.MAP, size=SIZE_ICONS_NAVRAIL),
-        "route": "/roteiro_investigacoes"
-    }
+    {"label": "Início",               "icon": ft.Icons.HOME_OUTLINED,         "selected_icon": ft.Icons.HOME,              "route": "/home"},
+    {"label": "Análise Inicial",      "icon": ft.Icons.FIND_IN_PAGE_OUTLINED, "selected_icon": ft.Icons.FIND_IN_PAGE,     "route": "/analyze_pdf"},
+    {"label": "Chat Documentos",      "icon": ft.Icons.QUESTION_ANSWER_OUTLINED,"selected_icon": ft.Icons.QUESTION_ANSWER,"route": "/chat_docs"},
+    {"label": "Banco Pareceres",      "icon": ft.Icons.LIBRARY_BOOKS_OUTLINED, "selected_icon": ft.Icons.LIBRARY_BOOKS,   "route": "/knowledge_base"},
+    {"label": "Wiki PF - Rotinas",    "icon": ft.Icons.MENU_BOOK_OUTLINED,     "selected_icon": ft.Icons.MENU_BOOK,       "route": "/wiki_rotinas"},
+    {"label": "Correições",           "icon": ft.Icons.RULE_FOLDER_OUTLINED,   "selected_icon": ft.Icons.RULE_FOLDER,     "route": "/correicao_processos"},
+    {"label": "Roteiros Investigação","icon": ft.Icons.MAP_OUTLINED,            "selected_icon": ft.Icons.MAP,             "route": "/roteiro_investigacoes"},
 ]
 
 # Mapeamento inverso para destacar o item correto na NavRail principal
@@ -368,8 +340,10 @@ def create_navigation_rail(page: ft.Page, selected_route: str,
         min_extended_width=200,
         destinations=[
             ft.NavigationRailDestination(
-                icon=modulo["icon"],
-                selected_icon=modulo["selected_icon"],
+                # Instâncias novas a cada chamada — cada sessão recebe seus próprios
+                # objetos ft.Icon com uid únicos, sem conflito entre sessões.
+                icon=ft.Icon(modulo["icon"], size=SIZE_ICONS_NAVRAIL),
+                selected_icon=ft.Icon(modulo["selected_icon"], size=SIZE_ICONS_NAVRAIL),
                 label=modulo["label"],
             ) for modulo in icones_navegacao
         ],

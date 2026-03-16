@@ -36,15 +36,18 @@ if not flet_secret_key:
 
 # 3. Pré-carregamento Assíncrono (Opcional, para aquecer o servidor)
 def preload_heavy_modules():
-    logger.info("Pré-carregando módulos pesados no servidor...")
+    logger.info("Carregando módulos pesados sincronamente para o servidor (Warm-up)...")
     try:
         import SOURCE.utils
-        from SOURCE.core import prompts, pdf_processor
+        from SOURCE.core import prompts, pdf_processor, ai_orchestrator, doc_generator, chat_llm_orchestrator
+        from SOURCE.flet_ui.views import nc_analyze_view, chat_view
+        from SOURCE import app_cache
+        app_cache.heavy_imports_loading_event.set()
         logger.info("Módulos pré-carregados com sucesso.")
     except Exception as e:
         logger.error(f"Erro no pré-carregamento: {e}")
 
-threading.Thread(target=preload_heavy_modules, daemon=True).start()
+preload_heavy_modules()
 
 # 4. Inicialização do Flet
 import flet as ft

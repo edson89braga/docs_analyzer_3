@@ -569,9 +569,11 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         # Se autenticado, carrega as configurações em uma thread
         if page.session.contains_key("auth_id_token"):
             logger.debug("Usuário autenticado. Disparando carregamento de settings em background.")
-            # Inicia o pré-carregamento dos módulos pesados em uma thread separada.
-            # Isso acontece tanto para sessões restauradas quanto para novos logins.
-            threading.Thread(target=_preload_heavy_modules_in_background, daemon=True).start()            
+
+            if not app_cache.heavy_imports_loading_event.is_set():
+                logger.debug("Iniciando pré-carregamento de módulos pesados em background (modo local).")
+                threading.Thread(target=_preload_heavy_modules_in_background, daemon=True).start()          
+            
             threading.Thread(target=threaded_load_settings, args=(page,), daemon=True).start()
             
             # Inicia thread de renovação de token (isso já é non-blocking)

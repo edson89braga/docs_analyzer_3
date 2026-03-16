@@ -51,6 +51,25 @@ class DocxExporter:
         }
         return name_map.get(field_name, field_name.replace("_", " ").title())
 
+    def _format_list_item(self, field_name: str, item: Any) -> str:
+        """Formata um item de lista (como PessoaEnvolvida) para texto natural."""
+        if field_name == "pessoas_envolvidas":
+            if hasattr(item, 'nome') or isinstance(item, dict):
+                if isinstance(item, dict):
+                    nome = item.get('nome') or ''
+                    cpf = item.get('cpf')
+                    cnpj = item.get('cnpj')
+                    papel = item.get('papel') or ''
+                else:
+                    nome = getattr(item, 'nome', '') or ''
+                    cpf = getattr(item, 'cpf', None)
+                    cnpj = getattr(item, 'cnpj', None)
+                    papel = getattr(item, 'papel', '') or ''
+                
+                doc = cpf or cnpj or 'CPF/CNPJ'
+                return f"({papel}) {nome}, {doc};"
+        return str(item)
+
     def export_simple_docx(self, data: formatted_initial_analysis, output_path: str) -> bool:
         """
         Exporta os dados da análise (objeto FormatAnaliseInicial) para uma tabela em um arquivo DOCX.
@@ -116,7 +135,7 @@ class DocxExporter:
                         document.add_heading(heading_text, level=2)
                         if isinstance(value, list):
                             for item in value:
-                                document.add_paragraph(str(item), style='ListBullet') # Ou 'ListNumber'
+                                document.add_paragraph(self._format_list_item(field_name, item), style='ListBullet')
                         else:
                             document.add_paragraph(str(value))
                         document.add_paragraph() # Espaço extra
@@ -257,7 +276,8 @@ class DocxExporter:
                     
                     # Formata o valor para string
                     if isinstance(value, list):
-                        replacement = "\n".join(map(str, value)) if value else "" # Lista de itens, um por linha
+                        formatted_list =[self._format_list_item(field_name, item) for item in value]
+                        replacement = "\n".join(formatted_list) if formatted_list else ""
                     elif isinstance(value, float) and field_name == "valor_apuracao":
                         replacement = f"R$ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".") if value is not None else ""
                     else:

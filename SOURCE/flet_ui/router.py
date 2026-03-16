@@ -16,40 +16,13 @@ from SOURCE.settings import UPLOAD_TEMP_DIR
 from .theme import COLOR_WARNING, COLOR_ERROR, PADDING_L 
 from .layout import create_app_bar, _find_nav_index_for_route, route_to_base_nav_index, icones_navegacao
 
-#from .views.login_view import create_login_view
-#from .views.signup_view import create_signup_view 
-#from .views.home_view import create_home_view2
-#from .views.profile_view import create_profile_view
-#from .views.proxy_settings_view import create_proxy_settings_content
-#from .views.llm_settings_view import create_llm_settings_view
-#from .views.nc_analyze_view import create_analyze_pdf_content
-#from .views.others_view import create_chat_pdf_content
-
-## Mapeamento de rotas para funções que criam o *conteúdo* (não a View inteira)
-## route_content_mapping
-#_content_creators = {
-#    "/login": create_login_view,
-#    "/signup": create_signup_view, 
-#    "/home": create_home_view2,
-#    "/profile": create_profile_view,
-#    "/settings/proxy": create_proxy_settings_content,
-#    "/settings/llm": create_llm_settings_view,
-#    "/analyze_pdf": create_analyze_pdf_content, 
-#    "/chat_pdf": create_chat_pdf_content, 
-#    "/knowledge_base": create_knowledge_base_content,    
-#    "/wiki_rotinas": create_wiki_rotinas_content,
-#    "/correicao_processos": create_correicao_processos_content,
-#    "/roteiro_investigacoes": create_roteiro_investigacoes_content,
-#}
 _content_creators = {}
 
-# Em vez disso, vamos mapear as rotas para o CAMINHO do módulo e o NOME da função.
 _view_module_map = {
     "/login": ("SOURCE.flet_ui.views.login_view", "create_login_view"),
     "/signup": ("SOURCE.flet_ui.views.signup_view", "create_signup_view"),
     "/home": ("SOURCE.flet_ui.views.home_view", "create_home_view2"),
     "/profile": ("SOURCE.flet_ui.views.profile_view", "create_profile_view"),
-    #"/settings/proxy": ("SOURCE.flet_ui.views.proxy_settings_view", "create_proxy_settings_content"),
     "/settings/llm": ("SOURCE.flet_ui.views.llm_settings_view", "create_llm_settings_view"),
     "/analyze_pdf": ("SOURCE.flet_ui.views.nc_analyze_view", "create_analyze_pdf_content"),
     "/chat_docs": ("SOURCE.flet_ui.views.chat_view", "create_chat_view_content"),
@@ -60,17 +33,17 @@ _view_module_map = {
     "/session-taken-over": ("SOURCE.flet_ui.views.others_view", "create_session_taken_over_view"),    
 }
 
-# Mapeamento para rotas parametrizadas (se houver)
-_parameterized_content_creators: Dict[str, Callable[[ft.Page, Any], Any]] = {
-    # Ex: r"/products/(\d+)": create_product_detail_content,
-}
+_parameterized_content_creators: Dict[str, Callable[[ft.Page, Any], Any]] = {}
 
-# Rotas que são consideradas públicas (não exigem autenticação)
 PUBLIC_ROUTES = ["/login", "/signup", "/session-taken-over"]
-# Rotas que não devem exibir a NavigationRail (ex: login, signup)
 ROUTES_WITHOUT_NAV_RAIL = ["/login", "/signup", "/session-taken-over"]
 
-# Função auxiliar para verificar se o usuário está autenticado
+# ── FIX 3: Rotas stateful que NÃO devem ser cacheadas ───────────────────────
+# Views com estado interno rico (uploads, histórico de chat, resultados de análise).
+# Recriá-las a cada visita evita que state stale cause comportamento errático
+# ou que callbacks internos referenciem objetos já desconectados da árvore de UI.
+NO_CACHE_ROUTES = {"/analyze_pdf", "/chat_docs"}
+
 def is_user_authenticated(page: ft.Page) -> bool:
     """
     Verifica se o usuário está autenticado.
@@ -104,23 +77,14 @@ def app_router(page: ft.Page, route: str):
         route (str): A rota para a qual o aplicativo está navegando.
     """
     logger.info(f"Navegando para rota: '{route}'")
-    page.views.clear() # Limpa a pilha de views atual
+    page.views.clear()
 
     current_view_creator: Optional[callable] = None
     route_params = None
 
-    # Tenta encontrar uma view estática
     if route in _content_creators:
         current_view_creator = _content_creators[route]
-    # else: # Lógica para rotas parametrizadas de views, se houver
-    #     for pattern, creator_func in _parameterized_view_creators.items():
-    #         match = re.fullmatch(pattern, route)
-    #         if match:
-    #             current_view_creator = creator_func
-    #             route_params = match.groups()
-    #             break
 
-    # --- Lógica de Autenticação e Redirecionamento ---
     authenticated = is_user_authenticated(page)
 
     public_routes = ["/login", "/signup"]
@@ -131,12 +95,10 @@ def app_router(page: ft.Page, route: str):
         # É importante que a view de login seja construída sem Appbar/Navrail.
         return # Interrompe o processamento da rota atual
 
-    # Se autenticado e tentando acessar /login ou /signup, redireciona para /home
     if authenticated and route in public_routes:
         logger.info("Usuário já autenticado na página de login. Redirecionando para /home.")
-        page.go("/home") # Ou sua página principal após login
+        page.go("/home")
         return
-
 
     # --- Construção da View ---
     if current_view_creator:
@@ -177,11 +139,11 @@ def app_router(page: ft.Page, route: str):
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER
                 )
             )
-    else: # Rota não encontrada
+    else:
         logger.warning(f"Nenhuma view encontrada para a rota: {route}")
         page.views.append(
             ft.View(
-                route=route, # Mostra a rota não encontrada
+                route=route,
                 controls=[
                     ft.Icon(ft.Icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
                     ft.Text(f"Página não encontrada: {route}", size=24, weight=ft.FontWeight.BOLD),
@@ -193,6 +155,64 @@ def app_router(page: ft.Page, route: str):
         )
     
     page.update()
+
+
+# ── FIX 4: Reset de sessão ───────────────────────────────────────────────────
+
+def _handle_session_reset(page: ft.Page):
+    """
+    Desbloqueio de emergência da sessão Flet. Acessível via /reset.
+
+    Não toca em tokens de autenticação nem em dados do usuário — apenas reseta
+    o estado da UI (lock, cache de views, controles), suficiente para destravar
+    os três tipos de congelamento identificados.
+    """
+    logger.warning(f"[RESET] Sessão {page.session_id} solicitou reset de UI.")
+
+    try:
+        if page.data is None:
+            page.data = {}
+
+        # 1. Recria o lock global, liberando qualquer deadlock pendente
+        old_lock = page.data.get("global_update_lock")
+        page.data["global_update_lock"] = threading.Lock()
+        if old_lock:
+            acquired = old_lock.acquire(blocking=False)
+            if acquired:
+                old_lock.release()
+                logger.info("[RESET] Lock anterior estava livre — reset preventivo.")
+            else:
+                logger.warning("[RESET] Lock anterior estava TRAVADO — deadlock confirmado e resolvido.")
+
+        # 2. Limpa o cache de views (força recriação limpa)
+        try:
+            from SOURCE.utils import get_user_cache
+            user_cache = get_user_cache(page)
+            cleared = len(user_cache.get('view_cache', {}))
+            user_cache['view_cache'] = {}
+            logger.info(f"[RESET] Cache de {cleared} view(s) limpo.")
+        except Exception as e:
+            logger.warning(f"[RESET] Não foi possível limpar cache de views: {e}")
+
+        # 3. Incrementa o nav_token, descartando threads de carregamento em andamento
+        page.data["_nav_token"] = page.data.get("_nav_token", 0) + 1
+        logger.info(f"[RESET] Nav token incrementado para {page.data['_nav_token']}.")
+
+        # 4. Limpa os controles da página
+        try:
+            page.controls.clear()
+            page.update()
+        except Exception as e:
+            logger.warning(f"[RESET] Erro ao limpar controles: {e}")
+
+    except Exception as e:
+        logger.error(f"[RESET] Erro durante o reset: {e}", exc_info=True)
+
+    # 5. Redireciona para destino seguro
+    target = "/home" if is_user_authenticated(page) else "/login"
+    logger.info(f"[RESET] Redirecionando para '{target}' após reset.")
+    page.go(target)
+
 
 def route_change_content_only(
     page: ft.Page,
@@ -224,13 +244,18 @@ def route_change_content_only(
 
     # Ignora rotas de ação de autenticação do Firebase para que o SDK JS do cliente possa lidar com elas.
     if "/__/auth/action" in route:
-        logger.debug("Rota de ação do Firebase detectada. Ignorando para manipulação pelo cliente.")
+        logger.debug("Rota de ação do Firebase detectada. Ignorando.")
         return
 
     # Intercepta a rota raiz e redireciona para a página inicial (evita ValueError)
     if route == "/":
         logger.debug(f"Rota raiz acessada. Redirecionando para {initial_route}.")
         page.go(initial_route)
+        return
+
+    # ── FIX 4: Intercepta /reset antes de qualquer outra lógica ─────────────
+    if route == "/reset":
+        _handle_session_reset(page)
         return
 
     # --- 1. Validações e Redirecionamento ---
@@ -251,7 +276,11 @@ def route_change_content_only(
             page.go("/home")
             return
 
-    # Obtém o lock global. Se não existir, a operação não será protegida.
+    # ── FIX 1: Versão corrigida de _execute_ui_update ───────────────────────
+    # page.update() agora fica FORA do `with update_lock`.
+    # O lock protege apenas a mutação do estado dos controles. Manter page.update()
+    # dentro do lock causava deadlock quando a thread da GUI recebia o callable via
+    # page.run_thread() enquanto outro evento já aguardava o mesmo lock.
     update_lock = page.data.get("global_update_lock")
 
     def _execute_ui_update(update_callable: Callable):
@@ -267,10 +296,11 @@ def route_change_content_only(
         if update_lock:
             with update_lock:
                 update_callable()
-                page.update()
+            # ← page.update() FORA do lock (correção crítica)
+            page.update()
         else:
             # Fallback se o lock não for encontrado (menos seguro, mas evita deadlock)
-            logger.warning("Lock de atualização da GUI não encontrado. Atualizando GUI sem proteção de lock.")
+            logger.warning("Lock de atualização da GUI não encontrado. Atualizando sem lock.")
             update_callable()
             page.update()
         logger.debug("Procedido: _execute_ui_update")
@@ -279,7 +309,7 @@ def route_change_content_only(
     def _setup_layout_and_placeholder():
         page.controls.clear()
         placeholder = ft.Column(
-            [ft.ProgressRing(), ft.Container(height=10), ft.Text("1º Carregamento...", style=ft.TextThemeStyle.BODY_LARGE)],
+            [ft.ProgressRing(), ft.Container(height=10), ft.Text("Carregando...", style=ft.TextThemeStyle.BODY_LARGE)],
             alignment=ft.MainAxisAlignment.CENTER,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             expand=True
@@ -297,7 +327,7 @@ def route_change_content_only(
                 navigation_rail.selected_index = current_nav_index
             
             content_container_for_main_layout.content = placeholder
-            content_container_for_main_layout.padding = 0  # Centraliza o placeholder
+            content_container_for_main_layout.padding = 0
             
             page.add(
                 ft.Row(
@@ -309,8 +339,17 @@ def route_change_content_only(
 
     _execute_ui_update(_setup_layout_and_placeholder)
 
+    # ── FIX 2: Incrementa o nav_token ANTES de lançar a thread ──────────────
+    # Qualquer thread de carregamento anterior que ainda esteja rodando verá
+    # que seu token não corresponde mais ao atual e descartará o resultado,
+    # evitando que uma thread lenta sobrescreva o conteúdo da rota correta.
+    if page.data is None:
+        page.data = {}
+    page.data["_nav_token"] = page.data.get("_nav_token", 0) + 1
+    nav_token = page.data["_nav_token"]
+
     # --- 3. Carregamento do Conteúdo Real em Background ---
-    def _load_and_set_view(page_ref: ft.Page, target_route: str):
+    def _load_and_set_view(page_ref: ft.Page, target_route: str, token: int):
         """
         Carrega o conteúdo da view em uma thread separada e atualiza a UI.
 
@@ -322,56 +361,55 @@ def route_change_content_only(
             page_ref (ft.Page): Referência à instância da página Flet.
             target_route (str): A rota para a qual o conteúdo está sendo carregado.
         """
-        logger.debug(f"Thread: Iniciando carregamento do conteúdo para a rota '{target_route}'.")
+        logger.debug(f"Thread [{token}]: Iniciando carregamento para '{target_route}'.")
         final_content: Optional[ft.Control] = None
 
         try:
             from SOURCE.utils import get_user_cache
             user_cache = get_user_cache(page_ref)
 
-            # Garante que o sub-cache para views exista
             if 'view_cache' not in user_cache:
                 user_cache['view_cache'] = {}
             
-            # Tenta obter a view do cache
-            cached_view = user_cache['view_cache'].get(target_route)
+            # FIX 3: Não cacheia views stateful
+            use_cache = target_route not in NO_CACHE_ROUTES
+            cached_view = user_cache['view_cache'].get(target_route) if use_cache else None
 
             if cached_view:
-                logger.info(f"[DEBUG] View para a rota '{target_route}' encontrada no cache. Reutilizando instância.")
-                final_content = cached_view  
+                logger.info(f"[{token}] View '{target_route}' do cache.")
+                final_content = cached_view
 
             if content_creators:
                 creator_func = content_creators.get(target_route)
                 if creator_func and not cached_view:
-                    logger.info(f"[DEBUG] Criando nova view para a rota '{target_route}'.")
+                    logger.info(f"[{token}] Criando nova view '{target_route}' via content_creators.")
                     final_content = creator_func(page_ref)
-                    user_cache['view_cache'][target_route] = final_content # Armazena no cache
-                else:
-                    raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
+                    if use_cache:
+                        user_cache['view_cache'][target_route] = final_content
+                elif not cached_view:
+                    raise ValueError(f"Nenhum criador de conteúdo encontrado para: {target_route}")
             
             elif view_module_map and not cached_view:
-                logger.info(f"[DEBUG] Criando nova view para a rota '{target_route}' via import dinâmico.")
+                logger.info(f"[{token}] Criando nova view '{target_route}' via import dinâmico.")
                 # --- LÓGICA DE IMPORTAÇÃO DINÂMICA ---
                 if target_route in view_module_map:
                     import importlib
                     module_path, function_name = view_module_map[target_route]
-                    
+
                     # O import pesado acontece aqui!
                     view_module = importlib.import_module(module_path)
                     creator_func = getattr(view_module, function_name)
-                    
+
                     final_content = creator_func(page_ref)
-                    user_cache['view_cache'][target_route] = final_content # Armazena no cache
+                    if use_cache:
+                        user_cache['view_cache'][target_route] = final_content
                 else:
-                    raise ValueError(f"Nenhum criador de conteúdo encontrado para a rota: {target_route}")
-            #else:
-            #logger.info(f"[DEBUG] Nenhum criador de conteúdo encontrado para a rota: {target_route}")
-            logger.debug("Procedido: _load_and_set_view")
-            
+                    raise ValueError(f"Nenhum criador de conteúdo para: {target_route}")
+
+            logger.debug(f"[{token}] Conteúdo criado para '{target_route}'.")
 
         except Exception as e:
-            # ... (código de tratamento de erro para final_content) ...
-            logger.error(f"Erro ao criar conteúdo para rota '{target_route}': {e}", exc_info=True)
+            logger.error(f"[{token}] Erro ao criar conteúdo para '{target_route}': {e}", exc_info=True)
             final_content = ft.Column(
                 [
                     ft.Icon(ft.Icons.ERROR_OUTLINE, color=COLOR_ERROR, size=48),
@@ -386,25 +424,33 @@ def route_change_content_only(
                 spacing=15
             )
 
+        # FIX 2: Verifica se esta ainda é a navegação atual (primeiro check, antes de run_thread)
+        current_token = page_ref.data.get("_nav_token", 0)
+        if token != current_token:
+            logger.info(f"[{token}] Navegação obsoleta para '{target_route}' descartada (token atual: {current_token}).")
+            return
+
         def _update_ui_with_new_content():
             """
             Função que será executada na thread da GUI para substituir o placeholder.
             Esta função é agora protegida pelo lock em _execute_ui_update.
             """
-            logger.debug(f"Thread: Conteúdo para '{target_route}' carregado. Atualizando GUI.")
+            # FIX 2: Double-check dentro da GUI thread
+            if token != page_ref.data.get("_nav_token", 0):
+                logger.debug(f"[{token}] Double-check: descartando update obsoleto para '{target_route}'.")
+                return
+            logger.debug(f"[{token}] Aplicando conteúdo para '{target_route}'.")
             if target_route in ROUTES_WITHOUT_NAV_RAIL:
                 page_ref.controls.clear()
                 page_ref.add(final_content)
             else:
                 content_container_for_main_layout.content = final_content
                 content_container_for_main_layout.padding = PADDING_L
-            logger.debug("Procedido: _update_ui_with_new_content")
         
         # Agenda a atualização da UI na thread principal
         page_ref.run_thread(lambda: _execute_ui_update(_update_ui_with_new_content))
 
-    # Inicia a thread de carregamento
-    threading.Thread(target=_load_and_set_view, args=(page, route), daemon=True).start()
+    threading.Thread(target=_load_and_set_view, args=(page, route, nav_token), daemon=True).start()
 
 
 execution_time = perf_counter() - start_time
