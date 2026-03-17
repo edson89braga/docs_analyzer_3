@@ -3,7 +3,8 @@ version: '3.8'
 services:
   # 1. Aplicação Principal (Frontend Flet)
   opera-app:
-    build: .
+    # build: .
+    image: proj_app--llm-api-docs_analyzer_3-opera-app
     container_name: opera-ia-frontend
     ports:
       - "8550:8550"
@@ -16,6 +17,7 @@ services:
       - APP_MODE=server
       - PORT=8550
       - FLET_SECRET_KEY=oTSHabCz0q5slF4OjKHUmh1zr/fVZDvtoZMECrwYJRI=
+      - TZ=America/Sao_Paulo
       - ML_ENGINE_URL=http://ml-engine:8001
       - SERVER_DATA_DIR=/app/data
       - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=      
@@ -30,7 +32,8 @@ services:
 
   # 2. Painel Administrativo (Streamlit)
   opera-admin:
-    build: . # Usa exatamente a mesma imagem do opera-app
+    # build: . # Usa exatamente a mesma imagem do opera-app
+    image: proj_app--llm-api-docs_analyzer_3-opera-app
     container_name: opera-ia-admin
     # Sobrescreve o CMD do Dockerfile para rodar o Streamlit
     command: ["streamlit", "run", "run_admin_streamlit.py", "--server.port=8501", "--server.address=0.0.0.0"]
@@ -45,18 +48,21 @@ services:
     environment:
       - SERVER_DATA_DIR=/app/data
       - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=
+      - TZ=America/Sao_Paulo
     depends_on:
       - ml-engine
 
   # 3. Motor de Machine Learning (FastAPI)
   ml-engine:
-    build: 
-      context: ../Proj_App   -- LLM-API - Vector_Engine_2
+    # build: 
+    #  context: ../Proj_App   -- LLM-API - Vector_Engine_2
+    image: proj_app--llm-api-docs_analyzer_3-ml-engine
     container_name: opera-ia-ml-engine
     ports:
       - "8001:8001"
     environment:
       - PYTHONUNBUFFERED=1
+      - TZ=America/Sao_Paulo
     # O engine de ML muda pouco, mas se quiser mapear o código dele também:
     # volumes:
     #   - ../Proj_App   -- LLM-API - Vector_Engine_2/engine.py:/app/engine.py

@@ -235,13 +235,15 @@ class CloudLogHandler(logging.Handler):
 
         # Determina o user_id para o nome do arquivo via ContextVar
         user_id_for_filename = user_id_ctx.get()        
+        # Garantir que um UID inválido não quebre o match regex
+        uid_safe = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', str(user_id_for_filename))        
 
         # Estrutura de pasta baseada em data
         now = datetime.now(timezone.utc)
         base_log_folder_in_cloud = Path(CLOUD_LOGGER_FOLDER) / now.strftime('%Y/%m/%d')
         
         # Novo padrão de nome de arquivo
-        log_filename_in_cloud = f"{username_pc_safe}_{now.strftime('%H%M%S')}_{user_id_for_filename}.log"
+        log_filename_in_cloud = f"{username_pc_safe}_{now.strftime('%H%M%S')}_{uid_safe}.log"
         
         # Caminho completo do objeto no Storage
         full_cloud_path = (base_log_folder_in_cloud / log_filename_in_cloud).as_posix()

@@ -11,7 +11,7 @@ from time import sleep
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from rich.logging import RichHandler
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import List, Optional, Any, TYPE_CHECKING
 
 from .cloud_logger_handler import CloudLogHandler, ClientLogUploader, AdminLogUploader, user_token_ctx, user_id_ctx
@@ -51,19 +51,25 @@ class ModuleFilter(logging.Filter):
 class LoggerSetup:
     """Classe responsável pela configuração e setup de loggers."""
     
-    ### Formats: 
-    # Formato detalhado para o arquivo de log, com informações de data, hora, nível, módulo, função, linha, mensagem
-    formatter_detailed = logging.Formatter(
-        fmt='%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # Formato resumido para a saída padrão, sem data e hora
-    formatter_resumed = logging.Formatter( # Retirado %(asctime)s e levelname pois já vem embutido no RichHandler
-        fmt='%(message)s', 
-        datefmt='%H:%M:%S'
-    )
-    
+    @staticmethod
+    def _get_formatter(detailed: bool = True):
+        # Formato detalhado para o arquivo de log, com informações de data, hora, nível, módulo, função, linha, mensagem
+        tz = dt_timezone(timedelta(hours=-3)) # Fuso de Brasília (UTC-3)
+
+        # Função auxiliar reutilizada pelo RichHandler para gerar o timestamp
+        # corretamente no console (Rich não usa o formatter padrão para o tempo)
+        @staticmethod
+        def _get_brasilia_time() -> datetime:
+            return datetime.now(dt_timezone(timedelta(hours=-3)))
+
+        class LocalFormatter(logging.Formatter):
+            def formatTime(self, record, datefmt=None):
+                dt = datetime.fromtimestamp(record.created, tz)
+                return dt.strftime(datefmt or '%Y-%m-%d %H:%M:%S')
+        
+        fmt = '%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s' if detailed else '%(message)s'
+        return LocalFormatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S')
+        
     _instance: Optional[logging.Logger] = None
     _initialized = False
     _loggers = {}  # Dicionário para rastrear todos os loggers criados
@@ -89,11 +95,15 @@ class LoggerSetup:
 
     @classmethod
     def _create_console_handler(cls, formatter, level=logging.INFO):
+        tz = dt_timezone(timedelta(hours=-3))
         handler = RichHandler(
             level=level,
             show_level=True,
             show_path=False,
             show_time=True,
+            # RichHandler ignora o formatter para o timestamp da coluna [TIME].
+            # log_time_format aceita um callable → força UTC-3 (Brasília)
+            log_time_format=lambda dt: datetime.now(tz).strftime("%H:%M:%S"),            
             rich_tracebacks=True,
             tracebacks_show_locals=False,
             markup=True,
@@ -153,13 +163,13 @@ class LoggerSetup:
         logger = logging.getLogger(logger_name)
         if not logger.handlers:            
             # Adiciona console handler
-            console_handler = cls._create_console_handler(cls.formatter_resumed, logging.INFO)
+            console_handler = cls._create_console_handler(cls._get_formatter(detailed=False), logging.INFO)
             logger.addHandler(console_handler)
             
             # Adiciona file handler
             file_handler = cls._create_file_handler(
                 PATH_LOGS_DIR / "Root_temp.log",
-                cls.formatter_detailed, 
+                cls._get_formatter(detailed=True), 
                 logging.DEBUG
             )
             logger.addHandler(file_handler)
@@ -224,10 +234,10 @@ class LoggerSetup:
         # --- Cria Handlers ---
         file_handler = cls._create_file_handler(
             base_log_file,
-            cls.formatter_detailed, 
+            cls._get_formatter(detailed=True), 
             logging.DEBUG  # Arquivo sempre em DEBUG
         )
-        console_handler = cls._create_console_handler(cls.formatter_resumed, console_level)
+        console_handler = cls._create_console_handler(cls._get_formatter(detailed=False), console_level)
 
         if dev_mode and allowed_prefixes:
             module_filter = ModuleFilter(prefixes=allowed_prefixes)
@@ -327,7 +337,7 @@ class LoggerSetup:
                 logger.debug(f"LoggerSetup: Erro ao criar FbManagerStorage para AdminLogUploader: {e_fms}")
 
         cloud_log_handler = cls._create_cloud_logger_handler(
-            cls.formatter_detailed,
+            cls._get_formatter(detailed=True),
             level=logging.INFO
         )
 
@@ -435,7 +445,7 @@ class LoggerSetup:
             blobs_iterator = storage_manager.bucket.list_blobs(prefix=cloud_log_prefix)
             
             # A data/hora do blob.updated é 'timezone-aware' (UTC). Precisamos comparar com UTC.
-            cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_to_keep)
+            cutoff_date = datetime.now(dt_timezone.utc) - timedelta(days=days_to_keep)
             
             files_to_remove = []
             

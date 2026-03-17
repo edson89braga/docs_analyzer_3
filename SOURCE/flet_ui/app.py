@@ -34,6 +34,10 @@ from SOURCE.services.local_db_manager import LocalDBManager
 from SOURCE.config.provider import is_local_mode
 from SOURCE.logger.logger import LoggerSetup
 
+# --- Rastreamento Global de Conexões ---
+global_active_sessions = set()
+global_active_sessions_lock = threading.Lock()
+
 auth_manager = FbManagerAuth()
 firestore_client = FirebaseClientFirestore()
 
@@ -434,6 +438,10 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
     )
     page.on_view_pop = None # Não usamos a pilha de views padrão com este layout
 
+    with global_active_sessions_lock:
+        global_active_sessions.add(page.session_id)
+        logger.info(f"[MONITORIA] Nova sessão. Usuários conectados agora: {len(global_active_sessions)}")
+
     # --- Limpeza ao Fechar ---
     def on_disconnect(e):
         """
@@ -494,7 +502,11 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             stop_event = page.data.get("refresh_stop_event")
             if stop_event:
                 stop_event.set()  
-                          
+
+        with global_active_sessions_lock:
+            global_active_sessions.discard(page.session_id)
+            logger.info(f"[MONITORIA] Sessão encerrada. Usuários conectados agora: {len(global_active_sessions)}")
+
         clear_user_cache(page)
 
         # Pausa opcional para garantir que o flush tenha tempo de iniciar o upload
