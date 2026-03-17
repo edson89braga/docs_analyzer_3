@@ -14,7 +14,10 @@ from rich.logging import RichHandler
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import List, Optional, Any, TYPE_CHECKING
 
-from .cloud_logger_handler import CloudLogHandler, ClientLogUploader, AdminLogUploader, user_token_ctx, user_id_ctx
+from .cloud_logger_handler import (CloudLogHandler, ClientLogUploader, AdminLogUploader,
+                                    user_token_ctx, user_id_ctx,
+                                    user_token_expiry_ctx, user_refresh_token_ctx)
+ 
 from SOURCE.settings import (PATH_LOGS_DIR, CLOUD_LOGGER_FOLDER, APP_VERSION)
 
 from SOURCE.services.firebase_manager import FbManagerStorage
@@ -149,13 +152,21 @@ class LoggerSetup:
             return None
     
     @classmethod
-    def set_cloud_user_context(cls, user_token: Optional[str], user_id: Optional[str]):
+    def set_cloud_user_context(cls, user_token: Optional[str], user_id: Optional[str],
+                                refresh_token: Optional[str] = None,
+                                expires_in: Optional[float] = None):
         """
         Define o contexto do usuário para a thread atual através de contextvars,
         garantindo isolamento em requisições de servidor (multithreading).
         """
         user_token_ctx.set(user_token)
         user_id_ctx.set(user_id if user_id else "anonymous_user")
+        user_refresh_token_ctx.set(refresh_token)
+        if expires_in is not None:
+            import time
+            user_token_expiry_ctx.set(time.time() + expires_in)
+        else:
+            user_token_expiry_ctx.set(None)
 
     @classmethod
     def _setup_temporary_logger(cls, logger_name):

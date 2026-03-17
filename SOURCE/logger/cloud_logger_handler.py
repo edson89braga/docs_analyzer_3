@@ -1,4 +1,4 @@
-import logging
+import logging, time
 logger = logging.getLogger(__name__)
 
 from time import perf_counter
@@ -24,7 +24,19 @@ PATH_LOGS_DIR = Path(PATH_LOGS_DIR)
 
 # Variáveis de contexto para manter isolamento entre requisições concorrentes
 user_token_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_token_ctx", default=None)
+user_token_expiry_ctx: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar("user_token_expiry_ctx", default=None)
+user_refresh_token_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_refresh_token_ctx", default=None)
 user_id_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_id_ctx", default="anonymous_user")
+
+def _is_token_valid() -> bool:
+    """Retorna True se o token existir e não estiver expirado (com margem de 60s)."""
+    token = user_token_ctx.get()
+    expiry = user_token_expiry_ctx.get()
+    if not token:
+        return False
+    if expiry is None:
+        return True  # Sem informação de expiração: assume válido
+    return time.time() < (expiry - 60)  # 60s de margem
 
 class LogUploaderStrategy(ABC):
     @abstractmethod
@@ -163,7 +175,10 @@ class CloudLogHandler(logging.Handler):
                 
                 if uid not in CloudLogHandler.log_buffers:
                     CloudLogHandler.log_buffers[uid] = {"token": token, "logs": []}
-                    
+                elif token:
+                    # Atualiza sempre para o token mais recente para evitar envio com token expirado
+                    CloudLogHandler.log_buffers[uid]["token"] = token
+
                 CloudLogHandler.log_buffers[uid]["logs"].append(log_message_utf8)
                 buffer_size = sum(len(data["logs"]) for data in CloudLogHandler.log_buffers.values())
 
@@ -255,8 +270,7 @@ class CloudLogHandler(logging.Handler):
         # Verifica se podemos tentar o upload, especialmente para o ClientUploader
         can_attempt_upload = False
         if isinstance(self.uploader, ClientLogUploader):
-            # Agora validamos através do contextvar atual
-            can_attempt_upload = bool(user_token_ctx.get())
+            can_attempt_upload = _is_token_valid()
         elif isinstance(self.uploader, AdminLogUploader):
             can_attempt_upload = True # Admin sempre pode tentar
 
@@ -274,6 +288,28 @@ class CloudLogHandler(logging.Handler):
         if not initial_upload_attempt_failed_gracefully: # Só tenta upload real se não for um "adiamento" do cliente
             for attempt in range(CLOUD_LOGGER_MAX_RETRIES):
                 try:
+                    # Antes de cada tentativa, verifica se o token ainda é válido
+                    if isinstance(self.uploader, ClientLogUploader) and not _is_token_valid():
+                        refresh_token = user_refresh_token_ctx.get()
+                        if refresh_token:
+                            try:
+                                auth_mgr = self.uploader.client_storage.auth_manager
+                                refreshed = auth_mgr.refresh_id_token(refresh_token)
+                                if refreshed and refreshed.get("id_token"):
+                                    user_token_ctx.set(refreshed["id_token"])
+                                    expires_in = float(refreshed.get("expires_in", 3600))
+                                    user_token_expiry_ctx.set(time.time() + expires_in)
+                                    logger.debug("CloudLogHandler: Token renovado com sucesso para upload de log.")
+                                else:
+                                    logger.warning("CloudLogHandler: Falha ao renovar token. Upload adiado.")
+                                    break
+                            except Exception as refresh_err:
+                                logger.warning(f"CloudLogHandler: Exceção ao renovar token: {refresh_err}. Upload adiado.")
+                                break
+                        else:
+                            logger.debug("CloudLogHandler: Token expirado e sem refresh_token. Upload adiado.")
+                            break
+
                     upload_successful_this_attempt = False
                     if isinstance(self.uploader, ClientLogUploader):
                         if can_attempt_upload:

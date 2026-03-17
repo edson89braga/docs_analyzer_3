@@ -234,8 +234,14 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
             page.client_storage.set("auth_refresh_token", new_refresh_token)
             page.client_storage.set("auth_id_token_expires_at", new_expires_at)
             logger.debug("Tokens atualizados também no client_storage.")
-        
-        LoggerSetup.set_cloud_user_context(new_id_token, page.session.get("auth_user_id"))
+
+        LoggerSetup.set_cloud_user_context(
+            new_id_token,
+            page.session.get("auth_user_id"),
+            refresh_token=new_refresh_token,
+            expires_in=float(new_expires_in)
+        )        
+
         return True
     else:
         logger.error("Falha ao renovar o ID Token. Deslogando usuário.")
@@ -319,7 +325,12 @@ def load_auth_state_from_storage(page: ft.Page):
         credentials_manager.load_and_cache_all_api_keys(page, firestore_client)
 
         # Passo 3: Configurações pós-restauração
-        LoggerSetup.set_cloud_user_context(final_id_token, final_user_id)
+        LoggerSetup.set_cloud_user_context(
+            final_id_token,
+            final_user_id,
+            refresh_token=page.session.get("auth_refresh_token"),
+            expires_in=float(page.session.get("auth_id_token_expires_at", 0)) - time.time() or 3600
+        )
         logger.debug(f"Contexto do logger de nuvem restaurado para usuário {final_user_id}.")
 
         try:
