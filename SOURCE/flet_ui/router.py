@@ -242,6 +242,10 @@ def route_change_content_only(
     """
     logger.info(f"Navegando para rota (content_only): '{route}'")
 
+    user_email_active = page.session.get("auth_user_email")
+    if user_email_active and route not in PUBLIC_ROUTES and route != "/":
+        logger.info(f"[MONITORIA] Operação: '{user_email_active}' acessou a rota '{route}'.")
+
     # Ignora rotas de ação de autenticação do Firebase para que o SDK JS do cliente possa lidar com elas.
     if "/__/auth/action" in route:
         logger.debug("Rota de ação do Firebase detectada. Ignorando.")

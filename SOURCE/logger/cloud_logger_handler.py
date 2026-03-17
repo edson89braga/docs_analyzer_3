@@ -240,7 +240,8 @@ class CloudLogHandler(logging.Handler):
 
         # Estrutura de pasta baseada em data
         now = datetime.now(timezone.utc)
-        base_log_folder_in_cloud = Path(CLOUD_LOGGER_FOLDER) / now.strftime('%Y/%m/%d')
+        # Salva dentro do diretório do usuário para evitar bloqueio do Firebase Rules
+        base_log_folder_in_cloud = Path(f"users/{uid_safe}") / CLOUD_LOGGER_FOLDER / now.strftime('%Y/%m/%d')
         
         # Novo padrão de nome de arquivo
         log_filename_in_cloud = f"{username_pc_safe}_{now.strftime('%H%M%S')}_{uid_safe}.log"

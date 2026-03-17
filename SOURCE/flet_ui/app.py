@@ -311,8 +311,9 @@ def load_auth_state_from_storage(page: ft.Page):
         # Se retornou True, a sessão é válida (seja a original ou a renovada).
         final_id_token = page.session.get("auth_id_token")
         final_user_id = page.session.get("auth_user_id")
+        final_user_email = page.session.get("auth_user_email") or "Sem Email"
         
-        logger.info(f"Sessão restaurada e validada com sucesso para o usuário {final_user_id}.")
+        logger.info(f"[MONITORIA] Sessão ativa/restaurada para: {final_user_email} (ID: {final_user_id}).")
 
         # Carrega proativamente as chaves de API para a sessão restaurada.
         credentials_manager.load_and_cache_all_api_keys(page, firestore_client)
@@ -503,9 +504,12 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             if stop_event:
                 stop_event.set()  
 
+        user_email_disconnected = page.session.get("auth_user_email") or \
+                                  (page.client_storage.get("auth_user_email") if page.client_storage else "Anônimo")
+
         with global_active_sessions_lock:
             global_active_sessions.discard(page.session_id)
-            logger.info(f"[MONITORIA] Sessão encerrada. Usuários conectados agora: {len(global_active_sessions)}")
+            logger.info(f"[MONITORIA] Sessão encerrada ({user_email_disconnected}). Usuários conectados agora: {len(global_active_sessions)}")
 
         clear_user_cache(page)
 

@@ -441,7 +441,9 @@ def handle_logout(page: ft.Page) -> None:
         hide_loading_overlay(page)
         user_id_logged_out = page.session.get("auth_user_id") or \
                             (page.client_storage.get("auth_user_id") if page.client_storage else "Desconhecido")
-        logger.info(f"Usuário '{user_id_logged_out}' deslogando.")
+        user_email_logged_out = page.session.get("auth_user_email") or \
+                            (page.client_storage.get("auth_user_email") if page.client_storage else "Desconhecido")
+        logger.info(f"[MONITORIA] Logout manual efetuado por: {user_email_logged_out} (ID: {user_id_logged_out}).")
 
         # FLUSH ANTES DE LIMPAR O CONTEXTO DO USUÁRIO
         if LoggerSetup._active_cloud_handler_instance:

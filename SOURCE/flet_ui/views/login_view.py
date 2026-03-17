@@ -202,7 +202,7 @@ def create_login_view(page: ft.Page) -> ft.View:
                 user_email_from_auth = auth_response.get("email", email) # Email confirmado pela auth
                 display_name = auth_response.get("displayName", user_email_from_auth)
 
-                logger.info(f"Usuário {user_id} ({display_name}) autenticado com sucesso.")
+                logger.info(f"[MONITORIA] Usuário {display_name} - {user_email_from_auth} - ID: {user_id} - autenticado com sucesso.")
                 show_snackbar(page, f"Bem-vindo, {display_name}!", color=theme.COLOR_SUCCESS)
 
                 # Limpar dados de autenticação antigos antes de definir novos
