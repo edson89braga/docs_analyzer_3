@@ -12,6 +12,9 @@ services:
       - opera_data:/app/data
       # Mapeamento de código (Hot-reload no servidor)
       - ./SOURCE:/app/SOURCE
+      - ./assets:/app/assets
+      - ./logs:/app/logs      
+      - ./uploads_temp:/app/uploads_temp      
       - ./run_server.py:/app/run_server.py
     environment:
       - APP_MODE=server

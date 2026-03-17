@@ -2567,7 +2567,8 @@ class InternalExportManager:
         """
         self.parent_view = parent_view
         self.page = parent_view.page
-        self.docx_exporter = DocxExporter()
+        user_id = self.page.session.get("auth_user_id") or "global"
+        self.docx_exporter = DocxExporter(user_id=user_id)
 
     def _get_default_filename_base(self) -> str:
         """
@@ -2690,7 +2691,7 @@ class InternalExportManager:
                     allowed_extensions=["docx"],
                 )
             self.template_uploader.pick_files(
-                dialog_title="Selecionar Template .docx",
+                dialog_title_override="Selecionar Template .docx",
                 allow_multiple=False,
                 on_batch_complete=self.on_template_file_uploaded
             )
@@ -2729,7 +2730,8 @@ class InternalExportManager:
             original_filename (str): O nome original do arquivo.
             is_web_upload_temp (bool): Indica se o arquivo de origem é um temporário de upload web.
         """
-        templates_dir = os.path.join(ASSETS_DIR, TEMPLATES_DOCX_SUBDIR)
+        user_id = self.page.session.get("auth_user_id") or "global"
+        templates_dir = os.path.join(ASSETS_DIR, TEMPLATES_DOCX_SUBDIR, user_id)
         os.makedirs(templates_dir, exist_ok=True)
         destination_path = os.path.join(templates_dir, original_filename)
         try:

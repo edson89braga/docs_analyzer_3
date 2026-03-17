@@ -88,3 +88,13 @@ cat nome_do_arquivo.log
 
 ## Para sair e voltar para a VM, digite:
 exit
+
+
+=========================================================
+
+# Outros comandos úteis ao ambiente Linux/Docker:
+
+>>> chmod -R u+rwx /home/sti/Deploy_PF        # Para dar permissão de escrita ao nosso usuário
+>>> sudo chown -R sti:sti /home/sti/Deploy_PF # Para garantir o usuário como dono absoluto se ainda der erro de permissão
+
+

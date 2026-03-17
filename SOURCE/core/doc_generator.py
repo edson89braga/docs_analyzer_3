@@ -19,12 +19,15 @@ class DocxExporter:
     Classe responsável por exportar dados de análise para documentos DOCX,
     seja criando um novo documento simples ou preenchendo um template existente.
     """
-    def __init__(self):
+    def __init__(self, user_id: str = "global"):
         """
         Inicializa o DocxExporter, configurando o diretório de templates.
         """
-        self.templates_dir = os.path.join(ASSETS_DIR, TEMPLATES_DOCX_SUBDIR)
-        os.makedirs(self.templates_dir, exist_ok=True) # Garante que o diretório exista
+        self.base_dir = os.path.join(ASSETS_DIR, TEMPLATES_DOCX_SUBDIR)
+        self.global_dir = os.path.join(self.base_dir, "global")
+        self.user_dir = os.path.join(self.base_dir, user_id)
+        os.makedirs(self.global_dir, exist_ok=True)
+        os.makedirs(self.user_dir, exist_ok=True)
 
     def _get_field_display_name(self, field_name: str) -> str:
         """Retorna um nome amigável para o campo (para cabeçalhos de tabela, etc.)."""
@@ -156,18 +159,15 @@ class DocxExporter:
                                    (nome_amigavel_do_template, caminho_completo_do_template).
         """
         templates = []
-        if not os.path.isdir(self.templates_dir):
-            logger.warning(f"Diretório de templates '{self.templates_dir}' não encontrado.")
-            return templates
-
-        for filename in os.listdir(self.templates_dir):
-            if filename.lower().endswith(".docx"):
-                full_path = os.path.join(self.templates_dir, filename)
-                # Cria um nome amigável removendo o prefixo e a extensão
-                friendly_name = filename[:-len(".docx")].replace("_", " ").title()
-                templates.append((friendly_name, full_path))
-        
-        logger.debug(f"Encontrados {len(templates)} templates em '{self.templates_dir}'.")
+        # Busca global e do usuário
+        for folder in [self.global_dir, self.user_dir]:
+            if os.path.isdir(folder):
+                for filename in os.listdir(folder):
+                    if filename.lower().endswith(".docx"):
+                        full_path = os.path.join(folder, filename)
+                        # prefix = "" # "[User]" if folder == self.user_dir else "[Global]"
+                        friendly_name = f"{filename[:-5].replace('_', ' ').title()}"
+                        templates.append((friendly_name, full_path))
         return templates
 
     def export_from_template_docx(self, data: formatted_initial_analysis, template_path: str, output_path: str) -> Tuple[bool, List[str]]:
