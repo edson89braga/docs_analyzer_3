@@ -329,7 +329,7 @@ def load_auth_state_from_storage(page: ft.Page):
             final_id_token,
             final_user_id,
             refresh_token=page.session.get("auth_refresh_token"),
-            expires_in=float(page.session.get("auth_id_token_expires_at", 0)) - time.time() or 3600
+            expires_in=float(page.session.get("auth_id_token_expires_at") or 0) - time.time() or 3600
         )
         logger.debug(f"Contexto do logger de nuvem restaurado para usuário {final_user_id}.")
 
