@@ -229,11 +229,14 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
         page.session.set("auth_refresh_token", new_refresh_token)
         page.session.set("auth_id_token_expires_at", new_expires_at)
         
-        if page.client_storage and page.client_storage.contains_key("auth_refresh_token"):
-            page.client_storage.set("auth_id_token", new_id_token)
-            page.client_storage.set("auth_refresh_token", new_refresh_token)
-            page.client_storage.set("auth_id_token_expires_at", new_expires_at)
-            logger.debug("Tokens atualizados também no client_storage.")
+        try: 
+            if page.client_storage and page.client_storage.contains_key("auth_refresh_token"):
+                page.client_storage.set("auth_id_token", new_id_token)
+                page.client_storage.set("auth_refresh_token", new_refresh_token)
+                page.client_storage.set("auth_id_token_expires_at", new_expires_at)
+                logger.debug("Tokens atualizados também no client_storage.")
+        except Exception:
+            logger.debug("client_storage indisponível ao persistir tokens renovados (conexão encerrada).")                
 
         LoggerSetup.set_cloud_user_context(
             new_id_token,
@@ -515,8 +518,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             if stop_event:
                 stop_event.set()  
 
-        user_email_disconnected = page.session.get("auth_user_email") or \
-                                  (page.client_storage.get("auth_user_email") if page.client_storage else "Anônimo")
+        user_email_disconnected = page.session.get("auth_user_email") or "Anônimo"                                  
 
         with global_active_sessions_lock:
             global_active_sessions.discard(page.session_id)

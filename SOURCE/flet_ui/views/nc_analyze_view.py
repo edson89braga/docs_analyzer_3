@@ -130,6 +130,7 @@ class AnalyzePDFViewContent(ft.Column):
         """
         super().__init__(expand=True, spacing=10)
         self.page = page
+        self._is_mounted = False
         self.gui_controls: Dict[str, ft.Control] = {}
         # self.settings_drawer_manager: Optional[SettingsDrawerManager] = None
         # self.gui_controls_drawer: Dict[str, ft.Control] = {}
@@ -165,7 +166,13 @@ class AnalyzePDFViewContent(ft.Column):
         Chamado sempre que a view é montada, garantindo que a UI reflita o estado
         mais recente da sessão, mesmo ao retornar de cache.
         """
+        self._is_mounted = True
         self._update_gui_from_state()
+
+    def will_unmount(self):
+        """Invalida referências à page ao desmontar, evitando uso pós-desmontagem."""
+        self._is_mounted = False
+        self.page = None
 
     def _remove_data_session(self, key: str):
         """
@@ -541,7 +548,10 @@ class AnalyzePDFViewContent(ft.Column):
                 batch_results (List[Dict[str, Any]]): Lista de dicionários com os resultados de cada arquivo no lote.
             """
             logger.info(f"Upload_Batch Completo (ManagedFilePicker): {len(batch_results)} resultados.")
-            hide_loading_overlay(self.page)
+            _page = self.page
+            if not _page:
+                return
+            hide_loading_overlay(_page)
             
             successful_uploads = [r for r in batch_results if r['success']]
             failed_count = len(batch_results) - len(successful_uploads)
@@ -562,7 +572,7 @@ class AnalyzePDFViewContent(ft.Column):
                 final_color = theme.COLOR_WARNING
             
             if final_message:
-                show_snackbar(self.page, final_message, color=final_color)
+                show_snackbar(_page, final_message, color=final_color)
             
             # Se novos arquivos foram adicionados, invalida os resultados anteriores.
             if successful_uploads:
@@ -573,9 +583,9 @@ class AnalyzePDFViewContent(ft.Column):
             
             self.file_list_manager.expand_container()
 
-            update_lock = self.page.data.get("global_update_lock")
+            update_lock = _page.data.get("global_update_lock")
             with update_lock:
-                self.page.update()
+                _page.update()
         
         def primary_upload_action():
             if self.managed_file_picker:
@@ -1248,6 +1258,9 @@ class AnalyzePDFViewContent(ft.Column):
         que a interface reflita o estado mais recente dos dados e configurações.
         """
         logger.debug("Atualizando GUI a partir do estado da sessão...")
+        if not self._is_mounted or not self.page:
+            logger.debug("_update_gui_from_state ignorado: view não montada ou page inválida.")
+            return        
         hide_loading_overlay(self.page)
 
         # Lógica de carregamento: Prioriza a chave da view, depois a compartilhada.
@@ -1292,7 +1305,8 @@ class AnalyzePDFViewContent(ft.Column):
         
         is_initial_response = self.page.session.get("is_new_llm_response_flag") or False
         if is_initial_response:
-            self.page.session.remove("is_new_llm_response_flag")
+            if self.page.session.contains_key("is_new_llm_response_flag"):
+                self.page.session.remove("is_new_llm_response_flag")
 
         if llm_response_to_show:
             #is_initial_response = not bool(self.user_cache.get(KEY_SESSION_PDF_LLM_RESPONSE_ACTUAL))
@@ -2170,6 +2184,10 @@ class InternalAnalysisController:
             start_time = perf_counter()
             import requests
 
+            if not self.parent_view._is_mounted or not self.page:
+                logger.debug("_pdf_processing_thread_func abortada: view desmontada.")
+                return
+
             logger.debug(f"Thread: Iniciando processamento de PDFs para '{batch_name}' (LLM depois: {analyze_llm_after})")
             self.page.run_thread(self._update_status_callback, "Etapa 1/5: Extraindo textos do(s) arquivo(s) selecionado(s)...")
  
@@ -2301,6 +2319,8 @@ class InternalAnalysisController:
             self.page.run_thread(self._update_status_callback, f"Erro ao processar PDFs: {ex_proc}", True, True)
             self.parent_view._files_processed = False # Falhou
         finally:
+            if not self.parent_view._is_mounted or not self.page:
+                return            
             hide_loading_overlay(self.page)
             # Garante que, mesmo em erro, os botões sejam reavaliados.
             # Se a análise não prosseguir para a LLM, a atualização da UI já foi feita no try.
@@ -2401,6 +2421,10 @@ class InternalAnalysisController:
         """
         import SOURCE.core.ai_orchestrator as ai_orchestrator
  
+        if not self.parent_view._is_mounted or not self.page:
+            logger.debug("_llm_analysis_thread_func abortada: view desmontada.")
+            return
+
         current_analysis_settings = self._get_current_analysis_settings()
         logger.debug(f"Usando configurações de análise para LLM: {current_analysis_settings}")
         provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
@@ -2506,6 +2530,8 @@ class InternalAnalysisController:
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
             # self.gui_controls[CTL_LLM_METADATA_PANEL].controls[0].expanded = True
             # self.gui_controls[CTL_LLM_METADATA_PANEL].update()
+            if not self.parent_view._is_mounted or not self.page:
+                return            
             hide_loading_overlay(self.page)
             # A atualização da GUI já foi tratada dentro do try/except, não precisa aqui.
  

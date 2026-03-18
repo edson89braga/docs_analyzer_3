@@ -1,6 +1,7 @@
 import logging, time
 logger = logging.getLogger(__name__)
 
+from time import sleep
 from time import perf_counter
 start_time = perf_counter()
 logger.debug(f"{start_time:.4f}s - Iniciando cloud_logger_handler.py")
@@ -10,7 +11,6 @@ from threading import Thread, Lock, Event
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from pathlib import Path
-from time import sleep
 
 from SOURCE.settings import (PATH_LOGS_DIR, CLOUD_LOGGER_FOLDER, CLOUD_LOGGER_UPLOAD_INTERVAL, CLOUD_LOGGER_MAX_BUFFER_SIZE, 
 CLOUD_LOGGER_MAX_RETRIES, CLOUD_LOGGER_RETRY_DELAY, APP_VERSION)
@@ -129,7 +129,11 @@ class CloudLogHandler(logging.Handler):
     buffer_lock: Lock = Lock()
     upload_event: Event = Event()
     _atexit_registered: bool = False # Para registrar atexit apenas uma vez globalmente
-
+    
+    # Circuit breaker: { uid: timestamp_liberacao }
+    _upload_cooldowns: Dict[str, float] = {}
+    COOLDOWN_SECONDS: int = 60 * 60  # 30 min sem tentar para UIDs com falha definitiva
+ 
     # Informações da aplicação e uploader agora são de instância
     def __init__(self,
                  uploader_strategy: LogUploaderStrategy, # Estratégia de upload injetada
@@ -175,9 +179,16 @@ class CloudLogHandler(logging.Handler):
                 
                 if uid not in CloudLogHandler.log_buffers:
                     CloudLogHandler.log_buffers[uid] = {"token": token, "logs": []}
-                elif token:
-                    # Atualiza sempre para o token mais recente para evitar envio com token expirado
+                elif token and token != CloudLogHandler.log_buffers[uid].get("token"):
+                    # Token novo para este UID: atualiza e cancela cooldown se houver
                     CloudLogHandler.log_buffers[uid]["token"] = token
+                    if uid in CloudLogHandler._upload_cooldowns:
+                        del CloudLogHandler._upload_cooldowns[uid]
+                        logger.debug(f"CloudLogHandler: Cooldown cancelado para uid={uid[:8]}... (token renovado).")
+                elif token:
+                    # Mesmo token: atualiza referência para garantir que não seja None
+                    CloudLogHandler.log_buffers[uid]["token"] = token
+
 
                 CloudLogHandler.log_buffers[uid]["logs"].append(log_message_utf8)
                 buffer_size = sum(len(data["logs"]) for data in CloudLogHandler.log_buffers.values())
@@ -214,6 +225,16 @@ class CloudLogHandler(logging.Handler):
                 if not current_logs_batch:
                     continue
 
+                # Circuit breaker: ignora UIDs em cooldown
+                cooldown_until = CloudLogHandler._upload_cooldowns.get(uid)
+                if cooldown_until and time.time() < cooldown_until:
+                    # Silenciosamente reinsere no buffer sem tentar upload
+                    with CloudLogHandler.buffer_lock:
+                        if uid not in CloudLogHandler.log_buffers:
+                            CloudLogHandler.log_buffers[uid] = {"token": current_token, "logs": []}
+                        CloudLogHandler.log_buffers[uid]["logs"] = current_logs_batch + CloudLogHandler.log_buffers[uid]["logs"]
+                    continue
+
                 try:
                     # Injeta o contexto da thread original na thread de background temporariamente
                     user_id_ctx.set(uid)
@@ -221,14 +242,15 @@ class CloudLogHandler(logging.Handler):
                     
                     success = handler_instance._perform_upload(current_logs_batch)
                     
-                    # Se falhar, devolve pro buffer principal para a próxima iteração
                     if not success:
-                        with CloudLogHandler.buffer_lock:
-                            if uid not in CloudLogHandler.log_buffers:
-                                CloudLogHandler.log_buffers[uid] = {"token": current_token, "logs": []}
-                            # Insere os logs que falharam no início da fila
-                            CloudLogHandler.log_buffers[uid]["logs"] = current_logs_batch + CloudLogHandler.log_buffers[uid]["logs"]
-                
+                        # Falha definitiva (após todas as retentativas de _perform_upload):
+                        # ativa cooldown e descarta o lote atual (já foi para backup local)
+                        CloudLogHandler._upload_cooldowns[uid] = time.time() + CloudLogHandler.COOLDOWN_SECONDS
+                        logger.warning(
+                            f"CloudLogHandler: Upload para uid={uid[:8]}... em cooldown por "
+                            f"{CloudLogHandler.COOLDOWN_SECONDS // 60} min após falha definitiva."
+                        )
+
                 except Exception as e:
                     logger.error(f"Erro no upload de logs do usuário {uid} pela thread: {e}", exc_info=True)
         logger.debug("CloudLogHandler: Thread de upload (estática) encerrada.")

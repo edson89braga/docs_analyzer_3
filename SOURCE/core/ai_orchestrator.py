@@ -672,7 +672,7 @@ def analyze_text_with_llm(
                 try:
                     final_response_text_clean = extract_and_clean_json(final_response_text)
                     final_response = output_formats[prompt_name].model_validate_json(final_response_text_clean)
-                except (ValueError, json.JSONDecodeError) as e:
+                except Exception as e:
                     logger.error(f"Erro ao processar JSON do OpenAI: {e}")
                     # raise
                     # Fallback: Retorna o texto bruto se o JSON falhar
@@ -768,7 +768,7 @@ def analyze_text_with_llm(
                 try:
                     final_response_text_clean = extract_and_clean_json(final_response_text)
                     final_response = output_formats[prompt_name].model_validate_json(final_response_text_clean)
-                except (ValueError, json.JSONDecodeError) as e:
+                except Exception as e:
                     logger.error(f"Erro ao processar JSON do endpoint PF: {e}", exc_info=True)
                     # raise
                     # Fallback: Retorna o texto bruto se o JSON falhar

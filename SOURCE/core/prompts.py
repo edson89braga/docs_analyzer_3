@@ -295,6 +295,31 @@ def try_convert_to_pydantic_format(data: Union[str, BaseModel], pydantic_format:
                     raw_valor = json_data[k]
                     json_data[k] = convert_to_list_of_strings(raw_valor)
 
+            # Coerce pessoas_envolvidas: LLMs às vezes retornam List[str] em vez de List[dict]
+            # Formato esperado pela IA: "Nome - CPF: xxx - Papel" ou "Nome - Papel"
+            if "pessoas_envolvidas" in json_data and isinstance(json_data["pessoas_envolvidas"], list):
+                pessoas_coerced = []
+                for item in json_data["pessoas_envolvidas"]:
+                    if isinstance(item, dict):
+                        pessoas_coerced.append(item)
+                    elif isinstance(item, str) and item.strip():
+                        # Tenta extrair nome, cpf/cnpj e papel a partir da string
+                        import re
+                        cpf_match = re.search(r'CPF:\s*([\d.*x-]+)', item, re.IGNORECASE)
+                        cnpj_match = re.search(r'CNPJ:\s*([\d.*/x-]+)', item, re.IGNORECASE)
+                        # Papel é normalmente o último segmento após " - "
+                        partes = [p.strip() for p in item.split(' - ')]
+                        papel = partes[-1] if len(partes) > 1 else "Não identificado"
+                        # Nome é o primeiro segmento, sem o CPF/CNPJ inline
+                        nome = re.sub(r'\s*[-–]\s*(CPF|CNPJ):.*', '', partes[0], flags=re.IGNORECASE).strip()
+                        pessoa = {"nome": nome or item, "papel": papel}
+                        if cpf_match:
+                            pessoa["cpf"] = cpf_match.group(1)
+                        if cnpj_match:
+                            pessoa["cnpj"] = cnpj_match.group(1)
+                        pessoas_coerced.append(pessoa)
+                json_data["pessoas_envolvidas"] = pessoas_coerced if pessoas_coerced else None
+          
             data = pydantic_format(**json_data )
             logger.debug("Resposta (string) parseada com sucesso para Pydantic_format.")
         except (json.JSONDecodeError, TypeError, Exception) as parse_error: # Exception para Pydantic ValidationError
