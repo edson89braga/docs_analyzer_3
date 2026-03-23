@@ -239,11 +239,9 @@ def check_and_refresh_token_if_needed(page: ft.Page, force_refresh: bool = False
             logger.debug("client_storage indisponível ao persistir tokens renovados (conexão encerrada).")                
 
         LoggerSetup.set_cloud_user_context(
-            new_id_token,
-            page.session.get("auth_user_id"),
-            refresh_token=new_refresh_token,
-            expires_in=float(new_expires_in)
-        )        
+            user_id=page.session.get("auth_user_id"),
+            user_email=page.session.get("auth_user_email"),
+        )
 
         return True
     else:
@@ -329,10 +327,8 @@ def load_auth_state_from_storage(page: ft.Page):
 
         # Passo 3: Configurações pós-restauração
         LoggerSetup.set_cloud_user_context(
-            final_id_token,
-            final_user_id,
-            refresh_token=page.session.get("auth_refresh_token"),
-            expires_in=float(page.session.get("auth_id_token_expires_at") or 0) - time.time() or 3600
+            user_id=final_user_id,
+            user_email=page.session.get("auth_user_email"),
         )
         logger.debug(f"Contexto do logger de nuvem restaurado para usuário {final_user_id}.")
 
@@ -651,9 +647,9 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
 
         # Em dev_mode, não tentamos configurar o logger de nuvem real aqui,
         # pois o LoggerSetup em run_dev.py já é simplificado.
-        LoggerSetup.set_cloud_user_context( # Apenas para que o logger não falhe se tentar usar
-            page.session.get("auth_id_token"),
-            page.session.get("auth_user_id")
+        LoggerSetup.set_cloud_user_context(
+            user_id=page.session.get("auth_user_id"),
+            user_email=page.session.get("auth_user_email"),
         )
         logger.info("DEV_MODE: Logger context set with mock data (cloud logging likely disabled by run_dev init).")
 

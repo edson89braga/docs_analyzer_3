@@ -2,16 +2,16 @@
 -> >>> ssh sti@10.11.8.25 
 -> >>> Responder com password...
 
-=========================================================
+==================================================================================================================
 # Para transferir pastas e arquivos do computador local para a VM:
 
 >>> scp -r "C:\Caminho\Para\Deploy_PF" usuario_da_vm@IP_DA_VM:/home/usuario_da_vm/
 
-=========================================================
+==================================================================================================================
 proj_app--llm-api-docs_analyzer_3-opera-app   latest    71fcda98119b   13 hours ago   2.04GB
 proj_app--llm-api-docs_analyzer_3-ml-engine   latest    459d549efcc3   44 hours ago   1.85GB
 
-=========================================================
+==================================================================================================================
 
 # Etapas para construir o ambiente Docker a partir das imagens .tar:
 
@@ -53,7 +53,7 @@ ou sudo docker-compose up -d --force-recreate
 ## 5. Verifique se os 3 contêineres estão rodando
 sudo docker ps
 
-=========================================================
+==================================================================================================================
 
 >>> sudo docker logs -f opera-ia-frontend # Para acompanhar logs
 -> ctrl+c para sair da visualização de logs
@@ -63,7 +63,7 @@ sudo docker ps
 >>> sudo docker-compose down # Para desligar o container antes de um novo 'sudo docker-compose up -d'
 
 
-=========================================================
+==================================================================================================================
 
 
 # Etapas para reiniciar a Aplicação em Docker com alterações/atualizações no código:
@@ -74,7 +74,7 @@ sudo docker ps
 3. >>> sudo docker-compose restart opera-app
 
 
-=========================================================
+==================================================================================================================
 
 # Como visualizar as pastas geradas dinamicamente pela aplicação:
 
@@ -89,12 +89,13 @@ cat nome_do_arquivo.log
 ## Para sair e voltar para a VM, digite:
 exit
 
+==================================================================================================================
 
-=========================================================
+# OBSERVALIDADE:
 
-# Outros comandos úteis ao ambiente Linux/Docker:
+>>> docker stats  # Ou sudo docker stats -> Uso isolado por Container
+>>> htop 	  # Ou top -> Visão Geral do Sistema (Processos gerais da VM)
+>>> df -h	  # 	   -> Uso de Disco (Armazenamento)
 
->>> chmod -R u+rwx /home/sti/Deploy_PF        # Para dar permissão de escrita ao nosso usuário
->>> sudo chown -R sti:sti /home/sti/Deploy_PF # Para garantir o usuário como dono absoluto se ainda der erro de permissão
 
 

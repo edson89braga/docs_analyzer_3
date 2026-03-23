@@ -14,9 +14,7 @@ from rich.logging import RichHandler
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import List, Optional, Any, TYPE_CHECKING
 
-from .cloud_logger_handler import (CloudLogHandler, ClientLogUploader, AdminLogUploader,
-                                    user_token_ctx, user_id_ctx,
-                                    user_token_expiry_ctx, user_refresh_token_ctx)
+from .cloud_logger_handler import CloudLogHandler, AdminLogUploader, user_id_ctx, user_email_ctx
  
 from SOURCE.settings import (PATH_LOGS_DIR, CLOUD_LOGGER_FOLDER, APP_VERSION)
 
@@ -77,7 +75,6 @@ class LoggerSetup:
     _initialized = False
     _loggers = {}  # Dicionário para rastrear todos os loggers criados
 
-    _client_uploader_instance: Optional[ClientLogUploader] = None
     _admin_uploader_instance: Optional[AdminLogUploader] = None
     _active_cloud_handler_instance: Optional[CloudLogHandler] = None # Para referência
     
@@ -125,11 +122,8 @@ class LoggerSetup:
         # Decide qual uploader usar ou se cria um handler.
         # Se o client_uploader tem contexto, priorize-o. Senão, use admin se disponível.
         uploader_to_use: Optional['LogUploaderStrategy'] = None
-        
-        if cls._client_uploader_instance:
-            uploader_to_use = cls._client_uploader_instance
-            logger.debug("LoggerSetup: Usando ClientLogUploader para CloudLogHandler (usuário autenticado).")
-        elif cls._admin_uploader_instance:
+
+        if cls._admin_uploader_instance:
             uploader_to_use = cls._admin_uploader_instance
             logger.debug("LoggerSetup: Usando AdminLogUploader para CloudLogHandler (fallback ou sem usuário).")
         else:
@@ -152,21 +146,10 @@ class LoggerSetup:
             return None
     
     @classmethod
-    def set_cloud_user_context(cls, user_token: Optional[str], user_id: Optional[str],
-                                refresh_token: Optional[str] = None,
-                                expires_in: Optional[float] = None):
-        """
-        Define o contexto do usuário para a thread atual através de contextvars,
-        garantindo isolamento em requisições de servidor (multithreading).
-        """
-        user_token_ctx.set(user_token)
+    def set_cloud_user_context(cls, user_id: Optional[str], user_email: Optional[str]):
+        """Define o contexto do usuário (uid + email) para a thread atual."""
         user_id_ctx.set(user_id if user_id else "anonymous_user")
-        user_refresh_token_ctx.set(refresh_token)
-        if expires_in is not None:
-            import time
-            user_token_expiry_ctx.set(time.time() + expires_in)
-        else:
-            user_token_expiry_ctx.set(None)
+        user_email_ctx.set(user_email)
 
     @classmethod
     def _setup_temporary_logger(cls, logger_name):
@@ -313,30 +296,7 @@ class LoggerSetup:
         # Verifica se um CloudLogHandler já existe para evitar duplicação
         if cls._active_cloud_handler_instance and cls._active_cloud_handler_instance in cls._instance.handlers:
             logger.debug("LoggerSetup: CloudLogHandler já está ativo. Verificando contexto do uploader.")
-            # Se já existe, apenas garante que o contexto do client_uploader está atualizado
-            #if cls._client_uploader_instance and (user_token_for_client or user_id_for_client):
-            #    cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
-            if isinstance(cls._active_cloud_handler_instance.uploader, ClientLogUploader):
-                cls._active_cloud_handler_instance.uploader.set_user_context(user_token_for_client, user_id_for_client)
             return True
-
-        # Cria o ClientUploader se não existir e se tokens forem fornecidos
-        if not cls._client_uploader_instance and (user_token_for_client and user_id_for_client):
-            # Tenta obter o FirebaseClientStorage. Se não estiver disponível em run.py,
-            # precisará ser instanciado aqui ou de alguma forma acessível.
-            # Por ora, assumimos que se chegamos aqui, run.py já pode ter instanciado
-            # e não o passou para initialize, então add_cloud_logging é a primeira chance.
-            # Se este for o caso, e você não quer instanciar FirebaseClientStorage globalmente
-            # ou passá-lo de run.py, esta parte precisa de um design cuidadoso.
-            # Temporariamente, vamos instanciar aqui se não existir.
-            try:
-                _fcs_temp = FirebaseClientStorage() # Instancia se necessário
-                cls._client_uploader_instance = ClientLogUploader(_fcs_temp)
-                logger.debug("LoggerSetup: Instância de ClientLogUploader criada dinamicamente em add_cloud_logging.")
-                cls._client_uploader_instance.set_user_context(user_token_for_client, user_id_for_client)
-            except Exception as e_fcs:
-                logger.debug(f"LoggerSetup: Erro ao criar FirebaseClientStorage para ClientUploader: {e_fcs}")
-                # Não prosseguir com client uploader se falhar
         
         # Cria o AdminUploader se não existir (se não houver contexto de cliente ou como fallback)
         if not cls._admin_uploader_instance and not (user_token_for_client and user_id_for_client) :

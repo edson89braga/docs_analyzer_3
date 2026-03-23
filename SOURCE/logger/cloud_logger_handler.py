@@ -23,20 +23,8 @@ from pathlib import Path
 PATH_LOGS_DIR = Path(PATH_LOGS_DIR)
 
 # Variáveis de contexto para manter isolamento entre requisições concorrentes
-user_token_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_token_ctx", default=None)
-user_token_expiry_ctx: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar("user_token_expiry_ctx", default=None)
-user_refresh_token_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_refresh_token_ctx", default=None)
 user_id_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_id_ctx", default="anonymous_user")
-
-def _is_token_valid() -> bool:
-    """Retorna True se o token existir e não estiver expirado (com margem de 60s)."""
-    token = user_token_ctx.get()
-    expiry = user_token_expiry_ctx.get()
-    if not token:
-        return False
-    if expiry is None:
-        return True  # Sem informação de expiração: assume válido
-    return time.time() < (expiry - 60)  # 60s de margem
+user_email_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_email_ctx", default=None)
 
 class LogUploaderStrategy(ABC):
     @abstractmethod
@@ -54,40 +42,6 @@ class LogUploaderStrategy(ABC):
         Retorna o conteúdo ou string vazia.
         """
         pass
-
-class ClientLogUploader(LogUploaderStrategy):
-    def __init__(self, client_storage: FirebaseClientStorage): # Forward reference para FirebaseClientStorage
-        self.client_storage = client_storage
-        
-    def get_existing_logs(self, base_log_folder: Path, log_filename: str) -> str:
-        user_token = user_token_ctx.get()
-        user_id = user_id_ctx.get()
-
-        path_suffix = (base_log_folder / log_filename).as_posix()
-
-        try:
-            return self.client_storage.get_text_user(
-                user_token, user_id, path_suffix
-            ) or ""
-        except Exception as e:
-            logger.warning(f"ClientLogUploader: Erro ao obter log existente: {e}")
-            return ""
-
-    def upload_logs(self, logs_batch: List[str], full_cloud_path: str) -> bool:
-        user_token = user_token_ctx.get()
-        user_id = user_id_ctx.get()        
-
-        # Removemos get_existing_logs porque mudamos a estratégia de salvar um grande arquivo por dia 
-        # para salvar múltiplos arquivos pequenos e únicos ao longo do dia.
-        #existing_data = self.get_existing_logs(base_log_folder, log_filename)
-        #if existing_data and not existing_data.endswith("\n"):
-        #    existing_data += "\n" # log_data_to_upload = existing_data + "\n".join(logs_batch) + "\n"
-        
-        log_data_to_upload = "\n".join(logs_batch) + "\n"
-
-        return self.client_storage.upload_text_user(
-            user_token, user_id, log_data_to_upload, full_cloud_path
-        )
 
 class AdminLogUploader(LogUploaderStrategy):
     def __init__(self, admin_storage: FbManagerStorage): # Forward reference
@@ -130,10 +84,6 @@ class CloudLogHandler(logging.Handler):
     upload_event: Event = Event()
     _atexit_registered: bool = False # Para registrar atexit apenas uma vez globalmente
     
-    # Circuit breaker: { uid: timestamp_liberacao }
-    _upload_cooldowns: Dict[str, float] = {}
-    COOLDOWN_SECONDS: int = 60 * 60  # 30 min sem tentar para UIDs com falha definitiva
- 
     # Informações da aplicação e uploader agora são de instância
     def __init__(self,
                  uploader_strategy: LogUploaderStrategy, # Estratégia de upload injetada
@@ -175,21 +125,10 @@ class CloudLogHandler(logging.Handler):
 
             with CloudLogHandler.buffer_lock:
                 uid = user_id_ctx.get() or "anonymous_user"
-                token = user_token_ctx.get()
                 
                 if uid not in CloudLogHandler.log_buffers:
-                    CloudLogHandler.log_buffers[uid] = {"token": token, "logs": []}
-                elif token and token != CloudLogHandler.log_buffers[uid].get("token"):
-                    # Token novo para este UID: atualiza e cancela cooldown se houver
-                    CloudLogHandler.log_buffers[uid]["token"] = token
-                    if uid in CloudLogHandler._upload_cooldowns:
-                        del CloudLogHandler._upload_cooldowns[uid]
-                        logger.debug(f"CloudLogHandler: Cooldown cancelado para uid={uid[:8]}... (token renovado).")
-                elif token:
-                    # Mesmo token: atualiza referência para garantir que não seja None
-                    CloudLogHandler.log_buffers[uid]["token"] = token
-
-
+                    CloudLogHandler.log_buffers[uid] = {"logs": []}
+                    
                 CloudLogHandler.log_buffers[uid]["logs"].append(log_message_utf8)
                 buffer_size = sum(len(data["logs"]) for data in CloudLogHandler.log_buffers.values())
 
@@ -220,36 +159,17 @@ class CloudLogHandler(logging.Handler):
 
             for uid, data in snapshot_buffers.items():
                 current_logs_batch = data["logs"]
-                current_token = data["token"]
                 
                 if not current_logs_batch:
                     continue
-
-                # Circuit breaker: ignora UIDs em cooldown
-                cooldown_until = CloudLogHandler._upload_cooldowns.get(uid)
-                if cooldown_until and time.time() < cooldown_until:
-                    # Silenciosamente reinsere no buffer sem tentar upload
-                    with CloudLogHandler.buffer_lock:
-                        if uid not in CloudLogHandler.log_buffers:
-                            CloudLogHandler.log_buffers[uid] = {"token": current_token, "logs": []}
-                        CloudLogHandler.log_buffers[uid]["logs"] = current_logs_batch + CloudLogHandler.log_buffers[uid]["logs"]
-                    continue
-
                 try:
                     # Injeta o contexto da thread original na thread de background temporariamente
                     user_id_ctx.set(uid)
-                    user_token_ctx.set(current_token)
                     
                     success = handler_instance._perform_upload(current_logs_batch)
                     
                     if not success:
-                        # Falha definitiva (após todas as retentativas de _perform_upload):
-                        # ativa cooldown e descarta o lote atual (já foi para backup local)
-                        CloudLogHandler._upload_cooldowns[uid] = time.time() + CloudLogHandler.COOLDOWN_SECONDS
-                        logger.warning(
-                            f"CloudLogHandler: Upload para uid={uid[:8]}... em cooldown por "
-                            f"{CloudLogHandler.COOLDOWN_SECONDS // 60} min após falha definitiva."
-                        )
+                        logger.warning(f"CloudLogHandler: Falha no upload para uid={uid[:8]}...")
 
                 except Exception as e:
                     logger.error(f"Erro no upload de logs do usuário {uid} pela thread: {e}", exc_info=True)
@@ -270,98 +190,50 @@ class CloudLogHandler(logging.Handler):
          # Correção regex para múltiplos underscores/hífens/pontos
         username_pc_safe = re.sub(r'[_.-]+', '_', username_pc_safe)
 
-        # Determina o user_id para o nome do arquivo via ContextVar
-        user_id_for_filename = user_id_ctx.get()        
-        # Garantir que um UID inválido não quebre o match regex
-        uid_safe = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', str(user_id_for_filename))        
+        # Identificação pelo username do email (ex: "joao.silva" de "joao.silva@pf.gov.br")
+        raw_email = user_email_ctx.get() or ""
+        if raw_email and "@" in raw_email:
+            email_username = raw_email.split("@")[0]
+        else:
+            uid = user_id_ctx.get() or "anonymous"
+            email_username = uid[:8]  # fallback: prefixo do uid se email indisponível
+        user_label = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', email_username) 
 
         # Estrutura de pasta baseada em data
         now = datetime.now(timezone.utc)
-        # Salva dentro do diretório do usuário para evitar bloqueio do Firebase Rules
-        base_log_folder_in_cloud = Path(f"users/{uid_safe}") / CLOUD_LOGGER_FOLDER / now.strftime('%Y/%m/%d')
-        
-        # Novo padrão de nome de arquivo
-        log_filename_in_cloud = f"{username_pc_safe}_{now.strftime('%H%M%S')}_{uid_safe}.log"
-        
+        # Diretório único por data, nome do arquivo identifica o usuário
+        base_log_folder_in_cloud = Path(CLOUD_LOGGER_FOLDER) / now.strftime('%Y/%m/%d')
+        log_filename_in_cloud = f"{user_label}_{now.strftime('%H%M%S')}_{username_pc_safe}.log"
         # Caminho completo do objeto no Storage
         full_cloud_path = (base_log_folder_in_cloud / log_filename_in_cloud).as_posix()
 
         success = False
-        initial_upload_attempt_failed_gracefully = False
-
-        # Verifica se podemos tentar o upload, especialmente para o ClientUploader
-        can_attempt_upload = False
-        if isinstance(self.uploader, ClientLogUploader):
-            can_attempt_upload = _is_token_valid()
-        elif isinstance(self.uploader, AdminLogUploader):
-            can_attempt_upload = True # Admin sempre pode tentar
-
-        if not can_attempt_upload:
-            # Se não podemos tentar, os logs ficam no buffer para a próxima vez.
-            # Retornamos False para que o buffer não seja limpo, mas não fazemos backup.
-            return False 
-    
-        if isinstance(self.uploader, ClientLogUploader) and not can_attempt_upload:
-            logger.debug(f"CloudLogHandler: ClientUploader selecionado, mas sem contexto de usuário. Upload adiado.")
-            initial_upload_attempt_failed_gracefully = True # Indica que não devemos fazer retries ou backup agressivo
-            # Não retorna True aqui, pois pode haver um fallback para AdminUploader
-            # Se não houver fallback, os logs ficarão no buffer.
-
-        if not initial_upload_attempt_failed_gracefully: # Só tenta upload real se não for um "adiamento" do cliente
-            for attempt in range(CLOUD_LOGGER_MAX_RETRIES):
-                try:
-                    # Antes de cada tentativa, verifica se o token ainda é válido
-                    if isinstance(self.uploader, ClientLogUploader) and not _is_token_valid():
-                        refresh_token = user_refresh_token_ctx.get()
-                        if refresh_token:
-                            try:
-                                auth_mgr = self.uploader.client_storage.auth_manager
-                                refreshed = auth_mgr.refresh_id_token(refresh_token)
-                                if refreshed and refreshed.get("id_token"):
-                                    user_token_ctx.set(refreshed["id_token"])
-                                    expires_in = float(refreshed.get("expires_in", 3600))
-                                    user_token_expiry_ctx.set(time.time() + expires_in)
-                                    logger.debug("CloudLogHandler: Token renovado com sucesso para upload de log.")
-                                else:
-                                    logger.warning("CloudLogHandler: Falha ao renovar token. Upload adiado.")
-                                    break
-                            except Exception as refresh_err:
-                                logger.warning(f"CloudLogHandler: Exceção ao renovar token: {refresh_err}. Upload adiado.")
-                                break
-                        else:
-                            logger.debug("CloudLogHandler: Token expirado e sem refresh_token. Upload adiado.")
-                            break
-
-                    upload_successful_this_attempt = False
-                    if isinstance(self.uploader, ClientLogUploader):
-                        if can_attempt_upload:
-                            upload_successful_this_attempt = self.uploader.upload_logs(logs_batch, full_cloud_path)
-                        # else: não tenta, já tratado por initial_upload_attempt_failed_gracefully
-                    elif isinstance(self.uploader, AdminLogUploader): # Se for AdminUploader, sempre tenta
-                        upload_successful_this_attempt = self.uploader.upload_logs(logs_batch, full_cloud_path)
-                    else: # Estratégia desconhecida
-                        logger.error(f"CloudLogHandler: Estratégia de uploader desconhecida: {self.uploader.__class__.__name__}")
-                        break # Sai do loop de retentativas
-
-                    if upload_successful_this_attempt:
-                        logger.info(f"CloudLogHandler: Lote de {len(logs_batch)} logs enviado via {self.uploader.__class__.__name__} para pasta base {full_cloud_path}")
-                        success = True
-                        break
-                    else:
-                        logger.warning(f"CloudLogHandler: Tentativa {attempt + 1} de upload falhou (uploader {self.uploader.__class__.__name__} retornou False).")
-                except Exception as e:
-                    logger.error(f"CloudLogHandler: Exceção na tentativa {attempt + 1} de upload via {self.uploader.__class__.__name__}: {e}", exc_info=True)
-                
-                if not success and attempt < CLOUD_LOGGER_MAX_RETRIES - 1:
-                    sleep(CLOUD_LOGGER_RETRY_DELAY)
         
-        # Só faz backup se a tentativa de upload realmente falhou (não se foi adiada por falta de contexto do cliente)
-        if not success and not initial_upload_attempt_failed_gracefully:
+        for attempt in range(CLOUD_LOGGER_MAX_RETRIES):
+            try:
+                if self.uploader.upload_logs(logs_batch, full_cloud_path):
+                    logger.info(
+                        f"CloudLogHandler: Lote de {len(logs_batch)} logs enviado para "
+                        f"{full_cloud_path}"
+                    )
+                    success = True
+                    break
+                else:
+                    logger.warning(
+                        f"CloudLogHandler: Tentativa {attempt + 1}/{CLOUD_LOGGER_MAX_RETRIES} "
+                        f"falhou para {full_cloud_path}."
+                    )
+            except Exception as e:
+                logger.error(
+                    f"CloudLogHandler: Exceção na tentativa {attempt + 1}: {e}", exc_info=True
+                )
+            if not success and attempt < CLOUD_LOGGER_MAX_RETRIES - 1:
+                sleep(CLOUD_LOGGER_RETRY_DELAY)
+
+        if not success:        
             logger.error(f"CloudLogHandler: Falha final no upload para CloudStorage via {self.uploader.__class__.__name__}.")
             self._backup_logs_local(logs_batch, full_cloud_path)
-        elif initial_upload_attempt_failed_gracefully and not success:
-            logger.debug("CloudLogHandler: Upload via cliente adiado, logs permanecem no buffer.")
-            pass
+            
         return success  
 
     def _backup_logs_local(self, logs_batch: List[str], cloud_path_info: str):

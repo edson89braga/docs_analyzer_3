@@ -481,7 +481,7 @@ def handle_logout(page: ft.Page) -> None:
                     page.session.remove(key)
         logger.debug("Dados de autenticação removidos da sessão Flet.")
 
-        LoggerSetup.set_cloud_user_context(None, None)
+        LoggerSetup.set_cloud_user_context(user_id=None, user_email=None)
         logger.debug("Contexto do logger de nuvem limpo.") # Alterado de info para debug, pois é uma ação interna.
 
         from SOURCE.utils import clear_user_cache
