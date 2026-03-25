@@ -671,16 +671,15 @@ def analyze_text_with_llm(
                 final_response_text = response.output_text
                 try:
                     final_response_text_clean = extract_and_clean_json(final_response_text)
-                    final_response = output_formats[prompt_name].model_validate_json(final_response_text_clean)
+                    final_response = try_convert_to_pydantic_format(final_response_text_clean, output_formats[prompt_name])
+                    if not isinstance(final_response, output_formats[prompt_name]):
+                        raise ValueError("Falha na conversão para Pydantic após coerção.")                    
                 except Exception as e:
                     logger.error(f"Erro ao processar JSON do OpenAI: {e}")
                     # raise
                     # Fallback: Retorna o texto bruto se o JSON falhar
                     logger.warning("Retornando resposta bruta devido a falha no parsing JSON.")
-                    final_response = final_response_text_clean
-                    # Opcional: Adicionar marcação que a resposta não está formatada
-                    if hasattr(final_response, "observacoes"):
-                        final_response.observacoes = f"[AVISO: Resposta não formatada corretamente pela IA]\n{final_response.observacoes}"                
+                    final_response = f"[AVISO: Resposta não formatada corretamente pela IA]\n\n{final_response_text}"         
                 
                 # Obter informações sobre o uso de tokens
                 cb = response.usage # callback
@@ -767,16 +766,15 @@ def analyze_text_with_llm(
                 
                 try:
                     final_response_text_clean = extract_and_clean_json(final_response_text)
-                    final_response = output_formats[prompt_name].model_validate_json(final_response_text_clean)
+                    final_response = try_convert_to_pydantic_format(final_response_text_clean, output_formats[prompt_name])
+                    if not isinstance(final_response, output_formats[prompt_name]):
+                        raise ValueError("Falha na conversão para Pydantic após coerção.")
                 except Exception as e:
                     logger.error(f"Erro ao processar JSON do endpoint PF: {e}", exc_info=True)
                     # raise
                     # Fallback: Retorna o texto bruto se o JSON falhar
                     logger.warning("Retornando resposta bruta devido a falha no parsing JSON.")
-                    final_response = final_response_text_clean
-                    # Opcional: Adicionar marcação que a resposta não está formatada
-                    if hasattr(final_response, "observacoes"):
-                        final_response.observacoes = f"[AVISO: Resposta não formatada corretamente pela IA]\n{final_response.observacoes}"
+                    final_response = f"[AVISO: Resposta não formatada corretamente pela IA]\n\n{final_response_text}"
 
                 # Obter informações sobre o uso de tokens (se disponível)
                 usage = response.usage

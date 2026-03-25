@@ -301,6 +301,20 @@ def try_convert_to_pydantic_format(data: Union[str, BaseModel], pydantic_format:
                 pessoas_coerced = []
                 for item in json_data["pessoas_envolvidas"]:
                     if isinstance(item, dict):
+                        # Normalização de chaves incorretas comuns da LLM
+                        if "papel" not in item and "tipo" in item:
+                            item["papel"] = item.pop("tipo")
+                        if "papel" not in item:
+                            item["papel"] = "Não identificado"
+                        
+                        if "cpf_cnpj" in item:
+                            val = item.pop("cpf_cnpj")
+                            if val and str(val).upper() not in ["NA", "N/A", "NULL", "NONE", "S/CPF/CNPJ", ""]:
+                                clean_doc = ''.join(filter(str.isdigit, str(val)))
+                                if len(clean_doc) > 11:
+                                    item["cnpj"] = clean_doc
+                                else:
+                                    item["cpf"] = clean_doc                        
                         pessoas_coerced.append(item)
                     elif isinstance(item, str) and item.strip():
                         # Tenta extrair nome, cpf/cnpj e papel a partir da string

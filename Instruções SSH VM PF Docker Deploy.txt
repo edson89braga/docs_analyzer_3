@@ -97,5 +97,16 @@ exit
 >>> htop 	  # Ou top -> Visão Geral do Sistema (Processos gerais da VM)
 >>> df -h	  # 	   -> Uso de Disco (Armazenamento)
 
+==================================================================================================================
 
+# p/ Atualizar e fazer reboot no Servidor (VM):
+
+>>> sudo docker-compose down
+
+>>> sudo apt update && sudo apt upgrade -y
+>>> sudo reboot
+
+>>> docker ps # mostra todos os contêineres rodando no Docker
+
+==================================================================================================================
 

@@ -6,6 +6,7 @@ services:
     # build: .
     image: proj_app--llm-api-docs_analyzer_3-opera-app
     container_name: opera-ia-frontend
+    restart: unless-stopped
     ports:
       - "8550:8550"
     volumes:
@@ -38,6 +39,7 @@ services:
     # build: . # Usa exatamente a mesma imagem do opera-app
     image: proj_app--llm-api-docs_analyzer_3-opera-app
     container_name: opera-ia-admin
+    restart: unless-stopped
     # Sobrescreve o CMD do Dockerfile para rodar o Streamlit
     command: ["streamlit", "run", "run_admin_streamlit.py", "--server.port=8501", "--server.address=0.0.0.0"]
     ports:
@@ -61,6 +63,7 @@ services:
     #  context: ../Proj_App   -- LLM-API - Vector_Engine_2
     image: proj_app--llm-api-docs_analyzer_3-ml-engine
     container_name: opera-ia-ml-engine
+    restart: unless-stopped
     ports:
       - "8001:8001"
     environment:

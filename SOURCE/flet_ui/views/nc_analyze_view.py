@@ -2477,7 +2477,8 @@ class InternalAnalysisController:
 
                 # Se a resposta veio como string bruta (fallback), removemos a flag de nova resposta estruturada
                 if isinstance(llm_response_data, str):
-                    self.page.session.remove("is_new_llm_response_flag")
+                    if self.page.session.contains_key("is_new_llm_response_flag"):
+                        self.page.session.remove("is_new_llm_response_flag")
                 else:
                     self.page.session.set("is_new_llm_response_flag", True)
                 

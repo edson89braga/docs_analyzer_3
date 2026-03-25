@@ -423,7 +423,6 @@ def create_footer(page: ft.Page) -> ft.BottomAppBar:
 
 import threading
 from SOURCE.flet_ui.components.components import show_loading_overlay, hide_loading_overlay
-from SOURCE.logger.cloud_logger_handler import ClientLogUploader
 
 def handle_logout(page: ft.Page) -> None:
     """
@@ -444,20 +443,6 @@ def handle_logout(page: ft.Page) -> None:
         user_email_logged_out = page.session.get("auth_user_email") or \
                             (page.client_storage.get("auth_user_email") if page.client_storage else "Desconhecido")
         logger.info(f"[MONITORIA] Logout manual efetuado por: {user_email_logged_out} (ID: {user_id_logged_out}).")
-
-        # FLUSH ANTES DE LIMPAR O CONTEXTO DO USUÁRIO
-        if LoggerSetup._active_cloud_handler_instance:
-            uploader_in_use = LoggerSetup._active_cloud_handler_instance.uploader
-            # Só faz flush se o uploader for o ClientLogUploader, pois ele depende do token do usuário
-            # que está prestes a ser removido. O AdminLogUploader pode continuar logando depois.
-            from SOURCE.logger.cloud_logger_handler import user_token_ctx
-            if isinstance(uploader_in_use, ClientLogUploader) and user_token_ctx.get():                
-                logger.debug("Logout: Forçando flush do CloudLogHandler para logs do usuário atual (ClientUploader)...")
-                try:
-                    LoggerSetup._active_cloud_handler_instance.flush()
-                    logger.debug("Flush solicitado. O upload ocorrerá em segundo plano.")
-                except Exception as e_flush:
-                    logger.error(f"Erro ao tentar forçar flush no logout: {e_flush}")
 
         auth_keys_to_clear = [
             "auth_id_token", "auth_user_id", "auth_user_email",
