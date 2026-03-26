@@ -1,5 +1,5 @@
 # src/flet_ui/views/nc_analyze_view.py
-import logging
+import logging, copy
 logger = logging.getLogger(__name__)
 
 from time import perf_counter
@@ -97,6 +97,10 @@ CTL_LLM_METADATA_PANEL_TITLE = "llm_metadata_panel_title"
 CTL_LLM_METADATA_CONTENT = "llm_metadata_content"
 CTL_LLM_AI_WARNING_BALLOON = "llm_ai_warning_balloon"
 
+CTL_PROMPT_SAVE_BTN = "prompt_save_button"
+KEY_USER_CACHE_PROMPTS_EDITED_DATA = "apv_user_cache_prompts_edited_data"
+KEY_SESSION_PROMPT_IS_EDITED_FLAG = "apv_session_prompt_is_edited_flag"
+
 # Enum para operações do FilePicker
 class ExportOperation(Enum):
     NONE = "none"
@@ -141,6 +145,7 @@ class AnalyzePDFViewContent(ft.Column):
         self._is_drawer_open = False
         self._files_processed = False
         self._analysis_requested = False
+        self._prompt_text_fields: Dict[str, ft.TextField] = {}
 
         # --- Adicionado para visualização do prompt ---
         self._is_prompt_view_active = False
@@ -206,6 +211,7 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_ANALYZE_BTN] = ft.ElevatedButton("Solicitar Análise", icon=ft.Icons.ONLINE_PREDICTION_ROUNDED, width=width_btn_bar)
         
         self.gui_controls[CTL_PROMPT_STRUCT_BTN] = ft.ElevatedButton("Prompt Estruturado", icon=ft.Icons.EDIT_NOTE_ROUNDED, width=width_btn_bar)
+        self.gui_controls[CTL_PROMPT_SAVE_BTN] = ft.ElevatedButton("Salvar Prompt Temporariamente", icon=ft.Icons.SAVE_AS_ROUNDED, width=250, visible=False, bgcolor=ft.Colors.with_opacity(0.2, theme.COLOR_SUCCESS))
         self.gui_controls[CTL_RESTART_BTN] = ft.IconButton(icon=ft.Icons.RESTART_ALT_ROUNDED, tooltip="Reiniciar Análise (Limpar Tudo)", icon_size=default_icon_size_bar)
         self.gui_controls[CTL_EXPORT_BTN] = ft.PopupMenuButton(
             icon=ft.Icons.DOWNLOAD_FOR_OFFLINE_ROUNDED,
@@ -403,27 +409,39 @@ class AnalyzePDFViewContent(ft.Column):
             # Limpar {input_text} se presente, para clareza na visualização
             content_value_cleaned = content_value.replace("\n{input_text}\n", "[CONTEÚDO_DO_PDF_é_INSERIDO_AQUI]")
 
-            prompt_text_fields.append(
-                #ft.TextField(
-                ReadOnlySelectableTextField(
-                    label=name_str,
-                    value=content_value_cleaned,
-                    multiline=True, # read_only=False,
-                    # min_lines=2, max_lines=10, 
-                    expand=True,
-                    border=ft.InputBorder.OUTLINE,
-                    text_size=12, # Tamanho de texto menor para acomodar mais
-                    # dense=True  # Torna o campo um pouco mais compacto
-                )
+            prompt_field = ft.TextField(
+                label=name_str,
+                value=content_value_cleaned,
+                multiline=True,
+                read_only=False,
+                expand=True,
+                border=ft.InputBorder.OUTLINE,
+                text_size=12,
             )
-        
+
+            self._prompt_text_fields[name_str] = prompt_field
+            prompt_text_fields.append(prompt_field)
+
+        save_button_row = ft.Row(
+            [
+                ft.Container(expand=True),
+                self.gui_controls[CTL_PROMPT_SAVE_BTN]
+            ],
+            alignment=ft.MainAxisAlignment.END
+        )
+
         return ft.Container(
             content=ft.Column(
-                prompt_text_fields,
-                scroll=ft.ScrollMode.ALWAYS, expand=True,
-                spacing=9, # Espaçamento menor entre os TextFields
+                [
+                    ft.Column(
+                        prompt_text_fields,
+                        scroll=ft.ScrollMode.ALWAYS, expand=True,
+                        spacing=9,
+                    ),
+                    save_button_row
+                ]
             ),
-            expand=True, padding=15, # Padding geral para o container dos prompts
+            expand=True, padding=15,
             # border=ft.border.all(1, ft.Colors.TEAL_ACCENT_700) # Para debug
         )
     
@@ -497,6 +515,7 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_TEXT_MODEL_BTN].on_click = self._handle_toggle_settings_drawer
         self.gui_controls[CTL_SETTINGS_BTN].on_click = self._handle_toggle_settings_drawer
         self.gui_controls[CTL_PROMPT_STRUCT_BTN].on_click = self._toggle_prompt_view
+        self.gui_controls[CTL_PROMPT_SAVE_BTN].on_click = self._save_edited_prompts_to_cache
 
     def _handle_upload_click(self, e: ft.ControlEvent):
         """
@@ -851,6 +870,7 @@ class AnalyzePDFViewContent(ft.Column):
         """
         #_logger.info("Botão 'Prompt Estruturado' clicado.")
         #show_snackbar(self.page, "Visualização do 'Prompt Estruturado' ainda não implementado.", theme.COLOR_WARNING)
+        prompt_save_button = self.gui_controls.get(CTL_PROMPT_SAVE_BTN)
         self._is_prompt_view_active = not self._is_prompt_view_active
         prompt_button = self.gui_controls.get(CTL_PROMPT_STRUCT_BTN)
 
@@ -878,6 +898,8 @@ class AnalyzePDFViewContent(ft.Column):
             if isinstance(prompt_button, ft.ElevatedButton):
                 prompt_button.icon = ft.Icons.ARROW_BACK_IOS_NEW_ROUNDED
                 prompt_button.bgcolor = ft.Colors.with_opacity(0.25, theme.COLOR_INFO)
+            if isinstance(prompt_save_button, ft.ElevatedButton):
+                prompt_save_button.visible = True                
         
         else: # Voltando para a visualização normal
             logger.debug("Desativando visualização do prompt, voltando para análise.")
@@ -896,10 +918,51 @@ class AnalyzePDFViewContent(ft.Column):
             if isinstance(prompt_button, ft.ElevatedButton):
                 prompt_button.icon = ft.Icons.EDIT_NOTE_ROUNDED
                 prompt_button.bgcolor = None # prompt_button.color = None
+            if isinstance(prompt_save_button, ft.ElevatedButton):
+                prompt_save_button.visible = False                
 
         # Atualiza o estado dos botões e a UI
         self._update_button_states() 
         self.update()       
+
+    def _save_edited_prompts_to_cache(self, e: ft.ControlEvent):
+        """Salva os prompts editados pelo usuário no cache para uso na próxima análise."""
+        logger.info("Salvando prompts editados temporariamente no cache do usuário.")
+        self.user_cache = get_user_cache(self.page)
+        original_prompts_dict = self.user_cache.get(KEY_SESSION_PROMPTS_DICT)
+        if not original_prompts_dict:
+            show_snackbar(self.page, "Erro: Prompts originais não encontrados para edição.", theme.COLOR_ERROR)
+            return
+
+        # Cria uma cópia profunda para não modificar o original no cache
+        edited_prompts_dict = copy.deepcopy(original_prompts_dict)
+
+        for name_str, text_field in self._prompt_text_fields.items():
+            if name_str in edited_prompts_dict:
+                edited_content = text_field.value.replace("[CONTEÚDO_DO_PDF_é_INSERIDO_AQUI]", "\n{input_text}\n")
+                edited_prompts_dict[name_str]["content"] = edited_content
+
+        self.user_cache[KEY_USER_CACHE_PROMPTS_EDITED_DATA] = edited_prompts_dict
+        self.page.session.set(KEY_SESSION_PROMPT_IS_EDITED_FLAG, True)
+
+        show_snackbar(self.page, "Prompt modificado salvo! Ele será usado na próxima análise.", theme.COLOR_SUCCESS, duration=5000)
+        
+    def _restore_original_prompts_and_notify(self):
+        """Restaura o prompt original removendo a versão editada do cache."""
+        logger.info("Restaurando prompt original após análise com versão editada.")
+        self.user_cache = get_user_cache(self.page)
+        if self.user_cache.pop(KEY_USER_CACHE_PROMPTS_EDITED_DATA, None):
+            logger.debug("Dados de prompt editado removidos do cache.")
+        if self.page.session.contains_key(KEY_SESSION_PROMPT_IS_EDITED_FLAG):
+            self.page.session.remove(KEY_SESSION_PROMPT_IS_EDITED_FLAG)
+            logger.debug("Flag de prompt editado removida da sessão.")
+
+        # Força a recriação da view de prompt na próxima vez que for acessada
+        self._prompt_display_layout = None
+        self._prompt_text_fields.clear()
+        logger.debug("Layout de exibição de prompt invalidado para forçar recarregamento visual.")
+
+        show_snackbar(self.page, "Análise concluída. O prompt original foi restaurado para futuras análises.", theme.COLOR_INFO, duration=6000)
 
     # --- Lógica de Atualização da UI (Métodos Internos) ---
     def _update_active_model_button(self):
@@ -2438,8 +2501,24 @@ class InternalAnalysisController:
             key_prompt_group = "PROMPT_UNICO_for_INITIAL_ANALYSIS"
 
         self.user_cache = get_user_cache(self.page)
-        loaded_prompts = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL)
-        if not loaded_prompts:
+        final_prompts_to_use = None
+        prompt_was_edited = self.page.session.get(KEY_SESSION_PROMPT_IS_EDITED_FLAG) or False
+
+        if prompt_was_edited:
+            edited_prompts_dict = self.user_cache.get(KEY_USER_CACHE_PROMPTS_EDITED_DATA)
+            all_lists_dict = self.user_cache.get(KEY_SESSION_LIST_TO_PROMPTS)
+            if edited_prompts_dict and all_lists_dict:
+                logger.info("Usando PROMPT EDITADO PELO USUÁRIO para esta análise.")
+                # Remontar a lista de prompts para a API a partir do dicionário editado
+                final_prompts_to_use, _ = get_prompts_for_initial_analysis(all_lists_dict, edited_prompts_dict)
+            else:
+                logger.error("Flag de prompt editado ativa, mas dados do prompt e/ou listas não encontrados no cache! Revertendo para o prompt original.")
+        
+        if not final_prompts_to_use:
+            logger.info("Usando PROMPT ORIGINAL para esta análise.")
+            final_prompts_to_use = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL)
+
+        if not final_prompts_to_use:        
             logger.error("Prompts ausentes para a thread de análise!")
             self.page.run_thread(self.parent_view._update_gui_from_state)
             self.page.run_thread(self._update_status_callback, f"Erro crítico: Não foi possível carregar os prompts de análise.", True, True)
@@ -2462,7 +2541,7 @@ class InternalAnalysisController:
  
             loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
  
-            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(key_prompt_group, loaded_prompts, aggregated_text,
+            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(key_prompt_group, final_prompts_to_use, aggregated_text,
                                                                                                  provider, model_name, temperature,
                                                                                                  decrypted_api_key, loaded_llm_providers)
  
@@ -2499,6 +2578,9 @@ class InternalAnalysisController:
                 if self.firestore_client.save_analysis_metrics(*data_to_log):
                     # Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
                     self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
+
+                if prompt_was_edited:
+                    self.page.run_thread(self.parent_view._restore_original_prompts_and_notify)                    
  
             else:
                 self.page.run_thread(self.parent_view._update_gui_from_state) # Atualiza a UI para mostrar o balão de falha
