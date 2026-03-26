@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 # Adiciona o diretório raiz ao path para encontrar 'src'
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from SOURCE.services.firebase_manager import FbManagerStorage, inicializar_firebase
+from SOURCE.services.firebase_manager import FbManagerStorage, FbManagerAdminAuth, inicializar_firebase
 from SOURCE.logger.logger import LoggerSetup
 
 logger = LoggerSetup.get_logger(__name__)
@@ -35,15 +35,20 @@ def get_cloud_log_stats(days_to_keep: int=30) -> dict:
 
     try:
         from SOURCE.settings import CLOUD_LOGGER_FOLDER
-        blobs_iterator = storage_manager.bucket.list_blobs(prefix=CLOUD_LOGGER_FOLDER)
-        
-        for blob in blobs_iterator:
-            if blob.name.endswith('/'):
-                continue # Ignora "pastas"
-            
-            total_count += 1
-            if blob.updated and blob.updated < cutoff_date:
-                old_count += 1
+        def count_blobs(prefix: str):
+            nonlocal total_count, old_count
+            blobs_iterator = storage_manager.bucket.list_blobs(prefix=prefix)
+            for blob in blobs_iterator:
+                if blob.name.endswith('/'): continue
+                total_count += 1
+                if blob.updated and blob.updated < cutoff_date:
+                    old_count += 1
+
+        # Legacy logs e Novos logs
+        count_blobs(CLOUD_LOGGER_FOLDER)
+        auth_manager = FbManagerAdminAuth()
+        for user in auth_manager.list_users().iterate_all():
+            count_blobs(f"users/{user.uid}/logs/")
         
         logger.info(f"Estatísticas de logs obtidas: {total_count} arquivos no total, {old_count} arquivos antigos.")
         return {"total_count": total_count, "old_count": old_count}
@@ -78,11 +83,19 @@ def run_cloud_log_cleanup(days_to_keep: int, dry_run: bool = False) -> bool:
         return False
 
     try:
+        auth_manager = FbManagerAdminAuth()
+        extra_prefixes = [f"users/{user.uid}/logs/" for user in auth_manager.list_users().iterate_all()]
+    except Exception as e:
+        logger.warning(f"Não foi possível obter usuários para limpar novos logs: {e}")
+        extra_prefixes = None
+
+    try:
         # Chama a função de limpeza do LoggerSetup
         LoggerSetup.cleanup_cloud_logs(
             storage_manager=storage_manager,
             days_to_keep=days_to_keep,
-            dry_run=dry_run
+            dry_run=dry_run,
+            extra_prefixes=extra_prefixes
         )
         logger.info("Script de limpeza de logs finalizado com sucesso.")
         return True

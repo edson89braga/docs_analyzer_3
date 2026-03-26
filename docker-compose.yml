@@ -9,6 +9,8 @@ services:
     restart: unless-stopped
     ports:
       - "8550:8550"
+      - "80:8550"    # Adiciona a porta 80 escutando e jogando para a 8550
+      - "8080:8550"  # terceira porta opcional    
     volumes:
       - opera_data:/app/data
       # Mapeamento de código (Hot-reload no servidor)

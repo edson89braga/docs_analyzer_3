@@ -30,3 +30,22 @@ def generate_verification_link(email: str) -> tuple[bool, str]:
         msg = f"Erro inesperado ao gerar link para '{email}': {e}"
         logger.error(msg, exc_info=True)
         return False, msg
+
+def generate_password_reset_link(email: str) -> tuple[bool, str]:
+    """
+    Gera um link de redefinição de senha para um usuário específico.
+    """
+    try:
+        inicializar_firebase()
+        link = firebase_auth.generate_password_reset_link(email)
+        logger.info(f"Link de redefinição de senha gerado com sucesso para {email}.")
+        return True, link
+    except firebase_auth.UserNotFoundError:
+        msg = f"Usuário com e-mail '{email}' não encontrado no Firebase Authentication."
+        logger.error(msg)
+        return False, msg
+    except Exception as e:
+        msg = f"Erro inesperado ao gerar link de redefinição de senha para '{email}': {e}"
+        logger.error(msg, exc_info=True)
+        return False, msg
+

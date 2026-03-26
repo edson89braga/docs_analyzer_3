@@ -10,7 +10,8 @@ from SOURCE.services.firebase_manager import (
     inicializar_firebase, FbManagerFirestore, FbManagerStorage, FbManagerAdminAuth
 )
 
-logger = logging.getLogger(__name__)
+from SOURCE.logger.logger import LoggerSetup
+logger = LoggerSetup.get_logger(__name__)
 
 ADMIN_DATA_DIR = "admin_data"
 ADMIN_LOGS_DIR = os.path.join(ADMIN_DATA_DIR, "logs")
@@ -103,25 +104,56 @@ def sync_cloud_data_to_local() -> Tuple[bool, str]:
         storage_manager = FbManagerStorage()
         auth_manager = FbManagerAdminAuth()
         
-        # Sincronizar Logs do Storage
+        # Sincronizar Logs do Storage (Legado)
         from SOURCE.settings import CLOUD_LOGGER_FOLDER
-        logger.info("Verificando logs no Firebase Storage...")
+        logger.info("Verificando logs legacy no Firebase Storage...")
         all_logs_blobs = storage_manager.bucket.list_blobs(prefix=CLOUD_LOGGER_FOLDER)
         for blob in all_logs_blobs:
             if blob.name.endswith('/'):
                 continue
 
             local_path = os.path.join(ADMIN_DATA_DIR, blob.name.replace('/', os.sep))
-            
             if not os.path.exists(local_path):
                 os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                logger.debug(f"Baixando log: {blob.name} para {local_path}")
+                logger.debug(f"Baixando log legacy: {blob.name} para {local_path}")
                 blob.download_to_filename(local_path)
 
-        # Sincronizar Métricas do Firestore
-        logger.info("Verificando métricas no Firestore...")
+        # Sincronizar Novos Logs no Storage e Métricas no Firestore (Iteração por Usuário)
+        logger.info("Iniciando varredura por usuário para logs novos e métricas...")
         all_user_ids = {user.uid for user in auth_manager.list_users().iterate_all()}
+        logger.info(f"Total de usuários encontrados no Auth: {len(all_user_ids)}")
+        
         for user_id in all_user_ids:
+            # 1. Verifica os Novos Logs no Storage
+            prefix = f"users/{user_id}/logs/"
+            user_logs_blobs = list(storage_manager.bucket.list_blobs(prefix=prefix))
+            
+            if user_logs_blobs:
+                logger.debug(f"[{user_id}] Encontrados {len(user_logs_blobs)} blobs de log no prefixo '{prefix}'. Analisando...")
+                
+            for blob in user_logs_blobs:
+                if blob.name.endswith('/'): continue
+                
+                try:
+                    # Mapeia "users/{uid}/logs/YYYY/MM/DD/file.log" para "admin_data/logs/YYYY/MM/DD/file.log"
+                    if "/logs/" in blob.name:
+                        parts = blob.name.split("/logs/", 1)
+                        if len(parts) == 2:
+                            relative_path = os.path.join("logs", parts[1].replace('/', os.sep))
+                            local_path = os.path.join(ADMIN_DATA_DIR, relative_path)
+                            
+                            if not os.path.exists(local_path):
+                                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                                logger.info(f"[{user_id}] Baixando novo log: {blob.name} -> {local_path}")
+                                blob.download_to_filename(local_path)
+                            else:
+                                logger.debug(f"[{user_id}] Log ignorado (já existe localmente): {local_path}")
+                    else:
+                        logger.warning(f"[{user_id}] Caminho de log fora do padrão esperado: {blob.name}")
+                except Exception as log_err:
+                    logger.error(f"[{user_id}] Erro no processamento do log {blob.name}: {log_err}", exc_info=True)
+
+            # 2. Verifica as Métricas no Firestore
             metrics_collection_path = f'user_metrics/{user_id}/metrics'
             metrics_ref = fs_manager.db.collection(metrics_collection_path).stream()
 

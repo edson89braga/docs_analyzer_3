@@ -6,7 +6,11 @@ from datetime import datetime, date
 
 # Configuração do Logger (deve ser a primeira coisa)
 from SOURCE.logger.logger import LoggerSetup
-LoggerSetup.initialize(routine_name="Admin_Dashboard_Streamlit", dev_mode=True)
+LoggerSetup.initialize(
+    routine_name="Admin_Dashboard_Streamlit",
+    dev_mode=True,
+    modules_to_log=['SOURCE', 'admin_py', '__main__']
+)
 
 # Imports dos módulos de lógica admin
 from admin_py import dashboard_analyzer, dashboard_plotter, local_data_manager, export_data
@@ -187,15 +191,19 @@ elif page == "Usuários":
         st.dataframe(df_users, use_container_width=True, hide_index=True)
 
         st.markdown("---")
-        st.subheader("Gerar Link de Verificação de Email")
-        verification_email = st.text_input(
+        st.subheader("Gerar Links Manuais (Autenticação)")
+        link_type = st.radio("Tipo de Link:", ["Verificação de Email", "Redefinição de Senha"], horizontal=True)
+        target_email = st.text_input(
             "Email do usuário para gerar o link:",
-            placeholder="Digite o e-mail do usuário não verificado"
+            placeholder="Digite o e-mail do usuário alvo"
         )
         if st.button("Gerar Link Manualmente"):
-            if verification_email:
-                with st.spinner(f"Gerando link para {verification_email}..."):
-                    success, result = user_verification.generate_verification_link(verification_email)
+            if target_email:
+                with st.spinner(f"Gerando link para {target_email}..."):
+                    if link_type == "Verificação de Email":
+                        success, result = user_verification.generate_verification_link(target_email)
+                    else:
+                        success, result = user_verification.generate_password_reset_link(target_email)
                 if success:
                     st.success("Link gerado com sucesso! Copie e envie para o usuário.")
                     st.code(result, language=None)
