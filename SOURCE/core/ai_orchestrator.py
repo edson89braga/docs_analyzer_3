@@ -179,9 +179,12 @@ def extract_and_clean_json(response_text: str) -> str:
     """
     if not response_text:
         raise ValueError("Texto de resposta vazio fornecido.")
+    
+    response_text = response_text if isinstance(response_text, str) else str(response_text)
 
-    # Remove tags de thinking (< think > e < /think >)
-    cleaned = response_text.replace("<think>", "").replace("</think>", "").strip()
+    # Regex para remover o bloco <think>...</think>
+    cleaned = re.sub(r"<think>.*?</think>\s*", "", response_text, flags=re.DOTALL)
+    cleaned = cleaned.strip()  
     
     # Tenta remover delimitadores de markdown (```json ... ```, ``` ... ```)
     # Padrão 1: ```json ... ``` ou ```json ... ```
@@ -729,11 +732,11 @@ def analyze_text_with_llm(
             
             if prompt_name == "PROMPT_UNICO_for_INITIAL_ANALYSIS":
                 prompt_list_dicts = prompts[prompt_name]
-                # Anexar /no_think ao processed_text para llm_pf
+                # Anexar /no_think ao processed_text para llm_pf se quisermos o modo não pensante
                 processed_text_with_no_think = processed_text + " /no_think"
                 messages = []
                 for msg_dict in prompt_list_dicts:
-                    modified_msg_dict = {key: value.replace("{input_text}", processed_text_with_no_think) for key, value in msg_dict.items()}
+                    modified_msg_dict = {key: value.replace("{input_text}", processed_text) for key, value in msg_dict.items()}
                     messages.append(modified_msg_dict)
 
                 # Converter a classe Pydantic para JSON schema (strict, inclui $defs)

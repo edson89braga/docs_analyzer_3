@@ -6,7 +6,7 @@ Responsável por gerenciar a conversa com a Responses API da OpenAI, construindo
 o payload de entrada, gerenciando o streaming de eventos e calculando métricas de uso.
 """
 
-import logging
+import logging, re
 logger = logging.getLogger(__name__)
 
 import time
@@ -152,9 +152,15 @@ class ChatLLMOrchestrator:
         # Lógica específica para llm_pf usando Chat Completions API
         if provider == "llm_pf":
             model_name = "Qwen3-8B-AWQ"  # Modelo fixo para llm_pf
-            # Anexar /no_think à pergunta do usuário
-            user_question_with_no_think = user_question + " /no_think"
-            messages = self._build_input_items(document_context, history, user_question_with_no_think, instructions=instructions)
+            
+            if reasoning_mode and reasoning_mode.lower() != "minimal":
+                logger.info(f"Usando {model_name} com modo de raciocínio ativado (sem /no_think).")
+                messages = self._build_input_items(document_context, history, user_question, instructions=instructions)
+            else:
+                logger.info(f"Usando {model_name} com modo de raciocínio desativado (com /no_think).")
+                # Anexar /no_think à pergunta do usuário
+                user_question_with_no_think = user_question + " /no_think"
+                messages = self._build_input_items(document_context, history, user_question_with_no_think, instructions=instructions)
             
             try:
                 response = self.client.chat.completions.create(
@@ -174,16 +180,20 @@ class ChatLLMOrchestrator:
                             if content:
                                 full_response_content += content
                                 yield {"type": "chunk", "content": content}
+                
                 elif hasattr(response, 'content'):
                     # Fallback direto para propriedade content se choices não estiver disponível
-                    full_response_content = response.content
-                    full_response_content = full_response_content.replace("<think>", "").replace("</think>", "").strip("\n")
+                    full_response_content = response.content if isinstance(response.content, str) else str(response.content)
+                    full_response_content = re.sub(r"<think>.*?</think>\s*", "", full_response_content, flags=re.DOTALL)
+                    full_response_content = full_response_content.strip("\n").strip()
+
                     if full_response_content:
                         yield {"type": "chunk", "content": full_response_content}
+
                 else:
                     logger.warning("[DEBUG] Resposta do llm_pf não contém choices ou content esperados.")
                 
-                logger.info(f"[DEBUG] Resposta completa do llm_pf:\n{full_response_content}\n")  # Log da resposta completa (início)
+                logger.info(f"[DEBUG] Resposta completa do llm_pf:\n{response.content}\n")  # Log da resposta completa (início)
 
                 final_usage_data = response.usage
 
@@ -201,6 +211,7 @@ class ChatLLMOrchestrator:
                     total_time = round(time.perf_counter() - start_time, 2)       
                     logger.info(f"Resposta do chat recebida. Model: {model_name}; Tempo de resposta: {total_time}s; Métricas: {token_usage_info}")
                     yield {"type": "final_metrics", "data": token_usage_info}
+
                 else:
                     logger.warning("Não foi possível obter métricas de uso da resposta do chat.")
                     yield {"type": "final_metrics", "data": {}}
@@ -208,6 +219,7 @@ class ChatLLMOrchestrator:
             except Exception as e:
                 logger.error(f"Erro no provider llm_pf: {e}", exc_info=True)
                 yield {"type": "error", "content": f"Erro no endpoint llm_pf: {e}"}
+            
             return
         
         # Lógica para OpenAI (Responses API)

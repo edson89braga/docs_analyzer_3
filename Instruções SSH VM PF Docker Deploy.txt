@@ -55,12 +55,12 @@ sudo docker ps
 
 ==================================================================================================================
 
->>> sudo docker logs -f opera-ia-frontend # Para acompanhar logs
+>>> docker logs -f opera-ia-frontend # Para acompanhar logs
 -> ctrl+c para sair da visualização de logs
 
->>> sudo docker logs --tail 100 opera-ia-frontend # opção para ver somente últimas 100 linhas
+>>> docker logs --tail 100 opera-ia-frontend # opção para ver somente últimas 100 linhas
 
->>> sudo docker-compose down # Para desligar o container antes de um novo 'sudo docker-compose up -d'
+>>> docker-compose down # Para desligar o container antes de um novo 'docker-compose up -d'
 
 
 ==================================================================================================================
