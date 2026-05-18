@@ -201,13 +201,14 @@ class BaseSettingsDrawer(ft.Column):
         Reseta as configurações para os padrões da nuvem.
         """
         cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
-        if cloud_defaults:
-            self.page.session.set(self.session_key, cloud_defaults.copy())
-            self.load_settings_into_controls()
-            self.save_settings_to_session(delete_on_local_db=True) # 
-            show_snackbar(self.page, "Configurações resetadas para os padrões.", theme.COLOR_INFO)
-        else:
-            show_snackbar(self.page, "Padrões da nuvem não encontrados.", theme.COLOR_ERROR)
+        defaults_to_use = cloud_defaults.copy() if cloud_defaults else FALLBACK_ANALYSIS_SETTINGS.copy()
+        
+        self.page.session.set(self.session_key, defaults_to_use)
+        self.load_settings_into_controls()
+        self.save_settings_to_session(delete_on_local_db=True)
+        
+        msg = "Configurações resetadas para os padrões." if cloud_defaults else "Configurações resetadas para os padrões locais."
+        show_snackbar(self.page, msg, theme.COLOR_INFO)
             
     def _populate_models_for_selected_provider(self, provider_system_name: Optional[str], current_model_value: Optional[str] = None, new_provider_selected: bool = False):
         """
@@ -255,12 +256,13 @@ class BaseSettingsDrawer(ft.Column):
         model_value = self.gui_controls["llm_model_dd"].value or ""
         is_gpt4 = model_value.startswith("gpt-4")
         is_gpt5 = model_value.startswith("gpt-5")
+        is_qwen3 = model_value.lower().startswith("qwen3")
         
         # GPT-4
         self.gui_controls["temperature_slider"].disabled = not is_gpt4
         self.gui_controls["llm_max_output_length_tf"].disabled = not is_gpt4
         # GPT-5
-        self.gui_controls["reasoning_effort_dd"].disabled = not is_gpt5
+        self.gui_controls["reasoning_effort_dd"].disabled = not is_gpt5 and not is_qwen3
         self.gui_controls["verbosity_level_dd"].disabled = not is_gpt5
         
         if update_ui and self.page:
@@ -323,6 +325,11 @@ class BaseSettingsDrawer(ft.Column):
                 value = self.gui_controls[ctrl_key].value
                 if isinstance(control, ft.Slider) and setting_key in ("llm_temperature", "similarity_threshold"):
                     value = float(control.value) / 100.0
+                elif setting_key == "llm_input_token_limit":
+                    try:
+                        value = int(value)
+                    except (ValueError, TypeError):
+                        value = FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"]                    
                 settings[setting_key] = value
         
         return settings
@@ -333,15 +340,20 @@ class BaseSettingsDrawer(ft.Column):
         Deve ser estendido pelas classes filhas, se necessário.
         """
         current_settings = self.page.session.get(self.session_key) or FALLBACK_ANALYSIS_SETTINGS.copy()
-        initial_simi_threshold = current_settings.get("similarity_threshold", 0.87)
-        initial_temp = current_settings.get("llm_temperature", 0.20)
+        initial_simi_threshold = current_settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
+        initial_temp = current_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
 
-        self._populate_models_for_selected_provider(current_settings.get("llm_provider"), current_settings.get("llm_model"))
+        self._populate_models_for_selected_provider(
+            current_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"]), 
+            current_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
+        )
 
         for ctrl_key, setting_key in self.KEY_MAP.items():
             if ctrl_key in self.gui_controls:
+                # Garante que recupera do FALLBACK_ANALYSIS_SETTINGS se a chave não existir em current_settings (ex: DB local antigo)
+                val = current_settings.get(setting_key, FALLBACK_ANALYSIS_SETTINGS.get(setting_key))                
                 if ctrl_key.endswith("_tf"):
-                    self.gui_controls[ctrl_key].value = str(current_settings.get(setting_key))
+                    self.gui_controls[ctrl_key].value = str(val)
                 elif ctrl_key == "similarity_threshold_slider":
                     self.gui_controls[ctrl_key].value = initial_simi_threshold * 100
                     self.gui_controls["similarity_threshold_value_label"].value = f"{initial_simi_threshold:.2f}"
@@ -349,11 +361,12 @@ class BaseSettingsDrawer(ft.Column):
                     self.gui_controls[ctrl_key].value = initial_temp * 100
                     self.gui_controls["temperature_value_label"].value = f"{initial_temp:.2f}"
                 else:
-                    self.gui_controls[ctrl_key].value = current_settings.get(setting_key)
+                    self.gui_controls[ctrl_key].value = val
 
         self._update_reset_button_visibility()
         self._toggle_model_specific_fields(update_ui=False) # Garante o estado de disabled correto
-        # if self.page: self.update()               
+        if self.page and self.uid: 
+            self.update()            
 
     def _update_reset_button_visibility(self):
         """
@@ -361,17 +374,29 @@ class BaseSettingsDrawer(ft.Column):
         configurações atuais e as padrões.
         """
         current_settings = self.page.session.get(self.session_key) or {}
-        cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
+        cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
+        defaults_to_compare = cloud_defaults if cloud_defaults else FALLBACK_ANALYSIS_SETTINGS
         reset_button = self.gui_controls.get("reset_settings_button")
         
         if not reset_button: return
 
         are_different = False
         # Compara apenas as chaves que existem em ambos, para evitar problemas
-        common_keys = set(current_settings.keys()) & set(cloud_defaults.keys())
+        common_keys = set(current_settings.keys()) & set(defaults_to_compare.keys())
         for key in common_keys:
-            if str(current_settings[key]) != str(cloud_defaults[key]):
-                logger.info(f"[DEBUG] Configuração '{key}' diferente da padrão. {current_settings[key]} != {cloud_defaults[key]}")
+            val_current = current_settings[key]
+            val_default = defaults_to_compare[key]
+            
+            # Compara floats lidando com precisão de sliders, e strings para o restante
+            if isinstance(val_default, float):
+                try:
+                    if abs(float(val_current) - val_default) > 0.001:
+                        are_different = True
+                        break
+                except (ValueError, TypeError):
+                    are_different = True
+                    break
+            elif str(val_current) != str(val_default):
                 are_different = True
                 break
         

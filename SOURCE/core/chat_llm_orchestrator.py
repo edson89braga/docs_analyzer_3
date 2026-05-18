@@ -178,6 +178,7 @@ class ChatLLMOrchestrator:
                         if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
                             content = choice.message.content
                             if content:
+                                content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL)
                                 full_response_content += content
                                 yield {"type": "chunk", "content": content}
                 
@@ -193,7 +194,7 @@ class ChatLLMOrchestrator:
                 else:
                     logger.warning("[DEBUG] Resposta do llm_pf não contém choices ou content esperados.")
                 
-                logger.info(f"[DEBUG] Resposta completa do llm_pf:\n{response.content}\n")  # Log da resposta completa (início)
+                # logger.info(f"[DEBUG] Resposta completa do llm_pf:\n{response}\n")  # Log da resposta completa (início)
 
                 final_usage_data = response.usage
 

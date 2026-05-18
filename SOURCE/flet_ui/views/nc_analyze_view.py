@@ -2183,8 +2183,10 @@ class InternalAnalysisController:
         except (ValueError, TypeError):
             current_settings['llm_temperature'] = FALLBACK_ANALYSIS_SETTINGS['llm_temperature']
         try:
+            current_settings['vectorization_model'] = current_settings.get('vectorization_model', FALLBACK_ANALYSIS_SETTINGS['vectorization_model'])
             current_settings['similarity_threshold'] = float(current_settings.get('similarity_threshold', FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']))
         except (ValueError, TypeError):
+            current_settings['vectorization_model'] =  FALLBACK_ANALYSIS_SETTINGS['vectorization_model']
             current_settings['similarity_threshold'] = FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']
         
         return current_settings
@@ -2283,7 +2285,7 @@ class InternalAnalysisController:
                 logger.info("Requisição concluída.")
 
             embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.pdf_analyzer.get_similarity_and_tfidf_score_docs(
-                                                                            all_texts_to_loop, ready_embeddings=ready_embeddings)
+                                                                            all_texts_to_loop, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
             
             point_time = perf_counter()
             self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")

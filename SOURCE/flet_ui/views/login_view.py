@@ -8,7 +8,7 @@ from SOURCE.settings import PATH_IMAGE_LOGO_DEPARTAMENTO, APP_TITLE, APP_VERSION
 
 from SOURCE.services.firebase_client import FbManagerAuth # Ajuste o caminho se FbManagerAuth estiver em outro lugar
 #from src.flet_ui.layout import show_proxy_settings_dialog
-from SOURCE.flet_ui.components.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField
+from SOURCE.flet_ui.components.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField, show_confirmation_dialog
 from SOURCE.flet_ui import theme # Para cores de erro, etc.
 from SOURCE.logger.logger import LoggerSetup
 
@@ -322,19 +322,43 @@ def create_login_view(page: ft.Page) -> ft.View:
             email_field.focus()
             return
 
-        show_loading_overlay(page, "Enviando email de redefinição...")
-        logger.info(f"Solicitando redefinição de senha para: {email_val}")
-        try:
-            success = auth_manager.send_password_reset_email(email_val)
-            hide_loading_overlay(page)
-            if success:
-                show_snackbar(page, f"Email de redefinição enviado para {email_val}. Verifique sua caixa de entrada.", color=theme.COLOR_SUCCESS, duration=7000)
-            else:
-                show_snackbar(page, "Não foi possível enviar o email de redefinição. Verifique o email ou tente mais tarde.", color=theme.COLOR_ERROR, duration=7000)
-        except Exception as ex_reset:
-            hide_loading_overlay(page)
-            logger.error(f"Erro ao solicitar redefinição de senha para {email_val}: {ex_reset}", exc_info=True)
-            show_snackbar(page, "Ocorreu um erro ao solicitar a redefinição.", color=theme.COLOR_ERROR)
+        # Função interna que efetivamente dispara o envio após confirmação
+        def proceed_reset_password():
+            show_loading_overlay(page, "Enviando email de redefinição...")
+            logger.info(f"Solicitando redefinição de senha para: {email_val}")
+            try:
+                success = auth_manager.send_password_reset_email(email_val)
+                hide_loading_overlay(page)
+                if success:
+                    show_snackbar(page, f"Email de redefinição enviado para {email_val}. Verifique sua caixa de entrada.", color=theme.COLOR_SUCCESS, duration=7000)
+                else:
+                    show_snackbar(page, "Não foi possível enviar o email de redefinição. Verifique o email ou tente mais tarde.", color=theme.COLOR_ERROR, duration=7000)
+            except Exception as ex_reset:
+                hide_loading_overlay(page)
+                logger.error(f"Erro ao solicitar redefinição de senha para {email_val}: {ex_reset}", exc_info=True)
+                show_snackbar(page, "Ocorreu um erro ao solicitar a redefinição.", color=theme.COLOR_ERROR)
+
+        # Diálogo de aviso Anti-Spam antes de prosseguir
+        dialog_content = ft.Column(
+            [
+                ft.Text("O Outlook corporativo frequentemente bloqueia os e-mails de recuperação de senha deste sistema."),
+                ft.Text(
+                    "Antes de prosseguir, envie agora mesmo um e-mail em branco para sec.cor.pf.sp@gmail.com "
+                    "Isso libera o remetente na sua conta.", weight=ft.FontWeight.BOLD
+                ),
+                ft.Text("\nVocê já enviou o e-mail em branco ou tem certeza de que deseja prosseguir?")
+            ],
+            tight=True, spacing=10
+        )
+
+        show_confirmation_dialog(
+            page=page,
+            title="Atenção:",
+            content=dialog_content,
+            confirm_text="Prosseguir",
+            cancel_text="Cancelar",
+            on_confirm=proceed_reset_password
+        )
 
     forgot_password_button = ft.TextButton(
         "Esqueci minha senha",

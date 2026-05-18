@@ -2,6 +2,11 @@
 -> >>> ssh sti@10.11.8.25 
 -> >>> Responder com password...
 
+# Para criar a imagem e exportar em .tar:
+
+>>> docker build -t nome_container .
+>>> docker save -o nome_container.tar nome_container:latest
+
 ==================================================================================================================
 # Para transferir pastas e arquivos do computador local para a VM:
 

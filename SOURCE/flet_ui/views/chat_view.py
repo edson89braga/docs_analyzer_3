@@ -1038,6 +1038,9 @@ class ChatViewContent(ft.Column):
                 logger.info("Requisitando get_embeddings_from_engine ...")
                 ready_embeddings = get_embeddings_from_engine(all_texts_list)
                 logger.info("Requisição concluída.")
+            
+            else:
+                logger.info("Chat_view: Fallback com model_embedding = tfidf_vectorizer")
                 
             emb_vectors, tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list, ready_embeddings=ready_embeddings)
             

@@ -213,6 +213,35 @@ def create_signup_view(page: ft.Page) -> ft.View:
         on_click=lambda _: page.go("/login")
     )
 
+    # --- Balão de Aviso Anti-Spam ---
+    spam_warning_balloon = ft.Container(
+        content=ft.Row(
+            [
+                ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=theme.COLOR_WARNING, size=24),
+                ft.Text(
+                    "O Outlook da PF pode bloquear e-mails de ativação de conta.\n\n"
+                    "Antes de se cadastrar, envie um e-mail em branco para: "
+                    "sec.cor.pf.sp@gmail.com; Isso libera o remetente e garante o recebimento do link de ativação.",
+                    expand=True, italic=True, size=13, selectable=True
+                ),
+                ft.IconButton(
+                    ft.Icons.CLOSE_ROUNDED,
+                    on_click=lambda e: (setattr(e.control.parent.parent, 'visible', False), e.control.parent.parent.update()),
+                    icon_size=18,
+                    tooltip="Fechar Aviso"
+                )
+            ],
+            vertical_alignment=ft.CrossAxisAlignment.START,
+            spacing=10,
+        ),
+        padding=12,
+        border_radius=8,
+        border=ft.border.all(1, theme.COLOR_WARNING),
+        bgcolor=ft.Colors.with_opacity(0.05, theme.COLOR_WARNING),
+        margin=ft.margin.only(bottom=5)
+    )
+
+
     signup_card_content = ft.Column(
         [
             ft.Text("Criar Nova Conta", size=28, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
@@ -225,6 +254,8 @@ def create_signup_view(page: ft.Page) -> ft.View:
             ft.Row([signup_button], alignment=ft.MainAxisAlignment.CENTER),
             ft.Container(height=10),
             ft.Row([login_link_button], alignment=ft.MainAxisAlignment.CENTER),
+            ft.Container(height=30),
+            spam_warning_balloon,    # Inserção do balão de aviso            
         ],
         width=400,
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,

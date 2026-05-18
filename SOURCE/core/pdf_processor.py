@@ -767,6 +767,7 @@ class PDFDocumentAnalyzer:
                     raise ValueError("Falha ao gerar vetores de embedding a partir do motor de ML.")
             else: # 'tfidf_vectorizer'
                 # Deve ser None para não causar erro no método filter_and_classify_pages ao comandar get_similarity_matrix
+                logger.info("Fallback com model_embedding = tfidf_vectorizer")
                 embedding_vectors_combined = None 
 
             tf_idf_scores_array_combined, tfidf_vectors_combined = get_tfidf_scores(all_texts_for_analysis_list)
