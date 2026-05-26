@@ -1148,8 +1148,12 @@ class ChatViewContent(ft.Column):
                 pages = analyzer.extractor.extract_texts_from_pages(pdf_path)
                 total_pages_raw += len(pages)
                 raw_pages_text_map[pdf_path] = pages
-                all_texts_concatenated.extend([text for _, text in pages])
-                total_tokens_raw += sum(count_tokens(text) for _, text in pages)
+
+                for p_idx, text in pages:
+                    header = f"Cabeçalho: [Documento: {os.path.basename(pdf_path)} | Página: {p_idx + 1}]\n\n"
+                    page_text_with_header = header + text
+                    all_texts_concatenated.append(page_text_with_header)
+                    total_tokens_raw += count_tokens(page_text_with_header)
 
             processing_metadata = {
                 "total_pages_processed": total_pages_raw,
