@@ -1042,7 +1042,7 @@ class ChatViewContent(ft.Column):
             else:
                 logger.info("Chat_view: Fallback com model_embedding = tfidf_vectorizer")
                 
-            emb_vectors, tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list, ready_embeddings=ready_embeddings)
+            emb_vectors, tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
             
              
             if tokens_embeddings:
