@@ -1091,6 +1091,8 @@ class PDFDocumentAnalyzer:
         processed_page_data: Dict[str, Dict[str, Any]], # Chave é global_page_key (str)
         relevant_page_ordered_indices: List[str], # Lista de global_page_key (str)
         token_limit: int,
+        boost_boundary_pages: bool = True,
+        boundary_ratio: float = 0.10,
     ) -> Tuple[str, str, int, int, int]: 
         """
         Agrupa textos de páginas relevantes, respeitando um limite de tokens.
@@ -1102,6 +1104,10 @@ class PDFDocumentAnalyzer:
             relevant_page_indices (List[int]): Lista de índices de páginas relevantes,
                                                já ordenadas por prioridade.
             token_limit (int): Limite máximo de tokens para o texto acumulado.
+            boost_boundary_pages (bool): Se True (padrão), re-prioriza as N primeiras e
+                N últimas páginas de cada arquivo (N proporcional ao tamanho do documento).
+            boundary_ratio (float): Fração de páginas tratada como borda em cada
+                extremidade (padrão 0.10 = 10%). Ignorado se boost_boundary_pages=False.     
             model_name_for_tokens (str, optional): Nome do modelo para contagem de tokens,
                                                    passado para count_tokens e reduce_text_to_limit.
                                                    Default é "gpt-4o".
@@ -1124,6 +1130,11 @@ class PDFDocumentAnalyzer:
         texts_for_concatenation = {}
 
         assert len(relevant_page_ordered_indices) == len(set(relevant_page_ordered_indices))
+
+        if boost_boundary_pages:
+            relevant_page_ordered_indices = _boost_boundary_page_keys(
+                relevant_page_ordered_indices, boundary_ratio=boundary_ratio
+            )
 
         limit_reached = False
         for page_idx in relevant_page_ordered_indices:
@@ -1189,6 +1200,39 @@ class PDFDocumentAnalyzer:
             logger.debug(f"Índices relevantes NÃO integram os mesmos índices do texto final agregado.\n {set(keys_of_included_texts)-set(relevant_page_ordered_indices)}\n")
 
         return keys_of_included_texts, accumulated_text, total_tokens_before_filter, total_tokens_before_truncation, final_aggregated_tokens
+
+def _boost_boundary_page_keys(
+    ordered_keys: list[str],
+    boost_factor: float = 1.5,
+    boundary_ratio: float = 0.10,
+) -> list[str]:
+    """Reordena `ordered_keys` dando prioridade às N primeiras e N últimas páginas
+    de cada arquivo, onde N = max(3, min(10, round(len(sorted_p) * boundary_ratio))).
+    Formato esperado: ``"file{file_idx}_page{page_idx}"``.
+    """
+    def _parse(k: str) -> tuple[int, int]:
+        parts = k.replace("file", "").replace("page", "").split("_")
+        return int(parts[0]), int(parts[1])
+
+    file_pages: dict[int, set[int]] = {}
+    for k in ordered_keys:
+        fi, pi = _parse(k)
+        file_pages.setdefault(fi, set()).add(pi)
+
+    boundary: set[str] = set()
+    for fi, pages in file_pages.items():
+        sorted_p = sorted(pages)
+        n = max(3, min(10, round(len(sorted_p) * boundary_ratio)))
+        boundary_nums = set(sorted_p[:n]) | set(sorted_p[-n:])
+        for k in ordered_keys:
+            fk, pk = _parse(k)
+            if fk == fi and pk in boundary_nums:
+                boundary.add(k)
+
+    total = len(ordered_keys)
+    pos_scores = {k: total - i for i, k in enumerate(ordered_keys)}
+    eff_scores = {k: s * (boost_factor if k in boundary else 1.0) for k, s in pos_scores.items()}
+    return sorted(ordered_keys, key=lambda k: eff_scores[k], reverse=True)
 
 execution_time = perf_counter() - start_time
 logger.info(f"[DEBUG] Carregado PDF_PROCESSOR em {execution_time:.4f}s")
