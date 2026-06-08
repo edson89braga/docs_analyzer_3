@@ -1132,9 +1132,12 @@ class PDFDocumentAnalyzer:
         assert len(relevant_page_ordered_indices) == len(set(relevant_page_ordered_indices))
 
         if boost_boundary_pages:
-            relevant_page_ordered_indices = _boost_boundary_page_keys(
+            logger.info("Re-priorizando páginas de borda (início/fim de cada documento) antes de aplicar o limite de tokens...")
+            boundary_keys, middle_keys = _boundary_page_keys(
                 relevant_page_ordered_indices, boundary_ratio=boundary_ratio
             )
+            relevant_page_ordered_indices = boundary_keys + middle_keys            
+            #logger.info(f"[DEBUG] -> {len(relevant_page_ordered_indices)} páginas relevantes após boost de borda. Ordem das chaves: {relevant_page_ordered_indices}")
 
         limit_reached = False
         for page_idx in relevant_page_ordered_indices:
@@ -1201,15 +1204,11 @@ class PDFDocumentAnalyzer:
 
         return keys_of_included_texts, accumulated_text, total_tokens_before_filter, total_tokens_before_truncation, final_aggregated_tokens
 
-def _boost_boundary_page_keys(
+def _boundary_page_keys(
     ordered_keys: list[str],
-    boost_factor: float = 1.5,
     boundary_ratio: float = 0.10,
-) -> list[str]:
-    """Reordena `ordered_keys` dando prioridade às N primeiras e N últimas páginas
-    de cada arquivo, onde N = max(3, min(10, round(len(sorted_p) * boundary_ratio))).
-    Formato esperado: ``"file{file_idx}_page{page_idx}"``.
-    """
+) -> tuple[list[str], list[str]]:
+    """Separa `ordered_keys` em (borda, meio), cada grupo ordenado por posição original."""
     def _parse(k: str) -> tuple[int, int]:
         parts = k.replace("file", "").replace("page", "").split("_")
         return int(parts[0]), int(parts[1])
@@ -1229,10 +1228,10 @@ def _boost_boundary_page_keys(
             if fk == fi and pk in boundary_nums:
                 boundary.add(k)
 
-    total = len(ordered_keys)
-    pos_scores = {k: total - i for i, k in enumerate(ordered_keys)}
-    eff_scores = {k: s * (boost_factor if k in boundary else 1.0) for k, s in pos_scores.items()}
-    return sorted(ordered_keys, key=lambda k: eff_scores[k], reverse=True)
+    # Mantém ordem original (posicional) dentro de cada grupo
+    boundary_keys = [k for k in ordered_keys if k in boundary]
+    middle_keys   = [k for k in ordered_keys if k not in boundary]
+    return boundary_keys, middle_keys
 
 execution_time = perf_counter() - start_time
 logger.info(f"[DEBUG] Carregado PDF_PROCESSOR em {execution_time:.4f}s")
