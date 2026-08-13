@@ -2,7 +2,7 @@
 import flet as ft
 from typing import Dict, Any, Optional, List, Callable
 from SOURCE.services.local_db_manager import LocalDBManager
-from SOURCE.flet_ui.components.components import show_snackbar, ManagedAlertDialog
+from SOURCE.flet_ui.components.components import show_snackbar, ManagedAlertDialog, safe_control_update
 from SOURCE.flet_ui import theme
 from SOURCE.settings import (
     KEY_SESSION_NC_ANALYZE_SETTINGS,
@@ -376,8 +376,7 @@ class BaseSettingsDrawer(ft.Column):
 
         self._update_reset_button_visibility()
         self._toggle_model_specific_fields(update_ui=False) # Garante o estado de disabled correto
-        if self.page and self.uid: 
-            self.update()            
+        safe_control_update(self)
 
     def _update_reset_button_visibility(self):
         """

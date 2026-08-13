@@ -5,7 +5,7 @@ from typing import List, Dict, Any, Optional, Callable, Tuple
 import flet as ft
 
 from SOURCE.flet_ui import theme
-from SOURCE.flet_ui.components.components import ManagedFilePicker
+from SOURCE.flet_ui.components.components import ManagedFilePicker, safe_control_update
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,13 @@ class FileListManager(ft.Column):
     def update_display(self, files_ordered: Optional[List[Dict[str, Any]]] = None):
         """Atualiza a exibição da lista de arquivos na UI."""
         self.file_list_view.controls.clear()
-        _files = files_ordered if files_ordered is not None else self.page.session.get(self.session_key_files_ordered) or []
+        if files_ordered is not None:
+            _files = files_ordered
+        elif self.page:
+            _files = self.page.session.get(self.session_key_files_ordered) or []
+        else:
+            # Componente já desmontado (Flet anula 'page'): não há sessão para consultar.
+            _files = []
 
         if not _files:
             self.title_text.value = "Nenhum arquivo carregado."
@@ -100,8 +106,7 @@ class FileListManager(ft.Column):
             else:
                 self.title_text.value = f"Arquivos selecionados: {_files[0]['name']} e Outros {len(_files)-1}"
 
-        if self.page and self.uid:
-            self.update()
+        safe_control_update(self)
 
     def _move_file_in_list(self, index: int, direction: int):
         """Move um arquivo na lista e aciona o callback de alteração."""
@@ -140,20 +145,17 @@ class FileListManager(ft.Column):
         else:
             self.metadata_content.visible = False
 
-        if self.page and self.uid:
-            self.metadata_content.update()
+        safe_control_update(self.metadata_content)
 
     def collapse_container(self):
         if self.panel_list.controls:
             self.panel_list.controls[0].expanded = False
-        if self.page and self.uid:    
-            self.panel_list.update()
+        safe_control_update(self.panel_list)
 
     def expand_container(self):
         if self.panel_list.controls:
             self.panel_list.controls[0].expanded = True
-        if self.page and self.uid:
-            self.panel_list.update()
+        safe_control_update(self.panel_list)
 
     def disable_interactions(self):
         if self.file_list_view.page and self.file_list_view.uid:
@@ -161,12 +163,12 @@ class FileListManager(ft.Column):
                 # tile.leading.disabled = True
                 for btn in tile.trailing.controls:
                     btn.disabled = True
-            self.file_list_view.update()
-    
+            safe_control_update(self.file_list_view)
+
     def enable_interactions(self):
         if self.file_list_view.page and self.file_list_view.uid:
             for tile in self.file_list_view.controls:
                 # tile.leading.disabled = False
                 for btn in tile.trailing.controls:
                     btn.disabled = False
-            self.file_list_view.update()
+            safe_control_update(self.file_list_view)

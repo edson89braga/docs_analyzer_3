@@ -17,6 +17,108 @@ import os, shutil, time, threading
 from SOURCE.flet_ui import theme
 from SOURCE.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
 
+### Atualizações de UI serializadas: -----------------------------------------------------------------------
+
+UPDATE_LOCK_TIMEOUT_SECONDS: float = 5.0
+"""Tempo máximo de espera pelo lock global antes de atualizar sem serialização."""
+
+
+def _run_update_serialized(page: Optional[ft.Page], flush: Callable[[], None], context: str) -> bool:
+    """
+    Executa um flush de UI serializado por `page.data["global_update_lock"]`.
+
+    Sem serialização, duas threads podem executar `build_update_commands` sobre a
+    mesma árvore de controles ao mesmo tempo, corrompendo o bookkeeping interno do
+    Flet (atribuição de `uid` e `__previous_children`) — o que se manifesta como
+    `AssertionError: assert self.__uid is not None` no meio de um `update()`.
+
+    O lock é adquirido com timeout deliberadamente: manter o lock global em torno de
+    operações de UI já causou deadlock neste app (ver "FIX 1" em `router.py`, onde
+    `page.update()` foi movido para fora do `with update_lock`). Se o lock não for
+    obtido a tempo, o flush segue sem serialização — degrada para o comportamento
+    anterior em vez de congelar a sessão do usuário. O lock é um `RLock`
+    (ver `app.py`), então reentrância na mesma thread não bloqueia.
+
+    Args:
+        page (Optional[ft.Page]): Página dona do lock. Se None, o flush é ignorado.
+        flush (Callable[[], None]): Operação de atualização a executar (sem argumentos).
+        context (str): Identificação do chamador, usada apenas nas mensagens de log.
+
+    Returns:
+        bool: True se o flush foi executado com sucesso; False se foi ignorado
+              (página ausente) ou abortado por árvore de UI inválida.
+    """
+    if page is None:
+        return False
+
+    lock = page.data.get("global_update_lock") if isinstance(page.data, dict) else None
+    acquired = lock.acquire(timeout=UPDATE_LOCK_TIMEOUT_SECONDS) if lock else False
+    if lock and not acquired:
+        logger.warning(
+            f"Lock global de UI não obtido em {UPDATE_LOCK_TIMEOUT_SECONDS}s para '{context}'. "
+            "Atualizando sem serialização."
+        )
+
+    try:
+        flush()
+        return True
+    except (AssertionError, ft.PageDisconnectedException) as ex_update:
+        logger.warning(
+            f"Atualização de UI ignorada em '{context}' ({type(ex_update).__name__}): "
+            "controle não está mais válido na página ou a sessão foi desconectada."
+        )
+        return False
+    finally:
+        if acquired:
+            lock.release()
+
+
+def safe_control_update(control: Optional[ft.Control]) -> bool:
+    """
+    Atualiza um controle de forma serializada e tolerante a árvores desmontadas.
+
+    Substitui o idioma `if ctl.page and ctl.uid: ctl.update()` espalhado pelas views,
+    acrescentando a serialização sob o lock global e o tratamento das exceções que o
+    Flet levanta quando a árvore não é mais válida. Indispensável em métodos acionados
+    por threads de background, que podem executar depois de o usuário navegar para
+    outra view — o Flet anula `page` dos controles removidos em
+    `Page.__handle_mount_unmount`, mas mantém `uid` obsoletos.
+
+    Args:
+        control (Optional[ft.Control]): Controle a atualizar. Ignorado se None, sem
+            `page` (desmontado) ou sem `uid` (nunca enviado ao cliente).
+
+    Returns:
+        bool: True se o update foi enviado ao cliente; False se foi ignorado ou falhou.
+
+        Exemplo de uso:
+        if safe_control_update(self.status_text):
+            logger.debug("Status refletido na UI.")
+    """
+    if control is None or not control.page or not control.uid:
+        return False
+
+    return _run_update_serialized(control.page, control.update, type(control).__name__)
+
+
+def safe_page_update(page: Optional[ft.Page], *controls: ft.Control) -> bool:
+    """
+    Executa `page.update()` (ou `page.update(*controls)`) de forma serializada.
+
+    Args:
+        page (Optional[ft.Page]): Página a atualizar. Ignorada se None.
+        *controls (ft.Control): Controles específicos a atualizar. Sem argumentos,
+            atualiza a página inteira.
+
+    Returns:
+        bool: True se o update foi enviado ao cliente; False se foi ignorado ou falhou.
+    """
+    if page is None:
+        return False
+
+    return _run_update_serialized(page, lambda: page.update(*controls), "page.update")
+
+
 ### SnackBar global: ---------------------------------------------------------------------------------------
 
 def show_snackbar(page: ft.Page, message: str, color: str = theme.COLOR_INFO, duration: int = 5000):
@@ -41,11 +143,8 @@ def show_snackbar(page: ft.Page, message: str, color: str = theme.COLOR_INFO, du
     snackbar_instance.duration = duration
     snackbar_instance.open = True
     #threading.Timer(0.1, page.update).start()
-    
-    update_lock = page.data.get("global_update_lock")
-    if update_lock:
-        with update_lock: page.update()
-    else: page.update()
+
+    safe_page_update(page)
 
 ### Dialog in Overlay: ---------------------------------------------------------------------------------------
 
@@ -62,10 +161,7 @@ def show_confirmation_dialog(
 
     def close_dialog(e):
         confirm_dialog.open = False
-        update_lock = page.data.get("global_update_lock")
-        if update_lock:
-            with update_lock: page.update()
-        else: page.update()
+        safe_page_update(page)
         page.overlay.remove(confirm_dialog) # Remove do overlay ao fechar
         
         if hasattr(e.control, 'data') and e.control.data == "confirm" and on_confirm:
@@ -84,10 +180,7 @@ def show_confirmation_dialog(
 
     page.overlay.append(confirm_dialog) # Adiciona ao overlay
     confirm_dialog.open = True
-    update_lock = page.data.get("global_update_lock")
-    if update_lock:
-        with update_lock: page.update()
-    else: page.update()
+    safe_page_update(page)
 
 ### SelectionDialog: ---------------------------------------------------------------------------------------
 
@@ -276,10 +369,7 @@ class DataTableWrapper(ft.Column):
         self.next_button.disabled = self.current_page == total_pages
 
         if self.page:
-            update_lock = self.page.data.get("global_update_lock")
-            if update_lock:
-                with update_lock: self.page.update()
-            else: self.page.update()
+            safe_page_update(self.page)
 
     # --- Métodos restantes (filtros, handlers, update_data) ---
     # A busca agora usa as chaves originais fornecidas
@@ -368,9 +458,13 @@ def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."
     Exibe um overlay de carregamento global na página.
 
     Args:
-        page: A instância da página Flet.
+        page: A instância da página Flet. Se None (view já desmontada), nada é feito.
         message: A mensagem a ser exibida no indicador de carregamento.
     """
+    if page is None:
+        logger.debug("show_loading_overlay ignorado: referência de página indisponível.")
+        return
+
     loading_overlay_instance = page.data.get("global_loading_overlay")
     loading_text_instance = page.data.get("global_loading_text")
 
@@ -382,18 +476,19 @@ def show_loading_overlay(page: ft.Page, message: str = "Processando, aguarde..."
 
     loading_text_instance.value = message
     loading_overlay_instance.visible = True
-    update_lock = page.data.get("global_update_lock")
-    if update_lock:
-        with update_lock: page.update()
-    else: page.update()
+    safe_page_update(page)
 
 def hide_loading_overlay(page: ft.Page):
     """
     Oculta o overlay de carregamento global na página.
 
     Args:
-        page: A instância da página Flet.
+        page: A instância da página Flet. Se None (view já desmontada), nada é feito.
     """
+    if page is None:
+        logger.debug("hide_loading_overlay ignorado: referência de página indisponível.")
+        return
+
     loading_overlay_instance = page.data.get("global_loading_overlay")
     if not isinstance(loading_overlay_instance, ft.Container):
         logger.error("hide_loading_overlay: Instância do LoadingOverlay não encontrada ou inválida em page.data.")
@@ -401,10 +496,7 @@ def hide_loading_overlay(page: ft.Page):
 
     if loading_overlay_instance.visible: # Só atualiza se estiver visível
         loading_overlay_instance.visible = False
-        update_lock = page.data.get("global_update_lock")
-        if update_lock:
-            with update_lock: page.update()
-        else: page.update()
+        safe_page_update(page)
 
 ### ValidatedTextField: ---------------------------------------------------------------------------------------
 
@@ -487,10 +579,7 @@ class ValidatedTextField(ft.Column):
         if hasattr(self, 'text_field') and self.text_field:
             self.text_field.disabled = value
             if self.page:
-                update_lock = self.page.data.get("global_update_lock")
-                if update_lock:
-                    with update_lock: self.page.update()
-                else: self.page.update()
+                safe_page_update(self.page)
 
     def _handle_change(self, e: ft.ControlEvent):
         """
@@ -792,10 +881,7 @@ class ManagedFilePicker:
                     # self.file_picker.upload([ft.FilePickerUploadFile(id=file_name, name=file_name, upload_url=upload_url)])
                     self.file_picker.upload([ft.FilePickerUploadFile(name=file_name, upload_url=upload_url)])
                     
-                    update_lock = self.page.data.get("global_update_lock")
-                    if update_lock:
-                        with update_lock: self.page.update()
-                    else: self.page.update()
+                    safe_page_update(self.page)
                     
                     logger.info(f"page.update() chamado após file_picker.upload() para '{file_name}'.")
                 except Exception as ex:
@@ -1036,10 +1122,7 @@ def reopen_parent_dialog(
 
         parent_dialog.open = True
         # Atualiza a página inteira para garantir que o pai e quaisquer mudanças sejam renderizadas:
-        update_lock = page.data.get("global_update_lock")
-        if update_lock:
-            with update_lock: page.update()
-        else: page.update()
+        safe_page_update(page)
 
     threading.Timer(delay, _reopen_parent_action).start()
 
@@ -1581,10 +1664,7 @@ class SearchableDropdown(ft.Column):
 
         if self.page:
             # Atualiza a página para mostrar o overlay
-            update_lock = self.page.data.get("global_update_lock")
-            if update_lock:
-                with update_lock: self.page.update()
-            else: self.page.update()
+            safe_page_update(self.page)
 
     def _close_dropdown_list(self):
         """
@@ -1601,10 +1681,7 @@ class SearchableDropdown(ft.Column):
 
         if self.page:
             # Atualiza para remover/esconder o overlay
-            update_lock = self.page.data.get("global_update_lock")
-            if update_lock:
-                with update_lock: self.page.update()
-            else: self.page.update()
+            safe_page_update(self.page)
 
     def _toggle_dropdown_list(self, e: ft.ControlEvent):
         """
@@ -1789,10 +1866,7 @@ class ProgressSteps(ft.Row):
                 self.controls.append(ft.Row([connector], expand=True, alignment=ft.MainAxisAlignment.CENTER)) # Para centralizar
 
         if self.page:
-            update_lock = self.page.data.get("global_update_lock")
-            if update_lock:
-                with update_lock: self.page.update()
-            else: self.page.update()
+            safe_page_update(self.page)
 
     def _handle_step_click(self, e: ft.ControlEvent):
         """
@@ -1965,10 +2039,7 @@ class ManagedAlertDialog(ft.AlertDialog):
                 show_snackbar(self.page_ref, "Ocorreu um erro após fechar o diálogo.", color=theme.COLOR_ERROR)
                 
         elif self in self.page_ref.overlay: # Se foi removido e não há callback, um update pode ser necessário
-            update_lock = self.page_ref.data.get("global_update_lock")
-            if update_lock:
-                with update_lock: self.page_ref.update()
-            else: self.page_ref.update()
+            safe_page_update(self.page_ref)
 
     def show(self):
         """Adiciona ao overlay (se não estiver) e abre o diálogo."""
@@ -1976,10 +2047,7 @@ class ManagedAlertDialog(ft.AlertDialog):
             self.page_ref.overlay.append(self)
         self.open = True
         # Atualiza para mostrar/trazer para frente
-        update_lock = self.page_ref.data.get("global_update_lock")
-        if update_lock:
-            with update_lock: self.page_ref.update()
-        else: self.page_ref.update()
+        safe_page_update(self.page_ref)
         logger.debug(f"ManagedAlertDialog '{self.title.value if isinstance(self.title, ft.Text) else ''}' ABERTO.")
 
     # Método para fechar programaticamente sem passar por um botão (ex: de um callback interno)

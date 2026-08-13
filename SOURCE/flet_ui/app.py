@@ -383,7 +383,11 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
     if page.data is None:
         page.data = {}
     
-    page.data["global_update_lock"] = threading.Lock()
+    # RLock (e não Lock): o mesmo thread pode reentrar no lock legitimamente — por
+    # exemplo, `page.add()` dentro de uma seção crítica dispara `did_mount()` das
+    # views, que por sua vez atualizam seus próprios controles via safe_control_update.
+    # Com Lock simples isso travaria a própria thread até o timeout.
+    page.data["global_update_lock"] = threading.RLock()
     
     # Adiciona ao overlay uma única vez.
     page_file_picker = ft.FilePicker()

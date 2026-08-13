@@ -12,7 +12,7 @@ from SOURCE.flet_ui.components.components import (
     show_loading_overlay,
     hide_loading_overlay,
     CardWithHeader,
-    wrapper_cotainer_1
+    wrapper_cotainer_1, safe_control_update
 )
 from SOURCE.flet_ui import theme
 from SOURCE.flet_ui.theme import WIDTH_CONTAINER_CONFIGS
@@ -115,10 +115,9 @@ class LLMConfigCard(CardWithHeader):
         self.api_key_field.hint_text = api_key_hint
         self.api_key_field.value = "" # Sempre limpa o campo de input
 
-        if self.page and self.uid:
-            self.status_text.update()
-            self.key_configured_icon.update()
-            self.api_key_field.update()
+        safe_control_update(self.status_text)
+        safe_control_update(self.key_configured_icon)
+        safe_control_update(self.api_key_field)
 
     def _get_session_key_for_decrypted_api_key(self) -> str:
         """
@@ -460,8 +459,7 @@ class LLMSettingsViewContent(ft.Column):
             self.status_preferences_text.value = "Nenhuma preferência LLM padrão foi salva ainda."
             self.status_preferences_text.color = theme.COLOR_INFO
 
-        if self.page and self.status_preferences_text.uid : # Garante que o controle existe e está na página
-            self.status_preferences_text.update()
+        safe_control_update(self.status_preferences_text)
 
     def did_mount(self):
         """
@@ -485,8 +483,7 @@ class LLMSettingsViewContent(ft.Column):
             is_configured (bool): True se a chave estiver configurada, False caso contrário.
         """
         self.save_preferences_button.disabled = self._are_preferences_unchanged()
-        if self.page and self.save_preferences_button.uid :
-            self.save_preferences_button.update()
+        safe_control_update(self.save_preferences_button)
 
     def _update_provider_cards_from_session(self): # Renomeado
         """
@@ -731,7 +728,7 @@ class LLMSettingsViewContent(ft.Column):
             logger.info(f"Preferências de LLM salvas e aplicadas à sessão atual para usuário {user_id}: {new_preferences}")
 
             self.save_preferences_button.disabled = True
-            if self.page and self.save_preferences_button.uid: self.save_preferences_button.update()
+            safe_control_update(self.save_preferences_button)
             self._update_status_preferences_display()
             show_snackbar(self.page, "Preferências de LLM padrão salvas com sucesso!", color=theme.COLOR_SUCCESS)
 

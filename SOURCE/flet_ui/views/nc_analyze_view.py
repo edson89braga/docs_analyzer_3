@@ -20,6 +20,7 @@ from SOURCE.flet_ui.components.components import (
     show_snackbar, show_loading_overlay, hide_loading_overlay,
     ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable,
     CardWithHeader, show_confirmation_dialog, ReadOnlySelectableTextField,
+    safe_control_update, safe_page_update,
 )
 
 from SOURCE.flet_ui.components.file_list_manager import FileListManager
@@ -179,13 +180,35 @@ class AnalyzePDFViewContent(ft.Column):
         self._is_mounted = False
         self.page = None
 
+    def _is_view_usable(self) -> bool:
+        """
+        Indica se a view ainda pode tocar a UI/sessão com segurança.
+
+        Necessário porque as threads de processamento e de análise LLM (e os
+        callbacks que elas agendam via `page.run_thread`) podem concluir depois de
+        o usuário navegar para outra view. Nesse momento `will_unmount` — e o
+        próprio Flet, em `Page.__handle_mount_unmount` — já anularam `self.page`.
+
+        Returns:
+            True se a view está montada e com referência válida à página.
+        """
+        return bool(self._is_mounted and self.page)
+
     def _remove_data_session(self, key: str):
         """
         Remove um dado específico da sessão da página, se existir.
 
+        Não faz nada se a view já tiver sido desmontada (sem `page`, não há sessão
+        acessível) — o método é chamado também a partir da thread de análise LLM,
+        que pode terminar após o usuário sair da view.
+
         Args:
             key (str): A chave do dado a ser removido da sessão.
         """
+        if not self.page:
+            logger.debug(f"_remove_data_session ignorado para '{key}': view desmontada.")
+            return
+
         if self.page.session.contains_key(key):
             self.page.session.remove(key)
 
@@ -489,7 +512,7 @@ class AnalyzePDFViewContent(ft.Column):
         # A ação primária é resetar os resultados, já que a fonte de dados mudou.
         def primary_action():
             self._reset_processing_and_llm_results()
-            self.page.update()
+            safe_page_update(self.page)
 
         # Se houver uma análise LLM (que será invalidada), o fluxo de feedback é acionado.
         # O contexto da ação é genérico, pois pode ser uma remoção ou reordenação.
@@ -602,9 +625,7 @@ class AnalyzePDFViewContent(ft.Column):
             
             self.file_list_manager.expand_container()
 
-            update_lock = _page.data.get("global_update_lock")
-            with update_lock:
-                _page.update()
+            safe_page_update(_page)
         
         def primary_upload_action():
             if self.managed_file_picker:
@@ -829,8 +850,7 @@ class AnalyzePDFViewContent(ft.Column):
         manage_templates_item.on_click = self.export_manager.handle_export_selected # Mesmo handler, que tratará 'manage_templates'
         export_button.items.append(manage_templates_item)
             
-        if export_button.page and export_button.uid:
-            export_button.update()
+        safe_control_update(export_button)
 
     def _handle_toggle_settings_drawer(self, e: Optional[ft.ControlEvent] = None):
         """
@@ -949,6 +969,10 @@ class AnalyzePDFViewContent(ft.Column):
         
     def _restore_original_prompts_and_notify(self):
         """Restaura o prompt original removendo a versão editada do cache."""
+        if not self._is_view_usable():
+            logger.debug("_restore_original_prompts_and_notify ignorado: view não montada ou page inválida.")
+            return
+
         logger.info("Restaurando prompt original após análise com versão editada.")
         self.user_cache = get_user_cache(self.page)
         if self.user_cache.pop(KEY_USER_CACHE_PROMPTS_EDITED_DATA, None):
@@ -975,8 +999,7 @@ class AnalyzePDFViewContent(ft.Column):
         button = self.gui_controls.get(CTL_TEXT_MODEL_BTN)
         if isinstance(button, ft.TextButton):
             button.text = f"Modelo: {model_name}"
-            if button.page and button.uid:
-                button.update()
+            safe_control_update(button)
         logger.debug(f"Botão de modelo ativo atualizado para: {model_name}")
 
     def _update_button_states(self):
@@ -986,8 +1009,12 @@ class AnalyzePDFViewContent(ft.Column):
         Os botões são habilitados ou desabilitados dinamicamente para guiar o usuário
         através do fluxo de trabalho (carregar, processar, analisar, exportar).
         """
+        if not self._is_view_usable():
+            logger.debug("_update_button_states ignorado: view não montada ou page inválida.")
+            return
+
         barra_main_btns = [CTL_UPLOAD_BTN, CTL_PROCESS_BTN, CTL_ANALYZE_BTN, CTL_PROMPT_STRUCT_BTN, CTL_RESTART_BTN, CTL_EXPORT_BTN, CTL_SETTINGS_BTN]
-        
+
         if self._is_prompt_view_active:
             for key in barra_main_btns:
                 if key in self.gui_controls and key != CTL_PROMPT_STRUCT_BTN:
@@ -995,9 +1022,8 @@ class AnalyzePDFViewContent(ft.Column):
                 elif key in self.gui_controls and key == CTL_PROMPT_STRUCT_BTN:
                     self.gui_controls[key].disabled = False
                     
-                if self.gui_controls[key].page and self.gui_controls[key].uid:
-                    self.gui_controls[key].update()
-            
+                safe_control_update(self.gui_controls[key])
+
             logger.debug("Estados dos botões atualizados (Prompt View Ativa).")
             return # Termina aqui se a visualização do prompt estiver ativa
 
@@ -1032,11 +1058,10 @@ class AnalyzePDFViewContent(ft.Column):
         # Força atualização dos botões
         llm_btns = [CTL_LLM_STATUS_INFO, CTL_LLM_STRUCTURED_RESULT_DISPLAY]
         for btn_key in barra_main_btns + llm_btns:
-            if btn_key in self.gui_controls and self.gui_controls[btn_key].page and self.gui_controls[btn_key].uid:
-                self.gui_controls[btn_key].update()
+            if btn_key in self.gui_controls:
+                safe_control_update(self.gui_controls[btn_key])
 
-        if self.llm_result_title.page and self.llm_result_title.uid:
-            self.llm_result_title.update()
+        safe_control_update(self.llm_result_title)
 
         logger.debug("Estados dos botões atualizados.")
 
@@ -1048,6 +1073,10 @@ class AnalyzePDFViewContent(ft.Column):
             proc_meta (Optional[Dict[str, Any]]): Dicionário opcional contendo os metadados a serem exibidos.
                                                   Se None, tenta obter da sessão.
         """
+        if not self._is_view_usable():
+            logger.debug("_update_processing_metadata_display ignorado: view não montada ou page inválida.")
+            return
+
         metadata_to_display = proc_meta or self.page.session.get(KEY_SESSION_PROCESSING_METADATA)
         
         if not metadata_to_display:
@@ -1210,11 +1239,9 @@ class AnalyzePDFViewContent(ft.Column):
                 )
                 content_area.controls.append(ft.Container(metadata_table, padding=ft.padding.only(left=30, bottom=10)))
             
-            if self.gui_controls[CTL_LLM_METADATA_PANEL].page and self.gui_controls[CTL_LLM_METADATA_PANEL].uid:
-                self.gui_controls[CTL_LLM_METADATA_PANEL].update()
- 
-        if content_area.page and content_area.uid:
-            content_area.update()
+            safe_control_update(self.gui_controls[CTL_LLM_METADATA_PANEL])
+
+        safe_control_update(content_area)
         logger.debug("Procedido: _update_llm_metadata_display")
 
     def _show_info_balloon_or_result(self, show_balloon: bool, result_data: Optional[Union[str, formatted_initial_analysis]] = None,
@@ -1261,8 +1288,7 @@ class AnalyzePDFViewContent(ft.Column):
         
         # Atualiza o container que contém o Stack e outros elementos
         for ctl in [self.llm_result_container, warning_balloon, structured_result]:
-            if ctl.page and ctl.uid:
-                ctl.update()
+            safe_control_update(ctl)
         logger.debug("Procedido: _show_info_balloon_or_result")
 
     def _reset_processing_and_llm_results(self):
@@ -1321,9 +1347,9 @@ class AnalyzePDFViewContent(ft.Column):
         que a interface reflita o estado mais recente dos dados e configurações.
         """
         logger.debug("Atualizando GUI a partir do estado da sessão...")
-        if not self._is_mounted or not self.page:
+        if not self._is_view_usable():
             logger.debug("_update_gui_from_state ignorado: view não montada ou page inválida.")
-            return        
+            return
         hide_loading_overlay(self.page)
 
         # Lógica de carregamento: Prioriza a chave da view, depois a compartilhada.
@@ -1513,8 +1539,8 @@ class LLMStructuredResultDisplay(ft.Column):
                 self.dropdown_municipio_origem.options = []
                 self.dropdown_municipio_origem.value = None
  
-            if e is not None and self.page and self.dropdown_municipio_origem.uid: # 'e' indica chamada por evento de usuário
-                self.dropdown_municipio_origem.update()
+            if e is not None: # 'e' indica chamada por evento de usuário
+                safe_control_update(self.dropdown_municipio_origem)
  
     def _atualizar_municipios_fato(self, e: Optional[ft.ControlEvent] = None):
         """
@@ -1535,8 +1561,8 @@ class LLMStructuredResultDisplay(ft.Column):
                 self.dropdown_municipio_fato.options = []
                 self.dropdown_municipio_fato.value = None
             
-            if e is not None and self.page and self.dropdown_municipio_fato.uid: # 'e' indica chamada por evento de usuário
-                self.dropdown_municipio_fato.update()
+            if e is not None: # 'e' indica chamada por evento de usuário
+                safe_control_update(self.dropdown_municipio_fato)
  
     def update_data(self, data_to_display_in_gui: formatted_initial_analysis, is_new_llm_response: bool = False):
         """
@@ -1558,13 +1584,8 @@ class LLMStructuredResultDisplay(ft.Column):
             self.user_cache[KEY_SESSION_PDF_LLM_RESPONSE_SNAPSHOT_FOR_FEEDBACK] = None
             self.controls.clear()
             self.gui_fields.clear()
-            
-            update_lock = self.page.data.get("global_update_lock")
-            if update_lock:
-                with update_lock:
-                    if self.page and self.uid: self.update()
-            else:
-                if self.page and self.uid: self.update()
+
+            safe_control_update(self)
             return
 
         # 1. Define self.data (o que será usado para construir/atualizar a UI)
@@ -1607,12 +1628,7 @@ class LLMStructuredResultDisplay(ft.Column):
         self._create_classification_card()
         self._create_observations_card()
 
-        update_lock = self.page.data.get("global_update_lock")
-        if update_lock:
-            with update_lock:
-                if self.page and self.uid: self.update()
-        else:
-            if self.page and self.uid: self.update()
+        safe_control_update(self)
 
     def _create_field_with_icon(self, field_control, justificativa_text):
         """Cria um campo com ícone de justificativa de forma consistente."""
@@ -2219,11 +2235,10 @@ class InternalAnalysisController:
         if not only_txt:
             show_loading_overlay(self.page, text)
         
-        if txt_to_update.page and txt_to_update.uid:
-            txt_to_update.value = text
-            txt_to_update.color = theme.COLOR_ERROR if is_error else None
-            txt_to_update.weight = ft.FontWeight.BOLD if is_error else ft.FontWeight.NORMAL
-            txt_to_update.update()
+        txt_to_update.value = text
+        txt_to_update.color = theme.COLOR_ERROR if is_error else None
+        txt_to_update.weight = ft.FontWeight.BOLD if is_error else ft.FontWeight.NORMAL
+        safe_control_update(txt_to_update)
         
     def _pdf_processing_thread_func(self, pdf_paths: List[str], batch_name: str, analyze_llm_after: bool, is_reanalysis: bool = False):
         """
@@ -2411,9 +2426,12 @@ class InternalAnalysisController:
             self.page.run_thread(self._update_status_callback, f"Erro ao processar PDFs: {ex_proc}", True, True)
             self.parent_view._files_processed = False # Falhou
         finally:
-            if not self.parent_view._is_mounted or not self.page:
-                return            
+            # Overlay é global da página: escondido antes da checagem de montagem para
+            # não ficar preso na tela caso o usuário tenha navegado durante o processamento.
             hide_loading_overlay(self.page)
+            if not self.parent_view._is_mounted or not self.parent_view.page:
+                logger.debug("Finalização de _pdf_processing_thread_func ignorada: view desmontada.")
+                return
             # Garante que, mesmo em erro, os botões sejam reavaliados.
             # Se a análise não prosseguir para a LLM, a atualização da UI já foi feita no try.
             if not analyze_llm_after:
@@ -2640,13 +2658,22 @@ class InternalAnalysisController:
                 self.page.run_thread(show_snackbar, self.page,
                                      "Erro inesperado na consulta à LLM.", theme.COLOR_ERROR)            
         finally:
+            # O overlay é global da página (não da view), então é escondido antes de
+            # qualquer checagem de montagem — senão ficaria preso na tela se o usuário
+            # tivesse navegado para outra view durante a análise.
+            hide_loading_overlay(self.page)
+
+            # Só a partir daqui tocamos em controles da view: se ela já foi desmontada,
+            # os controles não têm mais 'uid'/'page' válidos e o Flet lança AssertionError,
+            # matando esta thread.
+            if not self.parent_view._is_mounted or not self.parent_view.page:
+                logger.debug("Finalização de _llm_analysis_thread_func ignorada: view desmontada.")
+                return
+
             self.parent_view.file_list_manager.collapse_container()
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
             # self.gui_controls[CTL_LLM_METADATA_PANEL].controls[0].expanded = True
             # self.gui_controls[CTL_LLM_METADATA_PANEL].update()
-            if not self.parent_view._is_mounted or not self.page:
-                return            
-            hide_loading_overlay(self.page)
             # A atualização da GUI já foi tratada dentro do try/except, não precisa aqui.
  
     def start_pdf_processing_only(self, pdf_paths: List[str], batch_name: str):
@@ -2878,7 +2905,7 @@ class InternalExportManager:
             shutil.copy2(source_path, destination_path)
             show_snackbar(self.page, f"Template '{original_filename}' adicionado!", theme.COLOR_SUCCESS)
             self.parent_view._update_export_button_menu() # Acessa via parent_view
-            if self.page: self.page.update()
+            safe_page_update(self.page)
         except Exception as ex:
             logger.error(f"Erro ao copiar template '{original_filename}': {ex}", exc_info=True)
             show_snackbar(self.page, f"Falha: {ex}", theme.COLOR_ERROR)

@@ -238,14 +238,10 @@ Para mais detalhes, consulte:
             snackbar.bgcolor = theme.COLOR_INFO
             snackbar.duration = 8000
             snackbar.open = True
-            
+
             # Garante a atualização da UI de forma segura
-            update_lock = page.data.get("global_update_lock")
-            if update_lock:
-                with update_lock:
-                    page.update()
-            else:
-                page.update()
+            from SOURCE.flet_ui.components.components import safe_page_update
+            safe_page_update(page)
 
     from SOURCE.config.provider import is_local_mode
     app_bar_actions = [

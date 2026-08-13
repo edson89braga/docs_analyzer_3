@@ -175,7 +175,7 @@ def _handle_session_reset(page: ft.Page):
 
         # 1. Recria o lock global, liberando qualquer deadlock pendente
         old_lock = page.data.get("global_update_lock")
-        page.data["global_update_lock"] = threading.Lock()
+        page.data["global_update_lock"] = threading.RLock()  # reentrante — ver app.py
         if old_lock:
             acquired = old_lock.acquire(blocking=False)
             if acquired:

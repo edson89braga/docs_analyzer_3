@@ -15,6 +15,31 @@
 > suportado (sem tabela de janela de contexto por modelo neste repo) — cai num fallback fixo de
 > 180.000 tokens, com log de warning.
 
+> **Adendo 13/08/2026 — atualizações de UI a partir de threads.** Correção do
+> `AttributeError: 'NoneType' object has no attribute 'session'` + `AssertionError` do Flet que
+> matavam a thread de análise LLM quando o usuário navegava para outra view durante o
+> processamento. Convenções agora válidas para toda a UI:
+> - **`safe_control_update(control)` / `safe_page_update(page, *controls)`**
+>   (`components/components.py`) substituem o idioma `if ctl.page and ctl.uid: ctl.update()` e
+>   o bloco manual `with update_lock: page.update()`. Serializam o flush sob
+>   `page.data["global_update_lock"]` (adquirido **com timeout de 5s**, degradando para update
+>   sem lock em vez de congelar a sessão) e engolem `AssertionError`/`PageDisconnectedException`
+>   com log de warning, evitando que uma árvore de controles inválida mate a thread chamadora.
+> - O `global_update_lock` passou de `Lock` para **`RLock`** (`app.py`, `router.py`): `page.add()`
+>   dentro de uma seção crítica dispara `did_mount()` das views, que atualizam seus próprios
+>   controles — reentrância legítima na mesma thread.
+> - `AnalyzePDFViewContent` e `ChatViewContent` expõem **`_is_view_usable()`** (`_is_mounted` +
+>   `page` válida). Todo método de atualização de UI agendado por thread (`page.run_thread`)
+>   checa esse guard antes de tocar `self.page.session` ou controles. `ChatViewContent` ganhou
+>   `will_unmount()` para zerar `_is_mounted`.
+> - Threads de background do chat (`_preprocess_documents`, `_extract_raw_context_from_files`)
+>   capturam `page = self.page` na entrada — o Flet anula `self.page` no unmount, mas a sessão
+>   continua viva, e os resultados devem ser persistidos mesmo se o usuário sair da view (mesma
+>   estratégia já usada em `_handle_ai_response_thread`).
+> - Nos blocos `finally` das threads de `nc_analyze_view`, `hide_loading_overlay()` roda **antes**
+>   do guard de montagem (o overlay é global da página, não da view) e as mutações de controle
+>   só depois.
+
 # nc_analyze_view.py
 
 ## Funções importadas principais:

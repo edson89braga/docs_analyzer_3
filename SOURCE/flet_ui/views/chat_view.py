@@ -16,7 +16,8 @@ from SOURCE.flet_ui.components.components import (
     show_confirmation_dialog,
     ManagedFilePicker,
     show_loading_overlay, hide_loading_overlay,
-    show_snackbar, CompactKeyValueTable
+    show_snackbar, CompactKeyValueTable,
+    safe_control_update, safe_page_update,
 )
 # Adiciona import do novo orquestrador e settings
 from SOURCE.core.chat_llm_orchestrator import ChatLLMOrchestrator
@@ -57,6 +58,7 @@ class ChatViewContent(ft.Column):
     def __init__(self, page: ft.Page):
         super().__init__(expand=True, spacing=10)
         self.page = page
+        self._is_mounted = False
         self.user_cache = get_user_cache(self.page)
 
         self.db_manager = LocalDBManager()
@@ -282,10 +284,10 @@ class ChatViewContent(ft.Column):
         """Adiciona uma bolha de mensagem à lista de visualização e salva o estado."""
         bubble = self._create_message_bubble(message_data)
         self.chat_history_view.controls.append(bubble)
-        if self.page and self.chat_history_view.page: 
+        if self.page and self.chat_history_view.page:
             self._update_message_actions()
             self._save_state_to_session()
-            self.page.update()
+            safe_page_update(self.page)
 
     def _update_last_message_text(self, text_chunk: str, append: bool = True):
         """Atualiza o texto da última mensagem na view.
@@ -320,7 +322,9 @@ class ChatViewContent(ft.Column):
         # Re-renderiza apenas o conteúdo do último balão para eficiência
         content_placeholder = last_bubble.controls[1].controls[1].content.controls[0] # TODO: melhorar esse mapeamento
         self._render_message_content(content_placeholder, last_bubble.data)
-        threading.Timer(0.1, content_placeholder.update).start()
+        # Durante o streaming este update dispara a cada chunk, em timers concorrentes:
+        # safe_control_update serializa o flush e ignora balões já desmontados.
+        threading.Timer(0.1, safe_control_update, args=[content_placeholder]).start()
         self._save_state_to_session()
 
     def _rebuild_chat_display(self):
@@ -332,8 +336,7 @@ class ChatViewContent(ft.Column):
         
         self._update_message_actions()
 
-        if self.chat_history_view.page:
-            self.chat_history_view.update()
+        safe_control_update(self.chat_history_view)
 
     def _create_message_bubble(self, message: Dict[str, Any]) -> ft.Row:
         """Cria um componente visual para uma única mensagem no chat."""
@@ -451,13 +454,32 @@ class ChatViewContent(ft.Column):
         Ideal para restaurar e sincronizar o estado da UI com a sessão atual.
         """
         logger.debug("ChatView.did_mount: Restaurando estado da sessão e sincronizando UI.")
+        self._is_mounted = True
         self._restore_state_from_session()
         threading.Timer(0.1, self._scroll_to_last_message).start()
+
+    def will_unmount(self):
+        """Marca a view como desmontada, sinalizando às threads que parem de tocar a UI."""
+        self._is_mounted = False
+
+    def _is_view_usable(self) -> bool:
+        """
+        Indica se a view ainda pode tocar a UI/sessão com segurança.
+
+        As threads de extração/otimização de documentos e de resposta da IA podem
+        concluir depois de o usuário navegar para outra view. Nesse momento o Flet já
+        anulou `self.page` em `Page.__handle_mount_unmount`, e qualquer acesso a
+        `self.page.session` levantaria AttributeError.
+
+        Returns:
+            True se a view está montada e com referência válida à página.
+        """
+        return bool(self._is_mounted and self.page)
 
     def _scroll_to_last_message(self):
         if self.chat_history_view.page:
             self.chat_history_view.scroll_to(offset=-1, duration=300, curve=ft.AnimationCurve.EASE_OUT)
-            self.chat_history_view.update()
+            safe_control_update(self.chat_history_view)
         # else:logger.warning("Tentativa de scroll no ListView falhou: a página não está disponível.")
 
     def _get_context_class(self):
@@ -657,13 +679,16 @@ class ChatViewContent(ft.Column):
     def _set_processing_state(self, is_processing: bool, clear_input: bool = False):
         if clear_input:
             self.user_input_field.value = ""
-        
+
         self.is_processing_response     = is_processing
         self.user_input_field.disabled  = is_processing
         self.send_button.disabled       = is_processing
-        self.user_input_field.update()
-        self.send_button.update()
-        if not is_processing:
+
+        # Agendado via page.run_thread pela thread de resposta da IA: pode executar
+        # após o usuário ter saído da view, quando os controles já não são válidos.
+        safe_control_update(self.user_input_field)
+        safe_control_update(self.send_button)
+        if not is_processing and self._is_view_usable():
             self.user_input_field.focus()
 
     def _get_active_system_prompt(self) -> str:
@@ -717,7 +742,7 @@ class ChatViewContent(ft.Column):
     def _handle_delete_message(self, message_id: float):
         self.chat_history_view.controls = [c for c in self.chat_history_view.controls if c.data["id"] != message_id]
         self._update_message_actions()
-        self.chat_history_view.update()
+        safe_control_update(self.chat_history_view)
         self._save_state_to_session()
 
     def _handle_edit_message(self, message_id: float):
@@ -842,8 +867,8 @@ class ChatViewContent(ft.Column):
             self.settings_drawer_container.border = None
             self.settings_button.bgcolor = None
 
-        self.settings_drawer_container.update()
-        self.settings_button.update()
+        safe_control_update(self.settings_drawer_container)
+        safe_control_update(self.settings_button)
 
     def _update_active_model_button(self):
         """
@@ -855,17 +880,20 @@ class ChatViewContent(ft.Column):
         button = self.active_model_button
         if isinstance(button, ft.TextButton):
             button.text = f"Modelo: {model_name}"
-            if button.page and button.uid:
-                button.update()
+            safe_control_update(button)
         logger.debug(f"Botão de modelo ativo (chat) atualizado para: {model_name}")
 
     def _handle_bubble_hover(self, e: ft.HoverEvent, toolbar: ft.Row, message_id: float):
         """Mostra ou esconde a barra de ferramentas de ações da mensagem."""
         if self.editing_message_id != message_id:
             toolbar.visible = e.data == "true"
-            toolbar.update()
+            safe_control_update(toolbar)
 
     def _update_button_states_by_chat(self):
+        if not self._is_view_usable():
+            logger.debug("_update_button_states_by_chat ignorado: view não montada ou page inválida.")
+            return
+
         if self.user_cache.get(KEY_SESSION_CHAT_METRICS):
             # Se há histórico de métricas: implica que o chat começou
             self.upload_button.disabled = True
@@ -877,10 +905,14 @@ class ChatViewContent(ft.Column):
             self.file_list_manager.enable_interactions()
         
         if self.upload_button.page:
-            self.page.update(self.upload_button, self.clear_chat_button)
-            
+            safe_page_update(self.page, self.upload_button, self.clear_chat_button)
+
     def _update_button_states(self):
         """Centraliza a lógica de habilitação/desabilitação de botões e campos."""
+        if not self._is_view_usable():
+            logger.debug("_update_button_states ignorado: view não montada ou page inválida.")
+            return
+
         has_files = bool(self.page.session.get(KEY_SESSION_CHAT_FILES))
         has_context = bool(self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT))
         has_optimized = self.page.session.get(KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED) or False
@@ -920,7 +952,7 @@ class ChatViewContent(ft.Column):
             self.optimize_button.icon = ft.Icons.FILTER_LIST
             
         hide_loading_overlay(self.page)
-        self.page.update()
+        safe_page_update(self.page)
 
     # --- Handlers de Ações ---
 
@@ -1026,11 +1058,26 @@ class ChatViewContent(ft.Column):
         """
         Usa o PDFDocumentAnalyzer para extrair e consolidar o texto dos arquivos.
         Este é o processo de OTIMIZAÇÃO. Executado em uma thread separada.
+
+        A referência à página é capturada em `page` no início: se o usuário navegar
+        para outra view durante o processamento, o Flet anula `self.page`, mas a
+        sessão continua viva. Manter a referência local garante que o resultado seja
+        persistido mesmo assim — mesma estratégia já usada em
+        `_handle_ai_response_thread`. As atualizações de UI, por sua vez, ficam
+        condicionadas a `_is_view_usable()`.
+
+        Args:
+            pre_extracted_texts: Mapa de textos já extraídos por caminho de arquivo.
         """
+        page = self.page
+        if page is None:
+            logger.warning("_preprocess_documents abortado: referência de página indisponível.")
+            return
+
         try:
             import requests
             # Usa os textos pré-extraídos
-            files_info = self.page.session.get(KEY_SESSION_CHAT_FILES) or []
+            files_info = page.session.get(KEY_SESSION_CHAT_FILES) or []
             pdf_paths_ordered = [f['path_or_message'] for f in files_info]
 
             settings = self._get_current_analysis_settings()
@@ -1057,18 +1104,18 @@ class ChatViewContent(ft.Column):
             calculated_embedding_cost_usd = 0
             if vectorization_model == "text-embedding-3-small":
 
-                decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
+                decrypted_api_key = page.session.get(f"decrypted_api_key_{provider}")
                 if decrypted_api_key:
                     logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
                 else:
                     error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
                     logger.error(error_msg)
-                    self.page.run_thread(hide_loading_overlay, self.page)
-                    self.page.run_thread(show_snackbar, self.page, error_msg, color=theme.COLOR_ERROR)
+                    page.run_thread(hide_loading_overlay, page)
+                    page.run_thread(show_snackbar, page, error_msg, color=theme.COLOR_ERROR)
                     return # Aborta a thread
                 
                 import SOURCE.core.ai_orchestrator as ai_orchestrator
-                loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
+                loaded_embeddings_providers = page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
 
                 ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
                                                                                      all_texts_list, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
@@ -1086,11 +1133,11 @@ class ChatViewContent(ft.Column):
             
              
             if tokens_embeddings:
-                self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
+                page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
                 logger.debug(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
             else:
-                if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
-                    self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
+                if page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
+                    page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
                     logger.debug("Tokens de embedding removidos da sessão (não retornados pela análise).")
 
             # --- ----       
@@ -1144,52 +1191,64 @@ class ChatViewContent(ft.Column):
                 "calculated_embedding_cost_usd": calculated_embedding_cost_usd
             } 
 
-            self.page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, processing_metadata)
-            self.page.session.set(KEY_SESSION_SHARED_PROCESSING_METADATA, processing_metadata)
+            page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, processing_metadata)
+            page.session.set(KEY_SESSION_SHARED_PROCESSING_METADATA, processing_metadata)
 
             if not aggregated_text.strip():
                 raise ValueError("Nenhum texto relevante foi extraído dos documentos.")
 
             # Salva o contexto na sessão
-            self.page.run_thread(self._update_processing_metadata_display, processing_metadata)
+            page.run_thread(self._update_processing_metadata_display, processing_metadata)
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = aggregated_text
             self.user_cache[KEY_SESSION_SHARED_DOCUMENT_CONTEXT] = aggregated_text
-            self.page.session.set(KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED, True)
+            page.session.set(KEY_SESSION_CHAT_HAS_FILES_OPTIMIZED, True)
             self._log_file_processing_metrics(optimized=True, total_pages=len(ordered_keys), relevant_pages=len(relevant_indices))
 
             # Atualiza a UI na thread principal
             def update_ui_after_processing():
-                hide_loading_overlay(self.page)                
-                show_snackbar(self.page, f"{len(pdf_paths_ordered)} documento(s) processado(s) e pronto(s) para o chat.", color=theme.COLOR_SUCCESS)
+                hide_loading_overlay(page)                
+                show_snackbar(page, f"{len(pdf_paths_ordered)} documento(s) processado(s) e pronto(s) para o chat.", color=theme.COLOR_SUCCESS)
                 self._update_button_states() # Atualiza todos os botões e a UI geral           
-                show_snackbar(self.page, f"Conteúdo otimizado (filtrado) a ser utilizado no Chat.", color=theme.COLOR_SUCCESS)     
+                show_snackbar(page, f"Conteúdo otimizado (filtrado) a ser utilizado no Chat.", color=theme.COLOR_SUCCESS)     
 
-            self.page.run_thread(update_ui_after_processing)
+            page.run_thread(update_ui_after_processing)
 
         except requests.exceptions.ConnectionError as conn_err:
             logger.warning(f"Erro de conexão ao tentar se comunicar com o motor de ML: {conn_err}")
             def update_ui_on_conn_error():
-                hide_loading_overlay(self.page)
+                hide_loading_overlay(page)
                 msg_amigavel = ("Não foi possível conectar ao motor de Vetorização. "
                                 "Ele pode ainda estar inicializando em segundo plano. "
                                 "Por favor, aguarde alguns instantes e tente novamente.")
-                show_snackbar(self.page, msg_amigavel, color=theme.COLOR_WARNING, duration=8000)
-            self.page.run_thread(update_ui_on_conn_error)
+                show_snackbar(page, msg_amigavel, color=theme.COLOR_WARNING, duration=8000)
+            page.run_thread(update_ui_on_conn_error)
 
         except Exception as e:
             logger.error(f"Erro ao pré-processar documentos para o chat: {e}", exc_info=True)
             def update_ui_on_error(e: Exception):
-                hide_loading_overlay(self.page)
+                hide_loading_overlay(page)
                 msg_error = f"Ocorreu um erro inesperado durante o processamento: {e}"
                 logger.error(msg_error, exc_info=True)
-                show_snackbar(self.page, msg_error, color=theme.COLOR_ERROR)
-            self.page.run_thread(update_ui_on_error(e))
+                show_snackbar(page, msg_error, color=theme.COLOR_ERROR)
+            page.run_thread(update_ui_on_error(e))
 
     def _extract_raw_context_from_files(self, files: List[Dict[str, Any]], optimize_too: bool = False):
         """
         Extrai e concatena o texto bruto de todas as páginas de todos os arquivos carregados.
         Este é o fallback para quando a otimização não é executada.
+
+        Assim como `_preprocess_documents`, captura a referência da página em `page`
+        para sobreviver a uma navegação do usuário durante a extração.
+
+        Args:
+            files (List[Dict[str, Any]]): Arquivos carregados, com `path_or_message`.
+            optimize_too (bool): Se True, encadeia a otimização após a extração.
         """
+        page = self.page
+        if page is None:
+            logger.warning("_extract_raw_context_from_files abortado: referência de página indisponível.")
+            return
+
         try:
             from SOURCE.core.pdf_processor import PDFDocumentAnalyzer
             analyzer = PDFDocumentAnalyzer()
@@ -1220,33 +1279,36 @@ class ChatViewContent(ft.Column):
                 #"relevant_pages_global_keys_formatted": None,
                 #"count_selected_relevant": None,
             }
-            self.page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, processing_metadata)
-            self.page.session.set(KEY_SESSION_SHARED_PROCESSING_METADATA, processing_metadata)
-            self.page.run_thread(self._update_processing_metadata_display, processing_metadata)
+            page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, processing_metadata)
+            page.session.set(KEY_SESSION_SHARED_PROCESSING_METADATA, processing_metadata)
+            page.run_thread(self._update_processing_metadata_display, processing_metadata)
 
             self._log_file_processing_metrics(optimized=False, total_pages=total_pages_raw)
             self.user_cache[KEY_SESSION_CHAT_RAW_PAGES_TEXT] = raw_pages_text_map
             final_text = " ".join(all_texts_concatenated)
             self.user_cache[KEY_SESSION_CHAT_DOCUMENT_CONTEXT] = final_text         
             self.user_cache[KEY_SESSION_SHARED_DOCUMENT_CONTEXT] = final_text         
-            self.page.run_thread(lambda: show_snackbar(self.page, "Extração de texto concluída.", color=theme.COLOR_SUCCESS))
+            page.run_thread(lambda: show_snackbar(page, "Extração de texto concluída.", color=theme.COLOR_SUCCESS))
 
             if optimize_too:
-                self.page.run_thread(lambda: self._handle_optimize_click(None))
+                page.run_thread(lambda: self._handle_optimize_click(None))
             else:
-                self.page.run_thread(self._update_button_states)
+                page.run_thread(self._update_button_states)
 
         except Exception as e:
             def update_ui_on_error(e):
-                hide_loading_overlay(self.page)
+                hide_loading_overlay(page)
                 msg_error = f"Erro ao extrair texto: {e}"
                 logger.error(msg_error, exc_info=True)
-                show_snackbar(self.page, msg_error, color=theme.COLOR_ERROR)
-            self.page.run_thread(update_ui_on_error(e))
+                show_snackbar(page, msg_error, color=theme.COLOR_ERROR)
+            page.run_thread(update_ui_on_error(e))
 
     def _update_processing_metadata_display(self, proc_meta: Dict[str, Any] = None):
         """Atualiza a exibição de metadados no FileListManager."""
-        
+        if not self._is_view_usable():
+            logger.debug("_update_processing_metadata_display ignorado: view não montada ou page inválida.")
+            return
+
         metadata_to_display  = proc_meta or self.page.session.get(KEY_SESSION_CHAT_PROCESSING_METADATA)
 
         if not metadata_to_display :
@@ -1342,8 +1404,7 @@ class ChatViewContent(ft.Column):
         metrics_history = self.user_cache.get(KEY_SESSION_CHAT_METRICS, [])
         total_tokens = sum(m.get('total_tokens', 0) for m in metrics_history)
         self.metrics_button.text = f"Total Tokens: {total_tokens:,}".replace(",", ".")
-        if self.metrics_button.page:
-            self.metrics_button.update()
+        safe_control_update(self.metrics_button)
 
     def _show_metrics_dialog(self, e: ft.ControlEvent):
         """Exibe um diálogo com a tabela detalhada de uso de tokens."""
@@ -1409,11 +1470,11 @@ class ChatViewContent(ft.Column):
         
         self.page.overlay.append(metrics_dialog)
         metrics_dialog.open = True
-        self.page.update()
+        safe_page_update(self.page)
 
     def _close_dialog(self, dialog: ft.AlertDialog):
         dialog.open = False
-        self.page.update()
+        safe_page_update(self.page)
         self.page.overlay.remove(dialog)
     
 
