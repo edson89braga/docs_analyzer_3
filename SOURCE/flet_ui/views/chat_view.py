@@ -85,7 +85,7 @@ class ChatViewContent(ft.Column):
 
         self.active_model_button = ft.TextButton(
             text="Modelo: Carregando...",
-            icon=ft.Icons.MODEL_TRAINING_OUTLINED, width=200,
+            icon=ft.Icons.MODEL_TRAINING_OUTLINED, width=400,
             on_click=self._handle_toggle_settings_drawer,
             tooltip="Clique para ver e alterar as configurações de análise",
             style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=12))
@@ -259,6 +259,11 @@ class ChatViewContent(ft.Column):
         if not self.chat_session_id:
             self._start_new_chat_session()
 
+        # Resincroniza os controles do drawer (ex.: esforço de reflexão) com a sessão:
+        # em did_mount a thread de carregamento de configurações (threaded_load_settings)
+        # pode já ter concluído após a construção inicial do drawer, então este refresh
+        # garante que a UI não fique presa nos valores capturados naquele primeiro instante.
+        self.settings_drawer_component.load_settings_into_controls()
         self._update_active_model_button()
         self._update_button_states()
         self._update_processing_metadata_display()

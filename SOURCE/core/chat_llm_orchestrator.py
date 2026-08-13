@@ -6,7 +6,7 @@ Responsável por gerenciar a conversa com a Responses API da OpenAI, construindo
 o payload de entrada, gerenciando o streaming de eventos e calculando métricas de uso.
 """
 
-import logging, re
+import logging
 logger = logging.getLogger(__name__)
 
 import time
@@ -19,6 +19,36 @@ from SOURCE.utils import with_proxy
 from SOURCE.config.provider import is_local_mode
 from SOURCE.core.ai_orchestrator import calc_costs_llm_analysis
 from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID, LLM_PF_MAX_OUTPUT_TOKENS
+
+def _strip_thinking_blocks(content: str) -> str:
+    """Remove o(s) bloco(s) de raciocínio ('thinking') do conteúdo bruto retornado pelo modelo.
+
+    O Qwen3.5, com 'enable_thinking' ativo, por vezes gera mais de um ciclo de
+    `<think>...</think>` antes de fechar a resposta (ex.: reconsidera e reescreve
+    a resposta dentro de um novo bloco de raciocínio). Um `re.sub` que apenas
+    remove cada par `<think>...</think>` deixaria intacto qualquer rascunho de
+    resposta escrito *entre* dois blocos desses — fazendo a resposta final
+    aparecer duplicada (ou parcialmente duplicada) para o usuário.
+
+    Por isso, quando há ao menos um `</think>` no texto, mantém-se apenas o
+    conteúdo após o ÚLTIMO fechamento — descartando qualquer rascunho
+    intermediário. Se não houver `<think>` no texto, o conteúdo é retornado
+    inalterado.
+
+    Args:
+        content: Texto bruto retornado pelo modelo (choice.message.content).
+
+    Returns:
+        Texto sem os blocos de raciocínio e sem rascunhos intermediários.
+
+        Exemplo de retorno:
+        "A resposta final ao usuário."
+    """
+    if "<think>" not in content:
+        return content
+    # Mantém apenas o que vem depois do último "</think>" (resposta final de fato).
+    return content.rsplit("</think>", 1)[-1].lstrip("\n").lstrip()
+
 
 class ChatLLMOrchestrator:
     """
@@ -188,15 +218,14 @@ class ChatLLMOrchestrator:
                         if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
                             content = choice.message.content
                             if content:
-                                content = re.sub(r"<think>.*?</think>\s*", "", content, flags=re.DOTALL)
+                                content = _strip_thinking_blocks(content)
                                 full_response_content += content
                                 yield {"type": "chunk", "content": content}
-                
+
                 elif hasattr(response, 'content'):
                     # Fallback direto para propriedade content se choices não estiver disponível
                     full_response_content = response.content if isinstance(response.content, str) else str(response.content)
-                    full_response_content = re.sub(r"<think>.*?</think>\s*", "", full_response_content, flags=re.DOTALL)
-                    full_response_content = full_response_content.strip("\n").strip()
+                    full_response_content = _strip_thinking_blocks(full_response_content).strip()
 
                     if full_response_content:
                         yield {"type": "chunk", "content": full_response_content}

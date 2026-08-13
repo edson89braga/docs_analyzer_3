@@ -8,6 +8,7 @@ from SOURCE.settings import (
     KEY_SESSION_NC_ANALYZE_SETTINGS,
     KEY_SESSION_CHAT_SETTINGS,
     KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS,
+    KEY_SESSION_CLOUD_CHAT_DEFAULTS,
     FALLBACK_ANALYSIS_SETTINGS,
     KEY_SESSION_LOADED_LLM_PROVIDERS,
 
@@ -47,10 +48,15 @@ class BaseSettingsDrawer(ft.Column):
         "verbosity_level_dd":           "verbosity_level"
     }
     
-    def __init__(self, page: ft.Page, session_key: str, on_settings_changed: Optional[Callable] = None):
+    def __init__(self, page: ft.Page, session_key: str, on_settings_changed: Optional[Callable] = None,
+                 cloud_defaults_key: str = KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS):
         super().__init__(scroll=ft.ScrollMode.ADAPTIVE, expand=True)
         self.page = page
         self.session_key = session_key
+        # Chave de sessão com os padrões de nuvem específicos desta view, usada para comparação
+        # e reset (ex.: chat usa KEY_SESSION_CLOUD_CHAT_DEFAULTS, que já vem mesclado com os
+        # overrides de chat_docs_defaults — nc_analyze usa o padrão KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS).
+        self.cloud_defaults_key = cloud_defaults_key
         self.db_manager = LocalDBManager()
         self.gui_controls: Dict[str, ft.Control] = {}
         self.on_settings_changed = on_settings_changed
@@ -201,7 +207,7 @@ class BaseSettingsDrawer(ft.Column):
         """
         Reseta as configurações para os padrões da nuvem.
         """
-        cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
+        cloud_defaults = self.page.session.get(self.cloud_defaults_key)
         defaults_to_use = cloud_defaults.copy() if cloud_defaults else FALLBACK_ANALYSIS_SETTINGS.copy()
         
         self.page.session.set(self.session_key, defaults_to_use)
@@ -379,7 +385,7 @@ class BaseSettingsDrawer(ft.Column):
         configurações atuais e as padrões.
         """
         current_settings = self.page.session.get(self.session_key) or {}
-        cloud_defaults = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS)
+        cloud_defaults = self.page.session.get(self.cloud_defaults_key)
         defaults_to_compare = cloud_defaults if cloud_defaults else FALLBACK_ANALYSIS_SETTINGS
         reset_button = self.gui_controls.get("reset_settings_button")
         
@@ -467,11 +473,13 @@ class ChatSettingsDrawer(AnalyzeSettingsDrawer):
     }
     DEFAULT_KEY = "flexivel"
     
-    def __init__(self, page: ft.Page, session_key: str, on_settings_changed: Optional[Callable] = None):
+    def __init__(self, page: ft.Page, session_key: str, on_settings_changed: Optional[Callable] = None,
+                 cloud_defaults_key: str = KEY_SESSION_CLOUD_CHAT_DEFAULTS):
         self.page = page
         self.user_cache = get_user_cache(self.page) # chamar aqui antes de super()
         self.db_manager = LocalDBManager()
-        super().__init__(page, session_key=session_key, on_settings_changed=on_settings_changed)
+        super().__init__(page, session_key=session_key, on_settings_changed=on_settings_changed,
+                          cloud_defaults_key=cloud_defaults_key)
 
     def build_content(self):
         """

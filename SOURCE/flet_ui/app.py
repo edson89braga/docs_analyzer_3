@@ -15,6 +15,7 @@ from typing import Optional
 
 from ..settings import (APP_TITLE, APP_VERSION, APP_DEFAULT_SETTINGS_COLLECTION,
                         ANALYZE_PDF_DEFAULTS_DOC_ID, CHAT_DOCS_DEFAULTS_DOC_ID, KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS,
+                        KEY_SESSION_CLOUD_CHAT_DEFAULTS,
                         FALLBACK_ANALYSIS_SETTINGS, LLM_PROVIDERS_CONFIG_COLLECTION,
                         LLM_PROVIDERS_DEFAULT_DOC_ID, KEY_SESSION_LOADED_LLM_PROVIDERS,
                         LLM_EMBEDDINGS_CONFIG_COLLECTION, LLM_EMBEDDINGS_DEFAULT_DOC_ID,
@@ -60,6 +61,7 @@ def load_default_analysis_settings(page: ft.Page):
         page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
         chat_fallback_settings = FALLBACK_ANALYSIS_SETTINGS.copy()
         chat_fallback_settings["reasoning_effort"] = "minimal"  # Chat inicia com thinking desativado (nc_analyze mantém "low"/ativo)
+        page.session.set(KEY_SESSION_CLOUD_CHAT_DEFAULTS, chat_fallback_settings.copy())
         page.session.set(KEY_SESSION_CHAT_SETTINGS, chat_fallback_settings)
         return
 
@@ -81,6 +83,7 @@ def load_default_analysis_settings(page: ft.Page):
     chat_defaults.update(chat_docs_overrides) # Aplica as personalizações do chat
     if "reasoning_effort" not in chat_docs_overrides:
         chat_defaults["reasoning_effort"] = "minimal"  # Chat inicia com thinking desativado, salvo override explícito na nuvem
+    page.session.set(KEY_SESSION_CLOUD_CHAT_DEFAULTS, chat_defaults.copy())
 
     # --- Carregamento das Configurações Específicas de cada View ---
     # 1. Carregar para NC Analyze View
@@ -624,7 +627,10 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             if not page.session.contains_key(KEY_SESSION_NC_ANALYZE_SETTINGS):
                 page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS.copy())
                 page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
-                page.session.set(KEY_SESSION_CHAT_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
+                chat_fallback_settings = FALLBACK_ANALYSIS_SETTINGS.copy()
+                chat_fallback_settings["reasoning_effort"] = "minimal"  # Chat inicia com thinking desativado (nc_analyze mantém "low"/ativo)
+                page.session.set(KEY_SESSION_CLOUD_CHAT_DEFAULTS, chat_fallback_settings.copy())
+                page.session.set(KEY_SESSION_CHAT_SETTINGS, chat_fallback_settings)
             final_route = "/login"
 
         # Dispara a navegação inicial

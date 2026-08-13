@@ -807,13 +807,25 @@ def analyze_text_with_llm(
                 enable_thinking = bool(reasoning_effort) and reasoning_effort.lower() != "minimal"
                 logger.info(f"Usando {model_pf} com modo de raciocínio {'ativado' if enable_thinking else 'desativado'} (enable_thinking={enable_thinking}).")
 
+                # Ajusta o teto de tokens de saída dinamicamente: LLM_PF_MAX_OUTPUT_TOKENS somado aos
+                # tokens de entrada pode ultrapassar a janela de contexto do modelo mesmo com poucas
+                # páginas (ex.: 128_000 + 3_073 > 131_072, causando 400 da API). Reusa a mesma janela
+                # conservadora e margem de segurança da truncagem de input (compute_llm_pf_auto_token_limit).
+                input_tokens_estimate = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in messages)
+                input_tokens_safe = int(input_tokens_estimate * (1 + LLM_PF_TOKEN_SAFETY_MARGIN))
+                max_output_tokens = max(1, min(LLM_PF_MAX_OUTPUT_TOKENS, LLM_PF_CONTEXT_WINDOW - input_tokens_safe))
+                logger.info(
+                    f"[DEBUG]: max_tokens ajustado dinamicamente para {max_output_tokens} "
+                    f"(input estimado: {input_tokens_estimate} tokens, com margem: {input_tokens_safe})."
+                )
+
                 # Chamada para chat completions
                 logger.info('[DEBUG]: Requisitando à API do endpoint PF...')
                 response = client_pf.chat.completions.create(
                     model=model_pf,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=LLM_PF_MAX_OUTPUT_TOKENS,  # Teto nominal; na prática limitado por (contexto - tokens de entrada)
+                    max_tokens=max_output_tokens,
                     response_format=response_format,
                     extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}}
                 )
@@ -892,11 +904,17 @@ def analyze_text_with_llm(
                 or "maximum context length" in err_str
                 or "context_length_exceeded" in err_str):
             import re
-            # Ignora o primeiro número se for o código de erro 500
-            nums = re.findall(r"\d+", str(api_err))
-            filtered_nums = [n for n in nums if n != '500']
-            if len(filtered_nums) >= 2:
-                prompt_len, max_len = filtered_nums[0], filtered_nums[1]
+            # Extração direcionada por padrão conhecido (em vez de pegar os N primeiros números do
+            # texto), pois a mensagem completa da exceção também contém o código HTTP (ex.: "Error
+            # code: 400"), que era capturado erroneamente como se fosse a contagem de tokens.
+            max_len_match = re.search(r"maximum (?:context length|model length)(?: is| of) (\d+)", err_str)
+            prompt_len_match = (
+                re.search(r"decoder prompt \(length (\d+)\)", err_str)
+                or re.search(r"prompt contains at least (\d+) input tokens", err_str)
+                or re.search(r"your messages resulted in (\d+) tokens", err_str)
+            )
+            if max_len_match and prompt_len_match:
+                prompt_len, max_len = prompt_len_match.group(1), max_len_match.group(1)
                 detail = (f"Documento filtrado com {int(prompt_len):,} tokens excede o limite de "
                           f"{int(max_len):,} tokens do modelo selecionado.")
             else:

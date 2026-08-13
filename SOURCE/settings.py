@@ -100,7 +100,8 @@ KEY_SESSION_CHAT_SETTINGS = "app_chat_settings"
 KEYRING_SERVICE_FIREBASE = f"{APP_NAME}_Firebase"
 KEYRING_USER_ENCRYPTION_KEY = "encryption_key" # Chave Fernet
 KEY_SESSION_LOADED_LLM_PROVIDERS = "app_loaded_llm_providers" # Lista de dicts dos provedores
-KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS = "app_cloud_analysis_defaults" # Padrões carregados da nuvem
+KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS = "app_cloud_analysis_defaults" # Padrões carregados da nuvem (nc_analyze)
+KEY_SESSION_CLOUD_CHAT_DEFAULTS = "app_cloud_chat_defaults" # Padrões carregados da nuvem, já mesclados com overrides de chat_docs_defaults
 KEY_SESSION_TOKENS_EMBEDDINGS = "app_tokens_embeddings"
 KEY_SESSION_MODEL_EMBEDDINGS_LIST = "app_model_embeddings_list"
 

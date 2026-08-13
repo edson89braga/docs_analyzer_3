@@ -224,9 +224,9 @@ class AnalyzePDFViewContent(ft.Column):
             text="Modelo: Carregando...",
             icon=ft.Icons.MODEL_TRAINING_OUTLINED,
             tooltip="Clique ver e alterar as configurações de análise",
-            width=200,
+            width=400,
             style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=12))
-        )        
+        )
         self.gui_controls[CTL_SETTINGS_BTN] = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, tooltip="Configurações específicas", icon_size=default_icon_size_bar)
 
         action_buttons_bar = ft.Row(
@@ -1356,6 +1356,11 @@ class AnalyzePDFViewContent(ft.Column):
         self._analysis_requested = self.page.session.get(KEY_SESSION_HAS_LLM_REPONSE) or False
         
         # 2. Chama os métodos de atualização individuais
+        # Resincroniza os controles do drawer (ex.: esforço de reflexão) com a sessão:
+        # em did_mount a thread de carregamento de configurações (threaded_load_settings)
+        # pode já ter concluído após a construção inicial do drawer, então este refresh
+        # garante que a UI não fique presa nos valores capturados naquele primeiro instante.
+        self.settings_drawer_component.load_settings_into_controls()
         self.file_list_manager.update_display()
         self._update_processing_metadata_display()
         self._update_llm_metadata_display()
