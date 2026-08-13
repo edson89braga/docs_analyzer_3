@@ -133,10 +133,11 @@ class BaseSettingsDrawer(ft.Column):
         """
         # All models
         self.gui_controls["llm_token_limit_tf"] = ft.TextField(
-            label="Limite Tokens Input", 
-            input_filter=ft.InputFilter(r"[0-9]"), 
+            label="Limite Tokens Input",
+            hint_text="Vazio = automático (recomendado)",
+            input_filter=ft.InputFilter(r"[0-9]"),
             width=default_width
-        )        
+        )
 
         # gpt-4
         self.gui_controls["temperature_value_label"] = ft.Text("", weight=ft.FontWeight.BOLD)
@@ -326,10 +327,14 @@ class BaseSettingsDrawer(ft.Column):
                 if isinstance(control, ft.Slider) and setting_key in ("llm_temperature", "similarity_threshold"):
                     value = float(control.value) / 100.0
                 elif setting_key == "llm_input_token_limit":
-                    try:
-                        value = int(value)
-                    except (ValueError, TypeError):
-                        value = FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"]                    
+                    # Campo vazio = truncagem automática (None); calculada em runtime para llm_pf.
+                    if value in (None, ""):
+                        value = None
+                    else:
+                        try:
+                            value = int(value)
+                        except (ValueError, TypeError):
+                            value = None
                 settings[setting_key] = value
         
         return settings
@@ -351,9 +356,9 @@ class BaseSettingsDrawer(ft.Column):
         for ctrl_key, setting_key in self.KEY_MAP.items():
             if ctrl_key in self.gui_controls:
                 # Garante que recupera do FALLBACK_ANALYSIS_SETTINGS se a chave não existir em current_settings (ex: DB local antigo)
-                val = current_settings.get(setting_key, FALLBACK_ANALYSIS_SETTINGS.get(setting_key))                
+                val = current_settings.get(setting_key, FALLBACK_ANALYSIS_SETTINGS.get(setting_key))
                 if ctrl_key.endswith("_tf"):
-                    self.gui_controls[ctrl_key].value = str(val)
+                    self.gui_controls[ctrl_key].value = "" if val is None else str(val)
                 elif ctrl_key == "similarity_threshold_slider":
                     self.gui_controls[ctrl_key].value = initial_simi_threshold * 100
                     self.gui_controls["similarity_threshold_value_label"].value = f"{initial_simi_threshold:.2f}"

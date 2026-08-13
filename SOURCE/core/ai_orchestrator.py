@@ -17,7 +17,8 @@ from typing import Optional, Dict, Any, List, Tuple, Union
 from openai import OpenAI, AuthenticationError, APIError, InternalServerError
 
 # Imports do Projeto
-from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID, LLM_PF_MAX_OUTPUT_TOKENS
+from SOURCE.settings import (DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID, LLM_PF_MAX_OUTPUT_TOKENS,
+                            LLM_PF_CONTEXT_WINDOW, LLM_PF_OUTPUT_RESERVE_TOKENS, LLM_PF_TOKEN_SAFETY_MARGIN)
 from SOURCE.config.provider import is_local_mode
 from SOURCE.utils import with_proxy
 from SOURCE.core.prompts import (output_formats, review_function, normalizing_function, # prompts
@@ -253,7 +254,50 @@ def contar_tokens(texto: Union[str, Any], model_name: str) -> int:
     codificador = tiktoken.encoding_for_model(model_name)
     texto = str(texto) if not isinstance(texto, str) else texto
     return len(codificador.encode(texto))
-    
+
+def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra_reserve: int = 0) -> int:
+    """
+    Calcula o orçamento de tokens disponível para o texto de entrada (páginas do documento)
+    no endpoint llm_pf, para uso quando o usuário deixa a truncagem manual desabilitada
+    (campo 'Limite Tokens Input' vazio no drawer de configurações).
+
+    A contagem usa tiktoken (MODEL_FOR_COUNT_TOKENS) como aproximação do tokenizer real do
+    Qwen — medição empírica mostrou um desvio de ~8% (tiktoken subestima), coberto pela
+    margem de segurança LLM_PF_TOKEN_SAFETY_MARGIN.
+
+    Fórmula:
+        budget = (LLM_PF_CONTEXT_WINDOW - LLM_PF_OUTPUT_RESERVE_TOKENS - extra_reserve
+                  - tokens(prompt_messages)) * (1 - LLM_PF_TOKEN_SAFETY_MARGIN)
+
+    Args:
+        prompt_messages: Lista de dicts {"role": ..., "content": ...} do prompt fixo já
+            montado (sem o {input_text} substituído, ou com um placeholder curto no lugar).
+        extra_reserve: Reserva adicional de tokens a descontar do orçamento (ex.: espaço
+            reservado para o histórico de turnos futuros no chat). Padrão 0.
+
+    Returns:
+        Orçamento de tokens disponível para o texto de entrada (mínimo 1).
+
+        Exemplo de retorno: 96700
+    """
+    prompt_overhead = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in prompt_messages)
+    raw_budget = LLM_PF_CONTEXT_WINDOW - LLM_PF_OUTPUT_RESERVE_TOKENS - extra_reserve - prompt_overhead
+    budget = int(raw_budget * (1 - LLM_PF_TOKEN_SAFETY_MARGIN))
+
+    if budget < 1:
+        logger.warning(
+            "compute_llm_pf_auto_token_limit: orçamento calculado <= 0 "
+            "(overhead_prompt=%d, extra_reserve=%d, raw_budget=%d). Forçando mínimo de 1.",
+            prompt_overhead, extra_reserve, raw_budget,
+        )
+        budget = 1
+
+    logger.debug(
+        "[AUTO_TOKEN_LIMIT] overhead_prompt=%d, extra_reserve=%d, budget_final=%d",
+        prompt_overhead, extra_reserve, budget,
+    )
+    return budget
+
 def criar_batches(
     textos_com_indices: List[Tuple[int, str]],
     limite_tokens_por_texto: int,

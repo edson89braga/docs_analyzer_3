@@ -20,8 +20,10 @@ from SOURCE.flet_ui.components.components import (
 )
 # Adiciona import do novo orquestrador e settings
 from SOURCE.core.chat_llm_orchestrator import ChatLLMOrchestrator
-from SOURCE.settings import (FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_CHAT_SETTINGS, 
-                            KEY_SESSION_MODEL_EMBEDDINGS_LIST, KEY_SESSION_TOKENS_EMBEDDINGS)
+import SOURCE.core.ai_orchestrator as ai_orchestrator
+from SOURCE.settings import (FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_CHAT_SETTINGS,
+                            KEY_SESSION_MODEL_EMBEDDINGS_LIST, KEY_SESSION_TOKENS_EMBEDDINGS,
+                            LLM_PF_CHAT_HISTORY_RESERVE_TOKENS)
 from SOURCE.settings import (UPLOAD_TEMP_DIR, cotacao_dolar_to_real,
                           KEY_SESSION_LOADED_LLM_PROVIDERS, DEFAULT_LLM_PROVIDER,
                           DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE,
@@ -896,12 +898,17 @@ class ChatViewContent(ft.Column):
             logger.warning("Configurações de 'chat' não encontradas na sessão. Usando fallbacks.")
             return FALLBACK_ANALYSIS_SETTINGS.copy()
 
+        # None preserva o modo de truncagem automática (calculada em runtime para llm_pf).
         current_settings = settings.copy()
-        try:
-            current_settings['llm_input_token_limit'] = int(current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']))
-        except (ValueError, TypeError):
-            current_settings['llm_input_token_limit'] = FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']
-        
+        raw_token_limit = current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit'])
+        if raw_token_limit is None:
+            current_settings['llm_input_token_limit'] = None
+        else:
+            try:
+                current_settings['llm_input_token_limit'] = int(raw_token_limit)
+            except (ValueError, TypeError):
+                current_settings['llm_input_token_limit'] = FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']
+
         return current_settings
 
     def _handle_upload_click(self, e: ft.ControlEvent):
@@ -1061,6 +1068,22 @@ class ChatViewContent(ft.Column):
             
             # Usamos um limite de tokens alto para manter o contexto completo
             token_limit = settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
+            if token_limit is None:
+                # Truncagem automática: reserva espaço extra para os próximos turnos da
+                # conversa, já que o document_context fica fixo desde esta otimização.
+                if provider == "llm_pf":
+                    instructions = self._get_active_system_prompt()
+                    prompt_messages = [{"role": "system", "content": instructions}]
+                    token_limit = ai_orchestrator.compute_llm_pf_auto_token_limit(
+                        prompt_messages, extra_reserve=LLM_PF_CHAT_HISTORY_RESERVE_TOKENS
+                    )
+                    logger.info(f"Truncagem automática (llm_pf, chat): orçamento calculado = {token_limit} tokens.")
+                else:
+                    token_limit = 180_000
+                    logger.warning(
+                        f"Truncagem automática solicitada, mas não suportada para provider '{provider}'. "
+                        f"Usando fallback fixo de {token_limit} tokens."
+                    )
             aggregated_info = analyzer.group_texts_by_relevance_and_token_limit(
                 processed_data, relevant_indices, token_limit
             )

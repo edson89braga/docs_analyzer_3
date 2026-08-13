@@ -1,6 +1,20 @@
 
 > Data de atualização das informações abaixo: 20/09/2025
 
+> **Adendo 13/08/2026:** provider `llm_pf` migrado para `Qwen3.5-35B-A3B-FP8` (janela de
+> contexto 128k, antes 32k com `Qwen3-8B-AWQ`). O campo "Limite Tokens Input" do drawer de
+> configurações agora aceita ficar **vazio = truncagem automática**: quando `llm_provider ==
+> "llm_pf"`, `nc_analyze_view.py` (`_pdf_processing_thread_func`) e `chat_view.py`
+> (`_preprocess_documents`) calculam o orçamento de tokens em runtime via
+> `ai_orchestrator.compute_llm_pf_auto_token_limit()`, descontando o overhead real do prompt
+> fixo (medido com tiktoken) e uma reserva de output (`LLM_PF_OUTPUT_RESERVE_TOKENS`) da janela
+> do modelo (`LLM_PF_CONTEXT_WINDOW`). O chat soma ainda `LLM_PF_CHAT_HISTORY_RESERVE_TOKENS` para
+> não deixar o contexto do documento consumir o espaço dos próximos turnos. Constantes em
+> `SOURCE/settings.py`. `FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"]` passou a ser `None`
+> (automático) por padrão. Para outros providers (`openai`), o modo automático ainda não é
+> suportado (sem tabela de janela de contexto por modelo neste repo) — cai num fallback fixo de
+> 180.000 tokens, com log de warning.
+
 # nc_analyze_view.py
 
 ## Funções importadas principais:

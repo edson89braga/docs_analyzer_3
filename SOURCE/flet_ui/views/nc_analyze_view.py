@@ -2172,12 +2172,17 @@ class InternalAnalysisController:
             return FALLBACK_ANALYSIS_SETTINGS.copy()
 
         # Garante que os tipos numéricos estejam corretos
+        # None preserva o modo de truncagem automática (calculada em runtime para llm_pf).
         current_settings = settings.copy()
-        try:
-            current_settings['llm_input_token_limit'] = int(current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']))
-        except (ValueError, TypeError):
+        raw_token_limit = current_settings.get('llm_input_token_limit', FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit'])
+        if raw_token_limit is None:
+            current_settings['llm_input_token_limit'] = None
+        else:
+            try:
+                current_settings['llm_input_token_limit'] = int(raw_token_limit)
+            except (ValueError, TypeError):
                 current_settings['llm_input_token_limit'] = FALLBACK_ANALYSIS_SETTINGS['llm_input_token_limit']
-        
+
         try:
             current_settings['llm_temperature'] = float(current_settings.get('llm_temperature', FALLBACK_ANALYSIS_SETTINGS['llm_temperature']))
         except (ValueError, TypeError):
@@ -2236,7 +2241,24 @@ class InternalAnalysisController:
         vectorization_model = current_analysis_settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
         similarity_threshold = current_analysis_settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
         token_limit_pref = current_analysis_settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
- 
+
+        if token_limit_pref is None:
+            # Truncagem automática: calcula o orçamento de tokens em runtime, descontando
+            # o overhead real do prompt fixo (já carregado no cache) da janela do modelo.
+            if provider == "llm_pf":
+                prompt_cache = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL) or {}
+                prompt_messages = prompt_cache.get("PROMPT_UNICO_for_INITIAL_ANALYSIS", [])
+                token_limit_pref = ai_orchestrator.compute_llm_pf_auto_token_limit(prompt_messages)
+                logger.info(f"Truncagem automática (llm_pf): orçamento calculado = {token_limit_pref} tokens.")
+            else:
+                # Sem tabela de janela de contexto por modelo para outros providers ainda;
+                # mantém o comportamento anterior (fallback numérico fixo) nesse caso.
+                token_limit_pref = 180_000
+                logger.warning(
+                    f"Truncagem automática solicitada, mas não suportada para provider '{provider}'. "
+                    f"Usando fallback fixo de {token_limit_pref} tokens."
+                )
+
         # TODO: avaliar se tornar esses parâmetros mutáveis na Gui:
         mode_main_filter = 'get_pages_among_similars_graphs'
         mode_filter_similar = 'bigger_content'

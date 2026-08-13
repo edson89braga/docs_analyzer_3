@@ -126,6 +126,17 @@ DEFAULT_TEMPERATURE = 0.2 # Baixa temperatura para respostas mais factuais/consi
 LLM_PF_MODEL_ID = "Qwen3.5-35B-A3B-FP8"  # Janela de contexto: 128k tokens (substituiu Qwen3-8B-AWQ, 32k)
 LLM_PF_MAX_OUTPUT_TOKENS = 128_000  # Teto de tokens de saída solicitado ao endpoint; sem isso, a resposta é truncada em 4096 tokens. Na prática o teto real é (janela de contexto - tokens de entrada).
 
+# Truncagem automática de tokens de entrada (nc_analyzer e chat) ---------------------------
+# Usadas para calcular quantas páginas de documento cabem no contexto, quando o usuário
+# deixa 'Limite Tokens Input' vazio no drawer de configurações (modo automático).
+# len_max_output do modelo NÃO é o LLM_PF_MAX_OUTPUT_TOKENS acima (esse é o teto pedido à API);
+# aqui é uma reserva de PLANEJAMENTO, para não deixar o orçamento de input "comer" o espaço do output.
+LLM_PF_CONTEXT_WINDOW = 128_000            # janela total do modelo
+LLM_PF_OUTPUT_RESERVE_TOKENS = 8_000       # reserva de planejamento p/ output (nc_analyzer)
+LLM_PF_CHAT_HISTORY_RESERVE_TOKENS = 20_000  # reserva extra p/ chat: o document_context fixo não pode
+                                              # consumir o espaço que os próximos turnos da conversa vão precisar
+LLM_PF_TOKEN_SAFETY_MARGIN = 0.10          # ~10%, calibrado no drift medido entre tiktoken e o tokenizer real do Qwen (~7,9%)
+
 # Fallback Default Analysis Settings (se Firestore falhar)
 FALLBACK_ANALYSIS_SETTINGS = {
     "pdf_extractor": "PyMuPdf-fitz",
@@ -136,7 +147,7 @@ FALLBACK_ANALYSIS_SETTINGS = {
     "tfidf_analyzer": "sklearn",
     "llm_provider": "llm_pf",
     "llm_model": "Qwen3.5-35B-A3B-FP8",
-    "llm_input_token_limit": 180_000,
+    "llm_input_token_limit": None,  # None = truncagem automática (calculada em runtime p/ llm_pf)
     "llm_output_format": "Padrão",
     "llm_max_output_length": "Padrão",
     "llm_temperature": 0.2,
