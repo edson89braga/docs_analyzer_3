@@ -639,7 +639,8 @@ def analyze_text_with_llm(
         temperature: float = DEFAULT_TEMPERATURE,
         api_key: str = None,
         loaded_llm_providers: Dict = {},
-        normalizing_and_review_response: bool = True
+        normalizing_and_review_response: bool = True,
+        reasoning_effort: str = "low"
     ) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
     """
     Envia texto processado para um LLM através do LangChain para análise,
@@ -653,6 +654,11 @@ def analyze_text_with_llm(
         temperature (float): Parâmetro de temperatura para a geração do LLM.
         prompt_name (str): O nome do prompt a ser recuperado do módulo `prompts`.
                            Espera-se que retorne uma lista de tuplas (role, content_template).
+        reasoning_effort (str): Nível de reflexão vindo do drawer de configurações
+                                 ('minimal', 'low', 'medium', 'high'). Usado apenas pelo
+                                 provider 'llm_pf' (Qwen3.5): o modo thinking fica ativo
+                                 sempre que o valor for diferente de 'minimal', já que o
+                                 modelo não distingue níveis intermediários de raciocínio.
 
     Returns:
         Tuple[Optional[Any], Optional[Dict[str, Any]]]: Uma tupla contendo:
@@ -779,8 +785,6 @@ def analyze_text_with_llm(
             
             if prompt_name == "PROMPT_UNICO_for_INITIAL_ANALYSIS":
                 prompt_list_dicts = prompts[prompt_name]
-                # Anexar /no_think ao processed_text para llm_pf se quisermos o modo não pensante
-                processed_text_with_no_think = processed_text + " /no_think"
                 messages = []
                 for msg_dict in prompt_list_dicts:
                     modified_msg_dict = {key: value.replace("{input_text}", processed_text) for key, value in msg_dict.items()}
@@ -788,7 +792,7 @@ def analyze_text_with_llm(
 
                 # Converter a classe Pydantic para JSON schema (strict, inclui $defs)
                 json_schema = _make_strict_schema(output_formats[prompt_name])
-                
+
                 response_format = {
                     "type": "json_schema",
                     "json_schema": {
@@ -797,7 +801,12 @@ def analyze_text_with_llm(
                         "strict": True
                     }
                 }
-                
+
+                # Qwen3.5 não suporta mais o soft switch '/no_think' no texto (confirmado em teste
+                # manual no endpoint); o controle correto é 'enable_thinking' via chat_template_kwargs.
+                enable_thinking = bool(reasoning_effort) and reasoning_effort.lower() != "minimal"
+                logger.info(f"Usando {model_pf} com modo de raciocínio {'ativado' if enable_thinking else 'desativado'} (enable_thinking={enable_thinking}).")
+
                 # Chamada para chat completions
                 logger.info('[DEBUG]: Requisitando à API do endpoint PF...')
                 response = client_pf.chat.completions.create(
@@ -805,7 +814,8 @@ def analyze_text_with_llm(
                     messages=messages,
                     temperature=temperature,
                     max_tokens=LLM_PF_MAX_OUTPUT_TOKENS,  # Teto nominal; na prática limitado por (contexto - tokens de entrada)
-                    response_format=response_format
+                    response_format=response_format,
+                    extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}}
                 )
                 logger.info('[DEBUG]: Requisição concluída.')
                 

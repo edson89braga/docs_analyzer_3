@@ -144,6 +144,10 @@ class ChatLLMOrchestrator:
             document_context: O texto completo do documento a ser analisado.
             history: O histórico da conversa atual.
             user_question: A nova pergunta do usuário.
+            reasoning_mode: Nível de reflexão vindo do drawer de configurações ('minimal',
+                            'low', 'medium', 'high'). Para 'llm_pf' (Qwen3.5), o modo thinking
+                            fica ativo sempre que o valor for diferente de 'minimal', já que o
+                            modelo não distingue níveis intermediários de raciocínio.
             provider: O provedor LLM ("openai" ou "llm_pf").
 
         Yields:
@@ -160,23 +164,21 @@ class ChatLLMOrchestrator:
         # Lógica específica para llm_pf usando Chat Completions API
         if provider == "llm_pf":
             model_name = LLM_PF_MODEL_ID  # Modelo fixo para llm_pf
-            
-            if reasoning_mode and reasoning_mode.lower() != "minimal":
-                logger.info(f"Usando {model_name} com modo de raciocínio ativado (sem /no_think).")
-                messages = self._build_input_items(document_context, history, user_question, instructions=instructions)
-            else:
-                logger.info(f"Usando {model_name} com modo de raciocínio desativado (com /no_think).")
-                # Anexar /no_think à pergunta do usuário
-                user_question_with_no_think = user_question + " /no_think"
-                messages = self._build_input_items(document_context, history, user_question_with_no_think, instructions=instructions)
-            
+
+            # Qwen3.5 não suporta mais o soft switch '/no_think' no texto (confirmado em teste
+            # manual no endpoint); o controle correto é 'enable_thinking' via chat_template_kwargs.
+            enable_thinking = bool(reasoning_mode) and reasoning_mode.lower() != "minimal"
+            logger.info(f"Usando {model_name} com modo de raciocínio {'ativado' if enable_thinking else 'desativado'} (enable_thinking={enable_thinking}).")
+            messages = self._build_input_items(document_context, history, user_question, instructions=instructions)
+
             try:
                 response = self.client.chat.completions.create(
                     model=model_name,
                     messages=messages,
                     temperature=temperature,
                     max_tokens=LLM_PF_MAX_OUTPUT_TOKENS,  # Teto nominal; na prática limitado por (contexto - tokens de entrada)
-                    stream=False  # Desabilita streaming
+                    stream=False,  # Desabilita streaming
+                    extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}}
                 )
                 
                 # Processa resposta não-streaming (response é um objeto, não um iterador)

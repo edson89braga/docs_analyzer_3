@@ -58,7 +58,9 @@ def load_default_analysis_settings(page: ft.Page):
         page.session.set(KEY_SESSION_MODEL_EMBEDDINGS_LIST, [])
         page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS.copy())
         page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
-        page.session.set(KEY_SESSION_CHAT_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
+        chat_fallback_settings = FALLBACK_ANALYSIS_SETTINGS.copy()
+        chat_fallback_settings["reasoning_effort"] = "minimal"  # Chat inicia com thinking desativado (nc_analyze mantém "low"/ativo)
+        page.session.set(KEY_SESSION_CHAT_SETTINGS, chat_fallback_settings)
         return
 
     # --- Carregamento de dados globais (Provedores, Custos, Padrões da Nuvem) ---
@@ -77,6 +79,8 @@ def load_default_analysis_settings(page: ft.Page):
     )
     chat_defaults = nc_analyze_defaults.copy()
     chat_defaults.update(chat_docs_overrides) # Aplica as personalizações do chat
+    if "reasoning_effort" not in chat_docs_overrides:
+        chat_defaults["reasoning_effort"] = "minimal"  # Chat inicia com thinking desativado, salvo override explícito na nuvem
 
     # --- Carregamento das Configurações Específicas de cada View ---
     # 1. Carregar para NC Analyze View

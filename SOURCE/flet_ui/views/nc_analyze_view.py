@@ -2518,6 +2518,7 @@ class InternalAnalysisController:
         model_name = current_analysis_settings.get("llm_model", FALLBACK_ANALYSIS_SETTINGS["llm_model"])
         temperature = current_analysis_settings.get("llm_temperature", FALLBACK_ANALYSIS_SETTINGS["llm_temperature"])
         mode_prompt = current_analysis_settings.get("prompt_structure", FALLBACK_ANALYSIS_SETTINGS["prompt_structure"])
+        reasoning_effort = current_analysis_settings.get("reasoning_effort", FALLBACK_ANALYSIS_SETTINGS["reasoning_effort"])
   
         if mode_prompt == "sequential_prompts":
             key_prompt_group = "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS"
@@ -2567,7 +2568,8 @@ class InternalAnalysisController:
  
             llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(key_prompt_group, final_prompts_to_use, aggregated_text,
                                                                                                  provider, model_name, temperature,
-                                                                                                 decrypted_api_key, loaded_llm_providers)
+                                                                                                 decrypted_api_key, loaded_llm_providers,
+                                                                                                 reasoning_effort=reasoning_effort)
  
             if llm_response_data:
                 # Se já existe uma llm_response na sessão é porque é caso de reanálise (usuário clicou em 'Solicitar Análise' novamente).
