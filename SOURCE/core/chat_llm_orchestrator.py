@@ -82,27 +82,32 @@ class ChatLLMOrchestrator:
     ) -> List[Dict[str, str]]:
         """
         Constrói a lista de itens de entrada para a Responses API.
+
+        Se `document_context` estiver vazio (chat livre, sem documentos carregados),
+        o bloco de "conteúdo transcrito" e a confirmação artificial do assistente
+        são omitidos, enviando apenas as instruções (se houver) e o histórico da conversa.
         """
         input_items = []
 
-        if instructions is not None:
+        if instructions:
             input_items.append({
                 "role": "system",
                 "content": instructions
             })
 
-        # Adiciona o contexto do documento e a confirmação inicial. 
-        input_items.append({
-            "role": "user",
-            "content": f"Considere o conteúdo transcrito abaixo como contexto para as perguntas que farei a seguir:\n\n"
-                       f"--- INÍCIO DO CONTEÚDO TRANSCRITO ---\n"
-                       f"{document_context}\n"
-                       f"--- FIM DO CONTEÚDO TRANSCRITO ---"
-        })
-        input_items.append({
-            "role": "assistant",
-            "content": "Entendido. Estou pronto para responder perguntas sobre o documento fornecido."
-        })
+        # Adiciona o contexto do documento e a confirmação inicial, apenas se houver documento.
+        if document_context:
+            input_items.append({
+                "role": "user",
+                "content": f"Considere o conteúdo transcrito abaixo como contexto para as perguntas que farei a seguir:\n\n"
+                           f"--- INÍCIO DO CONTEÚDO TRANSCRITO ---\n"
+                           f"{document_context}\n"
+                           f"--- FIM DO CONTEÚDO TRANSCRITO ---"
+            })
+            input_items.append({
+                "role": "assistant",
+                "content": "Entendido. Estou pronto para responder perguntas sobre o documento fornecido."
+            })
 
         # Adiciona o histórico da conversa
         input_items.extend(history)

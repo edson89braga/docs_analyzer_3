@@ -1,0 +1,4 @@
+# Área de staging do deploy manual do usuário (docker-compose.yml, segredos, .tar de imagens,
+# cópia paralela de SOURCE/). Sincronizada manualmente por ele — nunca ler, buscar ou editar aqui.
+# Ver CLAUDE.md, seção 7.
+Deploy_PF/

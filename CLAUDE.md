@@ -102,6 +102,13 @@ SOURCE/
 - **Bind mounts** (`./SOURCE`, `./assets`, `./logs`, `./uploads_temp`) permitem hot-reload de código sem rebuild da imagem — mudanças em `.py` só exigem `docker-compose restart`. Rebuild completo só é necessário para mudanças em dependências (`pyproject.toml`) ou no `Dockerfile`.
 - Auto-updater do executável desktop consulta `VERSION_INFO_URL` (GitHub raw) — coordenar com `release_info/` ao gerar novas versões.
 
+### ⚠️ `Deploy_PF/` — NUNCA tocar
+
+- `Deploy_PF/` (raiz do repo, gitignorado) é a área de staging do deploy manual do usuário: cópia paralela de `SOURCE/`/`admin_py/`/`assets/` + `docker-compose.yml`, `credentials_fb.json`, `firebase_service_key.enc`, e os `.tar` das imagens Docker já exportadas (`opera_app_image.tar`, `ml_engine_image.tar`).
+- **O usuário sincroniza esse diretório manualmente** (copia os `.py` alterados de `SOURCE/` para dentro de `Deploy_PF/SOURCE/` por conta própria) e depois faz o SCP dele para a VM. Isso é proposital — ele quer manter controle explícito sobre o que vai para produção e quando.
+- **Nunca copiar, editar ou sincronizar arquivos dentro de `Deploy_PF/` de forma autônoma**, mesmo que ele fique visivelmente desatualizado em relação a `SOURCE/` (isso é esperado e normal entre um deploy e outro). Também listado em `.claudeignore` — não ler/buscar nesse diretório por padrão.
+- Editar em `SOURCE/` é suficiente para qualquer tarefa de código. Só mencionar `Deploy_PF/` se o próprio usuário perguntar sobre o estado do deploy.
+
 ---
 
 ## 8. Sobre a documentação existente

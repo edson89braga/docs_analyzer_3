@@ -269,8 +269,8 @@ class ChatViewContent(ft.Column):
     def _show_initial_greeting(self):
         """Adiciona uma mensagem inicial de boas-vindas ao chat."""
         if not self.chat_history_view.controls:
-            initial_message = { "id": time.time(), "author": "IA", 
-                                "text": "Olá! Carregue um ou mais documentos para iniciar a conversa." }
+            initial_message = { "id": time.time(), "author": "IA",
+                                "text": "Olá! Pergunte livremente ou carregue um ou mais documentos para uma análise focada." }
             self._add_message_to_view(initial_message)
 
     def _add_message_to_view(self, message_data: Dict[str, Any]):
@@ -445,8 +445,10 @@ class ChatViewContent(ft.Column):
         user_id = self.page.session.get("auth_user_id")
         chat_session_id = self.chat_session_id        
         
-        # Pega as instruções atuais
-        instructions = self._get_active_system_prompt()
+        # Pega as instruções atuais: o system prompt configurado só se aplica quando há
+        # arquivo(s) carregado(s) na sessão; caso contrário, o chat opera livre (sem instruções).
+        has_files = bool(self.page.session.get(KEY_SESSION_CHAT_FILES))
+        instructions = self._get_active_system_prompt() if has_files else None
 
         # Verifica se o prompt mudou desde a última chamada 
         last_used_prompt_text = self.user_cache.get(KEY_SESSION_CHAT_LAST_USED_PROMPT_TEXT)
@@ -470,8 +472,9 @@ class ChatViewContent(ft.Column):
             return
         
         document_context = self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
+        has_files = bool(self.page.session.get(KEY_SESSION_CHAT_FILES))
 
-        if not document_context:
+        if has_files and not document_context:
             #show_snackbar(self.page, "Aguarde a extração de texto ser concluída ou carregue um arquivo.", color=theme.COLOR_WARNING)
             show_snackbar(self.page, "Para iniciar o chat é necessário extrair o conteúdo do(s) documento(s) carregados.", color=theme.COLOR_WARNING)
             self.page.run_thread(lambda: self._set_processing_state(False))
@@ -752,7 +755,8 @@ class ChatViewContent(ft.Column):
         self._add_message_to_view(thinking_message_data)
 
         document_context = self.user_cache.get(KEY_SESSION_CHAT_DOCUMENT_CONTEXT)
-        if not document_context:
+        has_files = bool(self.page.session.get(KEY_SESSION_CHAT_FILES))
+        if has_files and not document_context:
             show_snackbar(self.page, "Contexto do documento não encontrado para regenerar a resposta.", color=theme.COLOR_ERROR)
             return
 
@@ -866,11 +870,11 @@ class ChatViewContent(ft.Column):
         
         # self.anonymize_button.disabled = not has_context # Ainda não habilitada a função
 
-        # Campos de Chat: habilitados desde o carregamento de arquivos.
-        self.clear_chat_button.content.disabled = not has_files
+        # Campos de Chat: habilitados mesmo sem arquivos carregados (chat livre).
+        self.clear_chat_button.content.disabled = False
 
-        self.user_input_field.disabled = not has_files
-        self.send_button.disabled = not has_files # not has_context
+        self.user_input_field.disabled = False
+        self.send_button.disabled = False
 
         if has_context:
             self.extract_button.text = "Texto extraído"
