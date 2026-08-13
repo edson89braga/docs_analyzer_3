@@ -18,7 +18,7 @@ from openai import OpenAI, AuthenticationError, APIError, InternalServerError
 
 # Imports do Projeto
 from SOURCE.settings import (DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID, LLM_PF_MAX_OUTPUT_TOKENS,
-                            LLM_PF_CONTEXT_WINDOW, LLM_PF_OUTPUT_RESERVE_TOKENS, LLM_PF_TOKEN_SAFETY_MARGIN)
+                            LLM_PF_CONTEXT_WINDOW, LLM_PF_TOKEN_SAFETY_MARGIN)
 from SOURCE.config.provider import is_local_mode
 from SOURCE.utils import with_proxy
 from SOURCE.core.prompts import (output_formats, review_function, normalizing_function, # prompts
@@ -265,9 +265,21 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
     Qwen — medição empírica mostrou um desvio de ~8% (tiktoken subestima), coberto pela
     margem de segurança LLM_PF_TOKEN_SAFETY_MARGIN.
 
+    A reserva de saída é o próprio LLM_PF_MAX_OUTPUT_TOKENS, e não uma constante de planejamento
+    separada: com enable_thinking=True o modelo gasta boa parte do orçamento de saída no raciocínio
+    antes de emitir o JSON, então pedir menos que o teto nominal produz resposta truncada (content
+    vazio, finish_reason='length'). Como a truncagem acontece na etapa 'Processar Conteúdo' e o
+    reasoning_effort pode ser alterado depois, na etapa de análise, a reserva é aplicada sempre —
+    o modo sem raciocínio apenas não usa o espaço sobrando.
+
+    A margem entra aqui como divisão por (1 + margem), espelhando exatamente a inflação aplicada em
+    compute_llm_pf_max_output_tokens. Descontar (1 - margem) do orçamento total, como se fazia antes,
+    não é o inverso dessa inflação e deixava o teto de saída cair abaixo de LLM_PF_MAX_OUTPUT_TOKENS
+    para prompts com overhead alto.
+
     Fórmula:
-        budget = (LLM_PF_CONTEXT_WINDOW - LLM_PF_OUTPUT_RESERVE_TOKENS - extra_reserve
-                  - tokens(prompt_messages)) * (1 - LLM_PF_TOKEN_SAFETY_MARGIN)
+        input_total_max = (LLM_PF_CONTEXT_WINDOW - LLM_PF_MAX_OUTPUT_TOKENS) / (1 + LLM_PF_TOKEN_SAFETY_MARGIN)
+        budget = input_total_max - tokens(prompt_messages) - extra_reserve
 
     Args:
         prompt_messages: Lista de dicts {"role": ..., "content": ...} do prompt fixo já
@@ -278,23 +290,23 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
     Returns:
         Orçamento de tokens disponível para o texto de entrada (mínimo 1).
 
-        Exemplo de retorno: 96700
+        Exemplo de retorno: 90847
     """
     prompt_overhead = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in prompt_messages)
-    raw_budget = LLM_PF_CONTEXT_WINDOW - LLM_PF_OUTPUT_RESERVE_TOKENS - extra_reserve - prompt_overhead
-    budget = int(raw_budget * (1 - LLM_PF_TOKEN_SAFETY_MARGIN))
+    input_total_max = int((LLM_PF_CONTEXT_WINDOW - LLM_PF_MAX_OUTPUT_TOKENS) / (1 + LLM_PF_TOKEN_SAFETY_MARGIN))
+    budget = input_total_max - prompt_overhead - extra_reserve
 
     if budget < 1:
         logger.warning(
             "compute_llm_pf_auto_token_limit: orçamento calculado <= 0 "
-            "(overhead_prompt=%d, extra_reserve=%d, raw_budget=%d). Forçando mínimo de 1.",
-            prompt_overhead, extra_reserve, raw_budget,
+            "(overhead_prompt=%d, extra_reserve=%d, input_total_max=%d). Forçando mínimo de 1.",
+            prompt_overhead, extra_reserve, input_total_max,
         )
         budget = 1
 
     logger.debug(
-        "[AUTO_TOKEN_LIMIT] overhead_prompt=%d, extra_reserve=%d, budget_final=%d",
-        prompt_overhead, extra_reserve, budget,
+        "[AUTO_TOKEN_LIMIT] overhead_prompt=%d, extra_reserve=%d, input_total_max=%d, budget_final=%d",
+        prompt_overhead, extra_reserve, input_total_max, budget,
     )
     return budget
 
@@ -383,7 +395,50 @@ def compute_llm_pf_max_output_tokens(messages: List[Dict[str, str]]) -> int:
         "[MAX_OUTPUT_TOKENS] input_estimado=%d, input_com_margem=%d, max_tokens=%d",
         input_estimate, input_safe, max_output,
     )
+
+    if max_output < LLM_PF_MAX_OUTPUT_TOKENS:
+        # Com a truncagem automática isso não deve ocorrer (compute_llm_pf_auto_token_limit já
+        # preserva o teto integral); acontece quando o usuário fixa 'Limite Tokens Input' manualmente
+        # em um valor alto demais. Com raciocínio ativado o risco é a resposta terminar sem JSON.
+        logger.warning(
+            "[MAX_OUTPUT_TOKENS] Teto de saída reduzido para %d (abaixo dos %d nominais): a entrada não "
+            "deixou espaço suficiente. Com o raciocínio ativado a resposta pode ser truncada — reduza o "
+            "'Limite Tokens Input' nas configurações.",
+            max_output, LLM_PF_MAX_OUTPUT_TOKENS,
+        )
+
     return max_output
+
+def _build_raw_fallback_text(raw_text: str | None, finish_reason: str | None) -> str:
+    """
+    Monta o texto exibido na UI quando a resposta da LLM não pôde ser convertida para o Pydantic.
+
+    Preserva o conteúdo bruto (JSON malformado, JSON truncado ou raciocínio do modelo) para que o
+    usuário ainda possa aproveitar o teor manualmente, prefixado por um aviso que explica o motivo.
+
+    Args:
+        raw_text: Texto bruto devolvido pela LLM (`content` ou `reasoning_content`); pode ser vazio.
+        finish_reason: Motivo de término informado pela API ('stop', 'length', etc.).
+
+    Returns:
+        Texto pronto para exibição na UI.
+
+        Exemplo de retorno:
+        '[AVISO: Resposta não formatada corretamente pela IA — saída truncada por limite de tokens
+        (finish_reason=length). Considere desativar o raciocínio ou reduzir o volume de páginas.]
+
+        {"descricao_geral": "Requisição de instauração de Inquérito Poli'
+    """
+    if finish_reason == "length":
+        aviso = ("[AVISO: Resposta não formatada corretamente pela IA — saída truncada por limite de tokens "
+                 "(finish_reason=length). Considere desativar o raciocínio ou reduzir o volume de páginas.]")
+    else:
+        aviso = "[AVISO: Resposta não formatada corretamente pela IA]"
+
+    if not raw_text:
+        return f"{aviso}\n\n(A IA não retornou nenhum conteúdo aproveitável nesta requisição.)"
+
+    return f"{aviso}\n\n{raw_text}"
 
 def create_llm_pf_completion(client: OpenAI, **create_kwargs: Any) -> Any:
     """
@@ -962,10 +1017,23 @@ def analyze_text_with_llm(
                 logger.info('[DEBUG]: Requisição concluída.')
                 
                 # Extrair o conteúdo da resposta
-                final_response_text = response.choices[0].message.content
+                choice = response.choices[0]
+                finish_reason = choice.finish_reason
+                final_response_text = choice.message.content
+
+                if not final_response_text:
+                    # Com enable_thinking=True o Qwen pode consumir todo o orçamento de saída no
+                    # raciocínio: 'content' volta vazio e o teor útil (inclusive JSON parcial) fica
+                    # em 'reasoning_content'. Aproveitá-lo é melhor do que devolver nada ao usuário.
+                    final_response_text = getattr(choice.message, "reasoning_content", None)
+                    logger.warning(
+                        "Endpoint PF devolveu 'content' vazio (finish_reason=%s); usando 'reasoning_content' "
+                        "como texto bruto (%d caracteres).",
+                        finish_reason, len(final_response_text or "")
+                    )
 
                 logger.info(f"[DEBUG]: final_response_text obtido: \n{final_response_text}\n")
-                
+
                 try:
                     final_response_text_clean = extract_and_clean_json(final_response_text)
                     final_response = try_convert_to_pydantic_format(final_response_text_clean, output_formats[prompt_name])
@@ -976,7 +1044,7 @@ def analyze_text_with_llm(
                     # raise
                     # Fallback: Retorna o texto bruto se o JSON falhar
                     logger.warning("Retornando resposta bruta devido a falha no parsing JSON.")
-                    final_response = f"[AVISO: Resposta não formatada corretamente pela IA]\n\n{final_response_text}"
+                    final_response = _build_raw_fallback_text(final_response_text, finish_reason)
 
                 # Obter informações sobre o uso de tokens (se disponível)
                 usage = response.usage

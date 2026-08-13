@@ -129,16 +129,17 @@ LLM_PF_MODEL_ID = "Qwen3.5-35B-A3B-FP8"  # Janela de contexto: 128k tokens (subs
 # NÃO usar um valor próximo da janela de contexto: a API valida (tokens_de_entrada + max_tokens) contra
 # a janela total, então pedir "todo o espaço restante" faz a requisição encostar no teto por construção e
 # qualquer subestimação do input (tiktoken vs. tokenizer real do Qwen) vira erro 400. Valor dimensionado
-# pelo que a resposta de fato consome (2x LLM_PF_OUTPUT_RESERVE_TOKENS, cobrindo thinking + JSON longo).
+# pelo que a resposta de fato consome, cobrindo thinking + JSON longo: com enable_thinking=True o
+# modelo gasta boa parte desse orçamento raciocinando antes de emitir o JSON, e um teto menor faz a
+# resposta terminar em finish_reason='length' com 'content' vazio.
 LLM_PF_MAX_OUTPUT_TOKENS = 16_000
 
 # Truncagem automática de tokens de entrada (nc_analyzer e chat) ---------------------------
 # Usadas para calcular quantas páginas de documento cabem no contexto, quando o usuário
 # deixa 'Limite Tokens Input' vazio no drawer de configurações (modo automático).
-# len_max_output do modelo NÃO é o LLM_PF_MAX_OUTPUT_TOKENS acima (esse é o teto pedido à API);
-# aqui é uma reserva de PLANEJAMENTO, para não deixar o orçamento de input "comer" o espaço do output.
+# A reserva de saída usada no cálculo é o próprio LLM_PF_MAX_OUTPUT_TOKENS acima — o orçamento de
+# input é o que sobra da janela depois de garantir esse teto (ver compute_llm_pf_auto_token_limit).
 LLM_PF_CONTEXT_WINDOW = 128_000            # janela total do modelo
-LLM_PF_OUTPUT_RESERVE_TOKENS = 8_000       # reserva de planejamento p/ output (nc_analyzer)
 LLM_PF_CHAT_HISTORY_RESERVE_TOKENS = 20_000  # reserva extra p/ chat: o document_context fixo não pode
                                               # consumir o espaço que os próximos turnos da conversa vão precisar
 LLM_PF_TOKEN_SAFETY_MARGIN = 0.10          # ~10%, calibrado no drift medido entre tiktoken e o tokenizer real do Qwen (~7,9%)

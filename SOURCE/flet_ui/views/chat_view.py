@@ -1114,7 +1114,6 @@ class ChatViewContent(ft.Column):
                     page.run_thread(show_snackbar, page, error_msg, color=theme.COLOR_ERROR)
                     return # Aborta a thread
                 
-                import SOURCE.core.ai_orchestrator as ai_orchestrator
                 loaded_embeddings_providers = page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
 
                 ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
@@ -1230,7 +1229,7 @@ class ChatViewContent(ft.Column):
                 msg_error = f"Ocorreu um erro inesperado durante o processamento: {e}"
                 logger.error(msg_error, exc_info=True)
                 show_snackbar(page, msg_error, color=theme.COLOR_ERROR)
-            page.run_thread(update_ui_on_error(e))
+            page.run_thread(update_ui_on_error, e)
 
     def _extract_raw_context_from_files(self, files: List[Dict[str, Any]], optimize_too: bool = False):
         """
@@ -1301,7 +1300,7 @@ class ChatViewContent(ft.Column):
                 msg_error = f"Erro ao extrair texto: {e}"
                 logger.error(msg_error, exc_info=True)
                 show_snackbar(page, msg_error, color=theme.COLOR_ERROR)
-            page.run_thread(update_ui_on_error(e))
+            page.run_thread(update_ui_on_error, e)
 
     def _update_processing_metadata_display(self, proc_meta: Dict[str, Any] = None):
         """Atualiza a exibição de metadados no FileListManager."""

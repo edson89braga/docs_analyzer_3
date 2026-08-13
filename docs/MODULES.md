@@ -7,13 +7,25 @@
 > "llm_pf"`, `nc_analyze_view.py` (`_pdf_processing_thread_func`) e `chat_view.py`
 > (`_preprocess_documents`) calculam o orçamento de tokens em runtime via
 > `ai_orchestrator.compute_llm_pf_auto_token_limit()`, descontando o overhead real do prompt
-> fixo (medido com tiktoken) e uma reserva de output (`LLM_PF_OUTPUT_RESERVE_TOKENS`) da janela
+> fixo (medido com tiktoken) e a reserva de output (`LLM_PF_MAX_OUTPUT_TOKENS`) da janela
 > do modelo (`LLM_PF_CONTEXT_WINDOW`). O chat soma ainda `LLM_PF_CHAT_HISTORY_RESERVE_TOKENS` para
 > não deixar o contexto do documento consumir o espaço dos próximos turnos. Constantes em
 > `SOURCE/settings.py`. `FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"]` passou a ser `None`
 > (automático) por padrão. Para outros providers (`openai`), o modo automático ainda não é
 > suportado (sem tabela de janela de contexto por modelo neste repo) — cai num fallback fixo de
 > 180.000 tokens, com log de warning.
+>
+> **Correção posterior (13/08/2026):** a reserva de output do cálculo automático era uma constante
+> de planejamento própria (`LLM_PF_OUTPUT_RESERVE_TOKENS = 8.000`, removida), menor que o teto de
+> fato pedido à API (`LLM_PF_MAX_OUTPUT_TOKENS = 16.000`), e a margem de segurança era aplicada como
+> desconto `(1 - margem)` sobre o orçamento total — que não é o inverso da inflação `(1 + margem)`
+> usada em `compute_llm_pf_max_output_tokens()`. As duas inconsistências somadas deixavam o
+> `max_tokens` cair para ~8.000 em lotes grandes; com `enable_thinking=True` o modelo consumia tudo
+> no raciocínio e devolvia `content` vazio (`finish_reason='length'`). Agora o orçamento de input é
+> `(LLM_PF_CONTEXT_WINDOW - LLM_PF_MAX_OUTPUT_TOKENS) / (1 + LLM_PF_TOKEN_SAFETY_MARGIN)` menos o
+> overhead do prompt, o que preserva os 16.000 tokens de saída por construção, truncando mais páginas
+> de entrada em troca. Quando o `content` ainda assim vier vazio, `analyze_text_with_llm()` usa
+> `message.reasoning_content` como texto bruto, para a UI renderizar o teor aproveitável.
 
 > **Adendo 13/08/2026 — atualizações de UI a partir de threads.** Correção do
 > `AttributeError: 'NoneType' object has no attribute 'session'` + `AssertionError` do Flet que
