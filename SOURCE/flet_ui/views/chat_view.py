@@ -288,7 +288,27 @@ class ChatViewContent(ft.Column):
             self.page.update()
 
     def _update_last_message_text(self, text_chunk: str, append: bool = True):
-        """Atualiza o texto da última mensagem na view."""
+        """Atualiza o texto da última mensagem na view.
+
+        ATENÇÃO — usar sempre `append=False`. O dict em `bubble.data` é o MESMO objeto
+        guardado no cache por `_save_state_to_session()`, e a thread de resposta
+        (`_handle_ai_response_thread`) escreve `msg["text"] = full_response_content`
+        diretamente nesse dict, em paralelo aos updates de UI agendados via
+        `page.run_thread`. Com `append=True`, um callback que rodasse depois dessa
+        escrita concatenava a resposta já completa sobre ela mesma — era a causa da
+        duplicação de respostas no chat (corrigido em 13/08/2026).
+
+        Por isso o ramo `append=True` está sem chamadores hoje: todos os pontos de
+        atualização passam o texto ACUMULADO com `append=False`, tornando a operação
+        uma atribuição idempotente que converge para o mesmo resultado em qualquer
+        ordem de execução. O parâmetro foi mantido apenas para não alterar a assinatura.
+
+        Args:
+            text_chunk: Texto a aplicar na última mensagem. Com `append=False`
+                (recomendado), deve ser o texto acumulado completo, não um trecho.
+            append: Se True, concatena ao texto existente (ver ressalva acima);
+                se False, substitui.
+        """
         if not self.chat_history_view.controls: 
             return
         last_bubble = self.chat_history_view.controls[-1]
@@ -576,7 +596,11 @@ class ChatViewContent(ft.Column):
                     chunk = response_part["content"]
                     full_response_content += chunk
                     if view and view.page:
-                        view.page.run_thread(lambda c=chunk: view._update_last_message_text(c, append=True))
+                        # Texto ACUMULADO com append=False: esta thread escreve no mesmo dict
+                        # em paralelo ao callback de UI, e a atribuição evita a duplicação que
+                        # o '+=' causava. Ver docstring de _update_last_message_text.
+                        accumulated = full_response_content
+                        view.page.run_thread(lambda t=accumulated: view._update_last_message_text(t, append=False))
 
                 elif response_part["type"] == "final_metrics":
                     final_usage_data = response_part["data"]

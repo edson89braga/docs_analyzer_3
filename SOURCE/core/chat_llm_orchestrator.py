@@ -24,17 +24,19 @@ from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEM
 def _strip_thinking_blocks(content: str) -> str:
     """Remove o(s) bloco(s) de raciocínio ('thinking') do conteúdo bruto retornado pelo modelo.
 
-    O Qwen3.5, com 'enable_thinking' ativo, por vezes gera mais de um ciclo de
-    `<think>...</think>` antes de fechar a resposta (ex.: reconsidera e reescreve
-    a resposta dentro de um novo bloco de raciocínio). Um `re.sub` que apenas
-    remove cada par `<think>...</think>` deixaria intacto qualquer rascunho de
-    resposta escrito *entre* dois blocos desses — fazendo a resposta final
-    aparecer duplicada (ou parcialmente duplicada) para o usuário.
+    Com 'enable_thinking' ativo, o Qwen3.5 devolve o raciocínio em `<think>...</think>`
+    antes da resposta final; só o que vem depois interessa ao usuário.
 
-    Por isso, quando há ao menos um `</think>` no texto, mantém-se apenas o
-    conteúdo após o ÚLTIMO fechamento — descartando qualquer rascunho
-    intermediário. Se não houver `<think>` no texto, o conteúdo é retornado
-    inalterado.
+    Em vez de remover cada par `<think>...</think>` isoladamente, mantém-se apenas o
+    conteúdo após o ÚLTIMO `</think>`. Assim, se o modelo gerar mais de um ciclo de
+    raciocínio, eventuais rascunhos escritos *entre* dois blocos também são descartados
+    — caso contrário sobrariam no texto final. Se não houver `<think>`, o conteúdo é
+    retornado inalterado.
+
+    Nota: a duplicação de respostas observada em produção (13/08/2026) NÃO era causada
+    por rascunhos entre blocos de raciocínio — a causa real era uma race condition na UI
+    do chat (ver `ChatViewContent._handle_ai_response_thread`). Esta função trata apenas
+    da limpeza do raciocínio; não é o ponto de correção daquele bug.
 
     Args:
         content: Texto bruto retornado pelo modelo (choice.message.content).
@@ -216,14 +218,18 @@ class ChatLLMOrchestrator:
                 # Processa resposta não-streaming (response é um objeto, não um iterador)
                 full_response_content = ""
                 if hasattr(response, 'choices') and response.choices:
-                    # Sem o parâmetro 'n' no request, a API deveria retornar exatamente 1 choice.
-                    # Já foi observado o endpoint llm_pf retornar múltiplas choices com conteúdo
-                    # idêntico/repetido para a mesma requisição; iterar todas e concatená-las (sem
-                    # separador) duplicava a resposta inteira na UI. Usamos apenas a primeira.
+                    # Sem o parâmetro 'n' no request, a API retorna exatamente 1 choice — e é isso
+                    # que se observa na prática. Guarda defensiva: o código anterior iterava todas
+                    # as choices concatenando-as SEM separador, o que produziria texto corrompido
+                    # caso o endpoint algum dia devolvesse mais de uma. Usamos apenas a primeira e
+                    # logamos, para que o cenário fique visível se ocorrer.
+                    # (Não confundir com a duplicação de respostas reportada em 13/08/2026: aquela
+                    #  vinha de uma race condition na UI, não de múltiplas choices — este aviso
+                    #  nunca chegou a ser emitido naquele diagnóstico.)
                     if len(response.choices) > 1:
                         logger.warning(
                             f"Resposta do llm_pf retornou {len(response.choices)} choices "
-                            "(esperado 1); usando apenas a primeira para evitar duplicação."
+                            "(esperado 1); usando apenas a primeira."
                         )
                     choice = response.choices[0]
                     if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
