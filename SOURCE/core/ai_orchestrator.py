@@ -298,6 +298,146 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
     )
     return budget
 
+# Folga descontada ao recalcular o teto de saída na retentativa pós-erro 400. O servidor informa o
+# input real como "at least N", ou seja, um piso — a folga cobre essa imprecisão declarada.
+LLM_PF_RETRY_SAFETY_BUFFER = 512
+
+# Trechos que identificam um erro de contexto excedido nas mensagens do vLLM (endpoint PF) e da OpenAI.
+_CONTEXT_LENGTH_ERROR_MARKERS = (
+    "longer than the maximum model length",
+    "maximum context length",
+    "context_length_exceeded",
+)
+
+def is_context_length_error(api_err: Exception) -> bool:
+    """
+    Indica se uma exceção de API corresponde a estouro da janela de contexto do modelo.
+
+    Args:
+        api_err: Exceção capturada da chamada à API (APIError, InternalServerError etc.).
+
+    Returns:
+        True se a mensagem de erro indicar contexto excedido.
+    """
+    err_str = str(api_err).lower()
+    return any(marker in err_str for marker in _CONTEXT_LENGTH_ERROR_MARKERS)
+
+def parse_context_length_error(api_err: Exception) -> Optional[Tuple[int, int]]:
+    """
+    Extrai a contagem real de tokens de entrada e a janela de contexto de um erro de contexto excedido.
+
+    Os números vêm do tokenizer real do modelo (não da aproximação por tiktoken), o que os torna a
+    fonte confiável tanto para a mensagem exibida ao usuário quanto para recalcular o teto de saída
+    numa retentativa. A extração é por padrão nomeado — buscar "os primeiros números da mensagem"
+    capturaria o código HTTP ("Error code: 400") como se fosse contagem de tokens.
+
+    Formatos cobertos:
+        vLLM (antigo) : "The decoder prompt (length N) is longer than the maximum model length of M."
+        vLLM (atual)  : "This model's maximum context length is M tokens. However, you requested X
+                         output tokens and your prompt contains at least N input tokens..."
+        OpenAI        : "This model's maximum context length is M tokens. However, your messages
+                         resulted in N tokens."
+
+    Args:
+        api_err: Exceção capturada da chamada à API.
+
+    Returns:
+        Tupla (tokens_de_entrada_reais, janela_de_contexto) ou None se a mensagem não trouxer ambos.
+
+        Exemplo de retorno: (89228, 131072)
+    """
+    err_str = str(api_err).lower()
+    max_len_match = re.search(r"maximum (?:context length|model length)(?: is| of) (\d+)", err_str)
+    input_len_match = (
+        re.search(r"prompt contains at least (\d+) input tokens", err_str)
+        or re.search(r"decoder prompt \(length (\d+)\)", err_str)
+        or re.search(r"your messages resulted in (\d+) tokens", err_str)
+        or re.search(r"parameter=input_tokens, value=(\d+)", err_str)
+    )
+    if not (max_len_match and input_len_match):
+        return None
+    return int(input_len_match.group(1)), int(max_len_match.group(1))
+
+def compute_llm_pf_max_output_tokens(messages: List[Dict[str, str]]) -> int:
+    """
+    Calcula o teto de tokens de saída (`max_tokens`) a pedir ao endpoint llm_pf.
+
+    A API valida (tokens_de_entrada + max_tokens) contra a janela de contexto, então o teto nominal
+    de LLM_PF_MAX_OUTPUT_TOKENS é limitado pelo espaço que sobra para as mensagens já montadas. A
+    estimativa de entrada usa tiktoken, que subestima o tokenizer real do Qwen — daí a aplicação de
+    LLM_PF_TOKEN_SAFETY_MARGIN sobre a contagem estimada.
+
+    Args:
+        messages: Lista de dicts {"role": ..., "content": ...} já montada para o envio.
+
+    Returns:
+        Teto de tokens de saída a enviar em `max_tokens` (mínimo 1).
+
+        Exemplo de retorno: 16000
+    """
+    input_estimate = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in messages)
+    input_safe = int(input_estimate * (1 + LLM_PF_TOKEN_SAFETY_MARGIN))
+    max_output = max(1, min(LLM_PF_MAX_OUTPUT_TOKENS, LLM_PF_CONTEXT_WINDOW - input_safe))
+
+    logger.info(
+        "[MAX_OUTPUT_TOKENS] input_estimado=%d, input_com_margem=%d, max_tokens=%d",
+        input_estimate, input_safe, max_output,
+    )
+    return max_output
+
+def create_llm_pf_completion(client: OpenAI, **create_kwargs: Any) -> Any:
+    """
+    Executa `chat.completions.create` no endpoint llm_pf com autocorreção do teto de saída.
+
+    A contagem de entrada calculada localmente é uma aproximação (tiktoken vs. tokenizer do Qwen);
+    quando ela subestima o suficiente para que (entrada + max_tokens) ultrapasse a janela, a API
+    devolve 400. Nesse caso o próprio erro informa a contagem real de entrada, usada aqui para
+    recalcular `max_tokens` e repetir a chamada uma única vez — tornando a correção exata, sem
+    depender da calibragem da margem de segurança.
+
+    Args:
+        client: Cliente OpenAI já configurado para o endpoint PF.
+        **create_kwargs: Argumentos repassados a `chat.completions.create` (model, messages,
+            max_tokens, etc.).
+
+    Returns:
+        O objeto ChatCompletion retornado pela API.
+
+    Raises:
+        APIError: Repropagado quando o erro não é de contexto excedido, quando a mensagem não traz
+            as contagens necessárias, ou quando nem reduzir a saída resolveria (entrada sozinha
+            maior que a janela).
+    """
+    try:
+        return client.chat.completions.create(**create_kwargs)
+    except (APIError, InternalServerError) as api_err:
+        if not is_context_length_error(api_err):
+            raise
+
+        parsed = parse_context_length_error(api_err)
+        if parsed is None:
+            logger.warning("Erro de contexto excedido sem contagens legíveis na mensagem; sem retentativa.")
+            raise
+
+        real_input_tokens, context_window = parsed
+        requested_max_tokens = create_kwargs.get("max_tokens") or 0
+        adjusted_max_tokens = context_window - real_input_tokens - LLM_PF_RETRY_SAFETY_BUFFER
+
+        if adjusted_max_tokens < 1 or adjusted_max_tokens >= requested_max_tokens:
+            # Reduzir a saída não resolve: a entrada sozinha já não cabe na janela do modelo.
+            logger.error(
+                "Contexto excedido pela entrada (%d tokens reais, janela de %d); retentativa não aplicável.",
+                real_input_tokens, context_window,
+            )
+            raise
+
+        logger.warning(
+            "Contexto excedido (entrada real=%d, janela=%d). Reduzindo max_tokens de %d para %d e repetindo.",
+            real_input_tokens, context_window, requested_max_tokens, adjusted_max_tokens,
+        )
+        create_kwargs["max_tokens"] = adjusted_max_tokens
+        return client.chat.completions.create(**create_kwargs)
+
 def criar_batches(
     textos_com_indices: List[Tuple[int, str]],
     limite_tokens_por_texto: int,
@@ -807,25 +947,15 @@ def analyze_text_with_llm(
                 enable_thinking = bool(reasoning_effort) and reasoning_effort.lower() != "minimal"
                 logger.info(f"Usando {model_pf} com modo de raciocínio {'ativado' if enable_thinking else 'desativado'} (enable_thinking={enable_thinking}).")
 
-                # Ajusta o teto de tokens de saída dinamicamente: LLM_PF_MAX_OUTPUT_TOKENS somado aos
-                # tokens de entrada pode ultrapassar a janela de contexto do modelo mesmo com poucas
-                # páginas (ex.: 128_000 + 3_073 > 131_072, causando 400 da API). Reusa a mesma janela
-                # conservadora e margem de segurança da truncagem de input (compute_llm_pf_auto_token_limit).
-                input_tokens_estimate = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in messages)
-                input_tokens_safe = int(input_tokens_estimate * (1 + LLM_PF_TOKEN_SAFETY_MARGIN))
-                max_output_tokens = max(1, min(LLM_PF_MAX_OUTPUT_TOKENS, LLM_PF_CONTEXT_WINDOW - input_tokens_safe))
-                logger.info(
-                    f"[DEBUG]: max_tokens ajustado dinamicamente para {max_output_tokens} "
-                    f"(input estimado: {input_tokens_estimate} tokens, com margem: {input_tokens_safe})."
-                )
-
-                # Chamada para chat completions
+                # Chamada para chat completions (max_tokens limitado ao espaço restante da janela;
+                # em caso de 400 por contexto, a chamada se reajusta e repete uma vez)
                 logger.info('[DEBUG]: Requisitando à API do endpoint PF...')
-                response = client_pf.chat.completions.create(
+                response = create_llm_pf_completion(
+                    client_pf,
                     model=model_pf,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=max_output_tokens,
+                    max_tokens=compute_llm_pf_max_output_tokens(messages),
                     response_format=response_format,
                     extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}}
                 )
@@ -899,24 +1029,12 @@ def analyze_text_with_llm(
         # Exemplos conhecidos:
         #   vLLM/llm_pf : "The decoder prompt (length N) is longer than the maximum model length of M."
         #   OpenAI API   : "This model's maximum context length is M tokens. However, your messages resulted in N tokens."
-        err_str = str(api_err).lower()
-        if ("longer than the maximum model length" in err_str
-                or "maximum context length" in err_str
-                or "context_length_exceeded" in err_str):
-            import re
-            # Extração direcionada por padrão conhecido (em vez de pegar os N primeiros números do
-            # texto), pois a mensagem completa da exceção também contém o código HTTP (ex.: "Error
-            # code: 400"), que era capturado erroneamente como se fosse a contagem de tokens.
-            max_len_match = re.search(r"maximum (?:context length|model length)(?: is| of) (\d+)", err_str)
-            prompt_len_match = (
-                re.search(r"decoder prompt \(length (\d+)\)", err_str)
-                or re.search(r"prompt contains at least (\d+) input tokens", err_str)
-                or re.search(r"your messages resulted in (\d+) tokens", err_str)
-            )
-            if max_len_match and prompt_len_match:
-                prompt_len, max_len = prompt_len_match.group(1), max_len_match.group(1)
-                detail = (f"Documento filtrado com {int(prompt_len):,} tokens excede o limite de "
-                          f"{int(max_len):,} tokens do modelo selecionado.")
+        if is_context_length_error(api_err):
+            parsed = parse_context_length_error(api_err)
+            if parsed:
+                prompt_len, max_len = parsed
+                detail = (f"Documento filtrado com {prompt_len:,} tokens excede o limite de "
+                          f"{max_len:,} tokens do modelo selecionado.")
             else:
                 detail = "O documento filtrado excede o limite de tokens do modelo selecionado."
             raise ContextLengthExceededError(detail) from api_err

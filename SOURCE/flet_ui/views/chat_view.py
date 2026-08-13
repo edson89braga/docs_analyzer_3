@@ -85,7 +85,7 @@ class ChatViewContent(ft.Column):
 
         self.active_model_button = ft.TextButton(
             text="Modelo: Carregando...",
-            icon=ft.Icons.MODEL_TRAINING_OUTLINED, width=400,
+            icon=ft.Icons.MODEL_TRAINING_OUTLINED, width=300,
             on_click=self._handle_toggle_settings_drawer,
             tooltip="Clique para ver e alterar as configurações de análise",
             style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=12))

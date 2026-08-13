@@ -125,7 +125,12 @@ DEFAULT_TEMPERATURE = 0.2 # Baixa temperatura para respostas mais factuais/consi
 # Endpoint interno da PF (provider "llm_pf") -----------------------------------------------
 # Modelo fixo servido em http://llm.pf.gov.br:31893/v1, independente do modelo selecionado na UI.
 LLM_PF_MODEL_ID = "Qwen3.5-35B-A3B-FP8"  # Janela de contexto: 128k tokens (substituiu Qwen3-8B-AWQ, 32k)
-LLM_PF_MAX_OUTPUT_TOKENS = 128_000  # Teto de tokens de saída solicitado ao endpoint; sem isso, a resposta é truncada em 4096 tokens. Na prática o teto real é (janela de contexto - tokens de entrada).
+# Teto de tokens de saída solicitado ao endpoint; sem isso, a resposta é truncada em 4096 tokens.
+# NÃO usar um valor próximo da janela de contexto: a API valida (tokens_de_entrada + max_tokens) contra
+# a janela total, então pedir "todo o espaço restante" faz a requisição encostar no teto por construção e
+# qualquer subestimação do input (tiktoken vs. tokenizer real do Qwen) vira erro 400. Valor dimensionado
+# pelo que a resposta de fato consome (2x LLM_PF_OUTPUT_RESERVE_TOKENS, cobrindo thinking + JSON longo).
+LLM_PF_MAX_OUTPUT_TOKENS = 16_000
 
 # Truncagem automática de tokens de entrada (nc_analyzer e chat) ---------------------------
 # Usadas para calcular quantas páginas de documento cabem no contexto, quando o usuário

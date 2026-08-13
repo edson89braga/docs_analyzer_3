@@ -224,7 +224,7 @@ class AnalyzePDFViewContent(ft.Column):
             text="Modelo: Carregando...",
             icon=ft.Icons.MODEL_TRAINING_OUTLINED,
             tooltip="Clique ver e alterar as configurações de análise",
-            width=400,
+            width=300,
             style=ft.ButtonStyle(padding=ft.padding.symmetric(horizontal=12))
         )
         self.gui_controls[CTL_SETTINGS_BTN] = ft.IconButton(icon=ft.Icons.TUNE_ROUNDED, tooltip="Configurações específicas", icon_size=default_icon_size_bar)

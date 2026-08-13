@@ -17,8 +17,9 @@ from openai import AuthenticationError, APIError
 
 from SOURCE.utils import with_proxy
 from SOURCE.config.provider import is_local_mode
-from SOURCE.core.ai_orchestrator import calc_costs_llm_analysis
-from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID, LLM_PF_MAX_OUTPUT_TOKENS
+from SOURCE.core.ai_orchestrator import (calc_costs_llm_analysis, compute_llm_pf_max_output_tokens,
+                                         create_llm_pf_completion)
+from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID
 
 def _strip_thinking_blocks(content: str) -> str:
     """Remove o(s) bloco(s) de raciocínio ('thinking') do conteúdo bruto retornado pelo modelo.
@@ -202,11 +203,12 @@ class ChatLLMOrchestrator:
             messages = self._build_input_items(document_context, history, user_question, instructions=instructions)
 
             try:
-                response = self.client.chat.completions.create(
+                response = create_llm_pf_completion(
+                    self.client,
                     model=model_name,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=LLM_PF_MAX_OUTPUT_TOKENS,  # Teto nominal; na prática limitado por (contexto - tokens de entrada)
+                    max_tokens=compute_llm_pf_max_output_tokens(messages),
                     stream=False,  # Desabilita streaming
                     extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}}
                 )
@@ -214,13 +216,22 @@ class ChatLLMOrchestrator:
                 # Processa resposta não-streaming (response é um objeto, não um iterador)
                 full_response_content = ""
                 if hasattr(response, 'choices') and response.choices:
-                    for choice in response.choices:
-                        if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
-                            content = choice.message.content
-                            if content:
-                                content = _strip_thinking_blocks(content)
-                                full_response_content += content
-                                yield {"type": "chunk", "content": content}
+                    # Sem o parâmetro 'n' no request, a API deveria retornar exatamente 1 choice.
+                    # Já foi observado o endpoint llm_pf retornar múltiplas choices com conteúdo
+                    # idêntico/repetido para a mesma requisição; iterar todas e concatená-las (sem
+                    # separador) duplicava a resposta inteira na UI. Usamos apenas a primeira.
+                    if len(response.choices) > 1:
+                        logger.warning(
+                            f"Resposta do llm_pf retornou {len(response.choices)} choices "
+                            "(esperado 1); usando apenas a primeira para evitar duplicação."
+                        )
+                    choice = response.choices[0]
+                    if hasattr(choice, 'message') and hasattr(choice.message, 'content'):
+                        content = choice.message.content
+                        if content:
+                            content = _strip_thinking_blocks(content)
+                            full_response_content += content
+                            yield {"type": "chunk", "content": content}
 
                 elif hasattr(response, 'content'):
                     # Fallback direto para propriedade content se choices não estiver disponível
