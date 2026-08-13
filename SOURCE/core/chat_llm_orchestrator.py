@@ -18,7 +18,7 @@ from openai import AuthenticationError, APIError
 from SOURCE.utils import with_proxy
 from SOURCE.config.provider import is_local_mode
 from SOURCE.core.ai_orchestrator import calc_costs_llm_analysis
-from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
+from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID, LLM_PF_MAX_OUTPUT_TOKENS
 
 class ChatLLMOrchestrator:
     """
@@ -48,13 +48,16 @@ class ChatLLMOrchestrator:
         elif self.provider == "llm_pf":
             if is_local_mode():
                 # Para llm_pf, usar base_url customizada e api_key fixa
+                # trust_env=False evita que HTTP_PROXY/HTTPS_PROXY do SO desviem a chamada para o
+                # proxy corporativo, que não alcança a rede interna onde o endpoint está hospedado.
                 base_url = "http://llm.pf.gov.br:31893/v1"
                 api_key_pf = "EMPTY"
                 if self.client is None or self.client.base_url != base_url:
                     logger.debug("Inicializando cliente para endpoint llm_pf.")
                     self.client = openai.OpenAI(
                         api_key=api_key_pf,
-                        base_url=base_url
+                        base_url=base_url,
+                        http_client=httpx.Client(trust_env=False)
                     )
             else:
                 custom_http_client = httpx.Client(trust_env=False)
@@ -130,7 +133,7 @@ class ChatLLMOrchestrator:
 
         Args:
             api_key: A chave da API (para OpenAI) ou ignorada (para llm_pf).
-            model_name: O nome do modelo a ser usado (ex: "gpt-4o-mini" ou "Qwen3-8B-AWQ").
+            model_name: O nome do modelo a ser usado (ex: "gpt-4o-mini" ou "Qwen3.5-35B-A3B-FP8").
             temperature: A temperatura para a geração da resposta.
             instructions: As instruções de sistema para o modelo.
             document_context: O texto completo do documento a ser analisado.
@@ -151,7 +154,7 @@ class ChatLLMOrchestrator:
 
         # Lógica específica para llm_pf usando Chat Completions API
         if provider == "llm_pf":
-            model_name = "Qwen3-8B-AWQ"  # Modelo fixo para llm_pf
+            model_name = LLM_PF_MODEL_ID  # Modelo fixo para llm_pf
             
             if reasoning_mode and reasoning_mode.lower() != "minimal":
                 logger.info(f"Usando {model_name} com modo de raciocínio ativado (sem /no_think).")
@@ -167,7 +170,7 @@ class ChatLLMOrchestrator:
                     model=model_name,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=32000,
+                    max_tokens=LLM_PF_MAX_OUTPUT_TOKENS,  # Teto nominal; na prática limitado por (contexto - tokens de entrada)
                     stream=False  # Desabilita streaming
                 )
                 

@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any, List, Tuple, Union
 from openai import OpenAI, AuthenticationError, APIError, InternalServerError
 
 # Imports do Projeto
-from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE
+from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID, LLM_PF_MAX_OUTPUT_TOKENS
 from SOURCE.config.provider import is_local_mode
 from SOURCE.utils import with_proxy
 from SOURCE.core.prompts import (output_formats, review_function, normalizing_function, # prompts
@@ -706,21 +706,24 @@ def analyze_text_with_llm(
         elif provider == "llm_pf":
             if is_local_mode():
                 # Configurações para o endpoint interno da PF
+                # trust_env=False evita que HTTP_PROXY/HTTPS_PROXY do SO desviem a chamada para o
+                # proxy corporativo, que não alcança a rede interna onde o endpoint está hospedado.
                 base_url = "http://llm.pf.gov.br:31893/v1"
                 api_key_pf = "EMPTY"
-                model_pf = "Qwen3-8B-AWQ"  # Modelo fixo para este endpoint
+                model_pf = LLM_PF_MODEL_ID
                 # Instancia o cliente OpenAI com base_url customizada
                 client_pf = OpenAI(
                     api_key=api_key_pf,
                     base_url=base_url,
                     timeout=180,
-                    max_retries=2
+                    max_retries=2,
+                    http_client=httpx.Client(trust_env=False)
                 )
             else:
                 custom_http_client = httpx.Client(trust_env=False)
                 base_url = "http://10.2.2.10:31893/v1"
                 api_key_pf = "EMPTY"
-                model_pf = "Qwen3-8B-AWQ"  
+                model_pf = LLM_PF_MODEL_ID
 
                 client_pf = OpenAI(
                     api_key=api_key_pf,
@@ -728,7 +731,7 @@ def analyze_text_with_llm(
                     timeout=180,
                     max_retries=2,
                     http_client=custom_http_client
-                )                
+                )
             
             if prompt_name == "PROMPT_UNICO_for_INITIAL_ANALYSIS":
                 prompt_list_dicts = prompts[prompt_name]
@@ -757,7 +760,7 @@ def analyze_text_with_llm(
                     model=model_pf,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=30000,  # Ajustar conforme necessário
+                    max_tokens=LLM_PF_MAX_OUTPUT_TOKENS,  # Teto nominal; na prática limitado por (contexto - tokens de entrada)
                     response_format=response_format
                 )
                 logger.info('[DEBUG]: Requisição concluída.')

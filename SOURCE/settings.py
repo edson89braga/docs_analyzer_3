@@ -118,8 +118,13 @@ CLOUD_LOGGER_RETRY_DELAY = 12        # Tempo de espera entre as tentativas (segu
 # --- Configurações de PDF_PROCESSOR e LLM -------------------------------------------------
 DEFAULT_LLM_SERVICE = "llm_pf"  # "openai" # Exemplo
 DEFAULT_LLM_PROVIDER = "llm_pf" # "openai"
-DEFAULT_LLM_MODEL = "Qwen3-8B"  # "gpt-5-nano" # Modelo inicial padrão
+DEFAULT_LLM_MODEL = "Qwen3.5-35B-A3B-FP8"  # "gpt-5-nano" # Modelo inicial padrão
 DEFAULT_TEMPERATURE = 0.2 # Baixa temperatura para respostas mais factuais/consistentes
+
+# Endpoint interno da PF (provider "llm_pf") -----------------------------------------------
+# Modelo fixo servido em http://llm.pf.gov.br:31893/v1, independente do modelo selecionado na UI.
+LLM_PF_MODEL_ID = "Qwen3.5-35B-A3B-FP8"  # Janela de contexto: 128k tokens (substituiu Qwen3-8B-AWQ, 32k)
+LLM_PF_MAX_OUTPUT_TOKENS = 128_000  # Teto de tokens de saída solicitado ao endpoint; sem isso, a resposta é truncada em 4096 tokens. Na prática o teto real é (janela de contexto - tokens de entrada).
 
 # Fallback Default Analysis Settings (se Firestore falhar)
 FALLBACK_ANALYSIS_SETTINGS = {
@@ -130,7 +135,7 @@ FALLBACK_ANALYSIS_SETTINGS = {
     "token_counter": "tiktoken",
     "tfidf_analyzer": "sklearn",
     "llm_provider": "llm_pf",
-    "llm_model": "Qwen3-8B",
+    "llm_model": "Qwen3.5-35B-A3B-FP8",
     "llm_input_token_limit": 180_000,
     "llm_output_format": "Padrão",
     "llm_max_output_length": "Padrão",
