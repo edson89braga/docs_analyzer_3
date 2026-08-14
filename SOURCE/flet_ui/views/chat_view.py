@@ -1145,6 +1145,11 @@ class ChatViewContent(ft.Column):
                 processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores, similarity_threshold=similarity_threshold
             )
             
+            # O pdf_processor conta as páginas em unidades de tiktoken, mas a janela do modelo é
+            # medida no tokenizer do Qwen. O desvio é medido uma vez neste lote e serve a dois fins:
+            # converter o orçamento da truncagem e converter os totais exibidos no painel.
+            drift_ratio = ai_orchestrator.measure_llm_pf_token_drift(all_texts_list) if provider == "llm_pf" else None
+
             # Usamos um limite de tokens alto para manter o contexto completo
             token_limit = settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
             if token_limit is None:
@@ -1153,10 +1158,6 @@ class ChatViewContent(ft.Column):
                 if provider == "llm_pf":
                     instructions = self._get_active_system_prompt()
                     prompt_messages = [{"role": "system", "content": instructions}]
-                    # O orçamento sai em unidades de tiktoken (é assim que o pdf_processor conta as
-                    # páginas), mas a janela do modelo é medida no tokenizer do Qwen — o desvio é
-                    # medido neste documento para converter uma unidade na outra.
-                    drift_ratio = ai_orchestrator.measure_llm_pf_token_drift(all_texts_list)
                     token_limit = ai_orchestrator.compute_llm_pf_auto_token_limit(
                         prompt_messages, extra_reserve=LLM_PF_CHAT_HISTORY_RESERVE_TOKENS,
                         drift_ratio=drift_ratio
@@ -1178,18 +1179,21 @@ class ChatViewContent(ft.Column):
 
             total_processing_time = perf_counter() - start_time
 
+            # Totais convertidos para o tokenizer real do modelo (ver scale_tokens_to_real): é o
+            # número que o modelo enxerga e o mesmo critério das métricas pós-análise (usage da API).
+            # O percentual suprimido é razão entre duas contagens, logo independe da unidade.
             processing_metadata = {
                 "total_pages_processed": len(ordered_keys),
-                "total_tokens_before_filter": tokens_antes_filtro,
+                "total_tokens_before_filter": ai_orchestrator.scale_tokens_to_real(tokens_antes_filtro, drift_ratio),
                 "relevant_pages_global_keys_formatted": analyzer.format_global_keys_for_display(relevant_indices),
                 "count_selected_relevant": len(relevant_indices),
                 "unintelligible_pages_global_keys_formatted": analyzer.format_global_keys_for_display(unintelligible_indices),
                 "count_discarded_unintelligible": len(unintelligible_indices),
                 "count_discarded_similarity": count_similars, 
-                "total_tokens_before_truncation": tokens_antes_trunc,
+                "total_tokens_before_truncation": ai_orchestrator.scale_tokens_to_real(tokens_antes_trunc, drift_ratio),
                 "final_pages_global_keys_formatted": analyzer.format_global_keys_for_display(pages_agg_indices),
                 "count_selected_final": len(pages_agg_indices),
-                "final_aggregated_tokens": final_tokens, # f"{final_tokens:,}".replace(",", ".")
+                "final_aggregated_tokens": ai_orchestrator.scale_tokens_to_real(final_tokens, drift_ratio),
                 "supressed_tokens_percentage": perc_supressed,
                 "processing_time": format_seconds_to_min_sec(total_processing_time),
                 "calculated_embedding_cost_usd": calculated_embedding_cost_usd
@@ -1274,10 +1278,18 @@ class ChatViewContent(ft.Column):
                     all_texts_concatenated.append(page_text_with_header)
                     total_tokens_raw += count_tokens(page_text_with_header)
 
+            # Mesma conversão do modo otimizado: o painel mostra tokens do tokenizer do modelo, não
+            # do tiktoken usado na contagem local (ver scale_tokens_to_real).
+            provider = self._get_current_analysis_settings().get(
+                "llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"]
+            )
+            drift_ratio = ai_orchestrator.measure_llm_pf_token_drift(all_texts_concatenated) if provider == "llm_pf" else None
+            total_tokens_real = ai_orchestrator.scale_tokens_to_real(total_tokens_raw, drift_ratio)
+
             processing_metadata = {
                 "total_pages_processed": total_pages_raw,
-                "total_tokens_before_filter": total_tokens_raw,
-                "final_aggregated_tokens": total_tokens_raw,
+                "total_tokens_before_filter": total_tokens_real,
+                "final_aggregated_tokens": total_tokens_real,
                 "processing_time": format_seconds_to_min_sec(perf_counter() - start_time_proc),
                 # Campos não aplicáveis no modo "bruto"
                 #"relevant_pages_global_keys_formatted": None,

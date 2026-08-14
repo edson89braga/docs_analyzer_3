@@ -386,6 +386,30 @@ def measure_llm_pf_token_drift(sample_text: Union[str, List[str]]) -> Optional[f
     return drift
 
 
+def scale_tokens_to_real(estimated_tokens: int, drift_ratio: Optional[float]) -> int:
+    """
+    Converte uma contagem em unidades de tiktoken para a contagem real do tokenizer do modelo.
+
+    Usada nos totais exibidos no painel 'Dados do Processamento': o `pdf_processor` conta as páginas
+    com tiktoken, mas o número que interessa ao usuário é o que o modelo enxerga — e é o que aparece
+    nas métricas pós-análise, vindas do `usage` da API. Sem a conversão, o painel subestima os totais
+    em ~25% e fica incoerente com essas métricas.
+
+    Args:
+        estimated_tokens: Contagem obtida via tiktoken.
+        drift_ratio: Razão medida por measure_llm_pf_token_drift. Se None (provider diferente de
+            llm_pf, ou `/tokenize` indisponível), a contagem é devolvida inalterada.
+
+    Returns:
+        Contagem convertida, ou a original quando não há razão de conversão.
+
+        Exemplo de retorno: 87889  # para estimated_tokens=67353 e drift_ratio=1.305
+    """
+    if not drift_ratio:
+        return estimated_tokens
+    return round(estimated_tokens * drift_ratio)
+
+
 def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra_reserve: int = 0,
                                     drift_ratio: Optional[float] = None) -> int:
     """

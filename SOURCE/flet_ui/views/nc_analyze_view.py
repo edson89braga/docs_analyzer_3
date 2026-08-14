@@ -2346,16 +2346,17 @@ class InternalAnalysisController:
             point_time = perf_counter()
             self.page.run_thread(self._update_status_callback, "Etapa 4/5: Filtrando páginas...")
  
+            # O pdf_processor conta as páginas em unidades de tiktoken, mas a janela do modelo é
+            # medida no tokenizer do Qwen. O desvio é medido uma vez neste lote e serve a dois fins:
+            # converter o orçamento da truncagem e converter os totais exibidos no painel.
+            drift_ratio = ai_orchestrator.measure_llm_pf_token_drift(all_texts_to_loop) if provider == "llm_pf" else None
+
             if token_limit_pref is None:
                 # Truncagem automática: calcula o orçamento de tokens em runtime, descontando
                 # o overhead real do prompt fixo (já carregado no cache) da janela do modelo.
                 if provider == "llm_pf":
                     prompt_cache = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL) or {}
                     prompt_messages = prompt_cache.get("PROMPT_UNICO_for_INITIAL_ANALYSIS", [])
-                    # O orçamento sai em unidades de tiktoken (é assim que o pdf_processor conta as
-                    # páginas), mas a janela do modelo é medida no tokenizer do Qwen — o desvio é
-                    # medido neste documento para converter uma unidade na outra.
-                    drift_ratio = ai_orchestrator.measure_llm_pf_token_drift(all_texts_to_loop)
                     token_limit_pref = ai_orchestrator.compute_llm_pf_auto_token_limit(
                         prompt_messages, drift_ratio=drift_ratio
                     )
@@ -2385,18 +2386,21 @@ class InternalAnalysisController:
  
             total_processing_time = perf_counter() - start_time
             
+            # Totais convertidos para o tokenizer real do modelo (ver scale_tokens_to_real): é o
+            # número que o modelo enxerga e o mesmo critério das métricas pós-análise (usage da API).
+            # O percentual suprimido é razão entre duas contagens, logo independe da unidade.
             proc_meta_for_ui = {
                 "total_pages_processed": len(processed_page_data_combined),
-                "total_tokens_before_filter": tokens_antes_filtro,
+                "total_tokens_before_filter": ai_orchestrator.scale_tokens_to_real(tokens_antes_filtro, drift_ratio),
                 "relevant_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(relevant_ordered_indices),
                 "count_selected_relevant": count_sel,
                 "unintelligible_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(unintelligible_indices),
                 "count_discarded_unintelligible": count_unint,
                 "count_discarded_similarity": count_similars,
-                "total_tokens_before_truncation": tokens_antes_trunc,
+                "total_tokens_before_truncation": ai_orchestrator.scale_tokens_to_real(tokens_antes_trunc, drift_ratio),
                 "final_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(pages_agg_indices),
                 "count_selected_final": count_sel_final,
-                "final_aggregated_tokens": tokens_final_agg,
+                "final_aggregated_tokens": ai_orchestrator.scale_tokens_to_real(tokens_final_agg, drift_ratio),
                 "supressed_tokens_percentage": perc_supressed,
                 "processing_time": format_seconds_to_min_sec(total_processing_time),
                 "calculated_embedding_cost_usd": calculated_embedding_cost_usd

@@ -146,6 +146,18 @@ Efeito medido num lote sintético de texto jurídico (desvio 1,305x): orçamento
 `max_tokens` com raciocínio ficou em 29.251 em vez dos 32.000 nominais: sem a contagem exata, os
 32.000 teriam estourado a janela (98.237 + 32.000 > 128.000) e gerado um 400.
 
+3. **Painel 'Dados do Processamento'** (`nc_analyze_view` e `chat_view`): os três totais de tokens
+   (`total_tokens_before_filter`, `total_tokens_before_truncation`, `final_aggregated_tokens`) são
+   contados pelo `pdf_processor` em tiktoken e convertidos por `scale_tokens_to_real` antes de
+   irem para a UI — sem isso o painel mostrava ~25% a menos do que o modelo enxerga, e divergia das
+   métricas pós-análise, que já vinham reais do `usage` da API. O "Percentual de Tokens Suprimidos"
+   é razão entre duas contagens, então independe da unidade. Por isso o desvio é medido sempre que
+   o provider é `llm_pf`, e não apenas no modo de truncagem automática.
+
+   > Os mesmos campos são persistidos no Firestore (`firebase_client._log_*`), então registros
+   > anteriores a 13/08/2026 estão em unidades de tiktoken e os posteriores no tokenizer real —
+   > comparações históricas dessas séries precisam considerar o degrau de ~25%.
+
 > **Consequência a ter em mente:** num lote que *esgote* o orçamento de entrada, sobram na janela
 > exatamente os 16k da reserva — e o modo pensante pode voltar a truncar, agora de forma previsível
 > e com o aviso `[MAX_OUTPUT_TOKENS]` no log. O caminho para mudar isso seria reservar
