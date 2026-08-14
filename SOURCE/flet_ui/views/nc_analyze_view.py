@@ -2357,8 +2357,14 @@ class InternalAnalysisController:
                 if provider == "llm_pf":
                     prompt_cache = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL) or {}
                     prompt_messages = prompt_cache.get("PROMPT_UNICO_for_INITIAL_ANALYSIS", [])
+                    # A reserva de saída acompanha o modo de raciocínio selecionado agora; alterá-lo
+                    # antes de 'Solicitar Análise' exige reprocessar (aviso em [MAX_OUTPUT_TOKENS]).
+                    enable_thinking = ai_orchestrator.is_thinking_enabled(
+                        current_analysis_settings.get("reasoning_effort",
+                                                      FALLBACK_ANALYSIS_SETTINGS["reasoning_effort"])
+                    )
                     token_limit_pref = ai_orchestrator.compute_llm_pf_auto_token_limit(
-                        prompt_messages, drift_ratio=drift_ratio
+                        prompt_messages, drift_ratio=drift_ratio, enable_thinking=enable_thinking
                     )
                     logger.info(f"Truncagem automática (llm_pf): orçamento calculado = {token_limit_pref} tokens.")
                 else:

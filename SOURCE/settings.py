@@ -130,25 +130,25 @@ LLM_PF_MODEL_ID = "Qwen3.5-35B-A3B-FP8"  # Janela de contexto: 128k tokens (subs
 # a janela total, então pedir "todo o espaço restante" faz a requisição encostar no teto por construção e
 # qualquer subestimação do input (tiktoken vs. tokenizer real do Qwen) vira erro 400. Valor dimensionado
 # pelo que a resposta de fato consome. Vale para o modo SEM raciocínio (a análise completa da NC
-# consome ~2.300 tokens de JSON).
-LLM_PF_MAX_OUTPUT_TOKENS = 16_000
+# consome ~2.300 tokens de JSON), onde 8k já dão folga de 3x sobre o observado.
+LLM_PF_MAX_OUTPUT_TOKENS = 8_000
 
 # Teto de saída quando enable_thinking=True. Medição no endpoint (13/08/2026): o raciocínio do
 # Qwen3.5 é longo e NÃO é limitável — 'chat_template_kwargs.thinking_budget' e o parâmetro
 # 'reasoning_effort' são aceitos pela API e ignorados pelo modelo; num prompt trivial de 48 tokens o
-# raciocínio já consome ~2.700 tokens. Com o teto de 16k, uma análise de lote grande gastava todo o
+# raciocínio já consome ~2.700 tokens. Com um teto baixo, uma análise de lote grande gastava todo o
 # orçamento raciocinando e terminava em finish_reason='length' com 'content' vazio, sem nunca chegar
-# a emitir o JSON. O valor é aplicado apenas ao max_tokens da requisição (ver
-# compute_llm_pf_max_output_tokens) e continua limitado ao espaço que sobra na janela; a reserva
-# usada na truncagem de entrada segue sendo LLM_PF_MAX_OUTPUT_TOKENS, para não reduzir a quantidade
-# de páginas analisáveis.
-LLM_PF_MAX_OUTPUT_TOKENS_THINKING = 32_000
+# a emitir o JSON. Ambos os tetos são reservados na truncagem de entrada conforme o modo de
+# raciocínio em vigor (ver compute_llm_pf_auto_token_limit), de modo que o espaço de saída é
+# garantido em vez de depender da folga que sobrar na janela.
+LLM_PF_MAX_OUTPUT_TOKENS_THINKING = 24_000
 
 # Truncagem automática de tokens de entrada (nc_analyzer e chat) ---------------------------
 # Usadas para calcular quantas páginas de documento cabem no contexto, quando o usuário
 # deixa 'Limite Tokens Input' vazio no drawer de configurações (modo automático).
-# A reserva de saída usada no cálculo é o próprio LLM_PF_MAX_OUTPUT_TOKENS acima — o orçamento de
-# input é o que sobra da janela depois de garantir esse teto (ver compute_llm_pf_auto_token_limit).
+# A reserva de saída usada no cálculo é o teto correspondente ao modo de raciocínio escolhido
+# (LLM_PF_MAX_OUTPUT_TOKENS_THINKING ou LLM_PF_MAX_OUTPUT_TOKENS acima) — o orçamento de input é o
+# que sobra da janela depois de garantir esse teto (ver compute_llm_pf_auto_token_limit).
 LLM_PF_CONTEXT_WINDOW = 128_000            # janela total do modelo
 LLM_PF_CHAT_HISTORY_RESERVE_TOKENS = 20_000  # reserva extra p/ chat: o document_context fixo não pode
                                               # consumir o espaço que os próximos turnos da conversa vão precisar

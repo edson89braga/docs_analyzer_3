@@ -18,7 +18,7 @@ from openai import AuthenticationError, APIError
 from SOURCE.utils import with_proxy
 from SOURCE.config.provider import is_local_mode
 from SOURCE.core.ai_orchestrator import (calc_costs_llm_analysis, compute_llm_pf_max_output_tokens,
-                                         create_llm_pf_completion)
+                                         create_llm_pf_completion, is_thinking_enabled)
 from SOURCE.settings import DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID
 
 def _strip_thinking_blocks(content: str) -> str:
@@ -240,7 +240,7 @@ class ChatLLMOrchestrator:
 
             # Qwen3.5 não suporta mais o soft switch '/no_think' no texto (confirmado em teste
             # manual no endpoint); o controle correto é 'enable_thinking' via chat_template_kwargs.
-            enable_thinking = bool(reasoning_mode) and reasoning_mode.lower() != "minimal"
+            enable_thinking = is_thinking_enabled(reasoning_mode)
             logger.info(f"Usando {model_name} com modo de raciocínio {'ativado' if enable_thinking else 'desativado'} (enable_thinking={enable_thinking}).")
             messages = self._build_input_items(document_context, history, user_question, instructions=instructions)
 

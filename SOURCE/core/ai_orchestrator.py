@@ -410,8 +410,30 @@ def scale_tokens_to_real(estimated_tokens: int, drift_ratio: Optional[float]) ->
     return round(estimated_tokens * drift_ratio)
 
 
+def is_thinking_enabled(reasoning_effort: Optional[str]) -> bool:
+    """
+    Traduz o nível de reflexão escolhido no drawer de configurações para o flag `enable_thinking`
+    do Qwen3.5 no endpoint llm_pf.
+
+    Fonte única da decisão: a reserva de saída aplicada na truncagem de entrada
+    (compute_llm_pf_auto_token_limit) precisa corresponder exatamente ao teto que a requisição vai
+    pedir (compute_llm_pf_max_output_tokens); divergência entre as duas volta a produzir resposta
+    truncada.
+
+    Args:
+        reasoning_effort: Valor do dropdown ('minimal', 'low', 'medium', 'high') ou None.
+
+    Returns:
+        True quando o raciocínio deve ser ativado na requisição.
+
+        Exemplo de retorno: True  # para reasoning_effort='low'
+    """
+    return bool(reasoning_effort) and reasoning_effort.lower() != "minimal"
+
+
 def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra_reserve: int = 0,
-                                    drift_ratio: Optional[float] = None) -> int:
+                                    drift_ratio: Optional[float] = None,
+                                    enable_thinking: bool = False) -> int:
     """
     Calcula o orçamento de tokens disponível para o texto de entrada (páginas do documento)
     no endpoint llm_pf, para uso quando o usuário deixa a truncagem manual desabilitada
@@ -424,24 +446,30 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
     Sem ele, cai-se em LLM_PF_TOKEN_SAFETY_MARGIN — percentual fixo que a prática mostrou otimista
     (desvio real de +21% a +30% contra os 10% configurados, ver NOTES_llm_pf.md).
 
-    A reserva de saída é o próprio LLM_PF_MAX_OUTPUT_TOKENS, e não uma constante de planejamento
-    separada: pedir menos que o teto nominal produziria resposta truncada (content vazio,
-    finish_reason='length'). Como a truncagem acontece na etapa 'Processar Conteúdo' e o
-    reasoning_effort pode ser alterado depois, na etapa de análise, a reserva é aplicada sempre.
+    A reserva de saída é o próprio teto que a requisição vai pedir, e não uma constante de
+    planejamento separada: pedir menos que o teto nominal produziria resposta truncada (content
+    vazio, finish_reason='length'). Qual dos dois tetos reservar depende do modo de raciocínio
+    (`enable_thinking`), porque o raciocínio do Qwen3.5 é longo e não limitável — reservar o teto
+    sem raciocínio para um lote que será analisado no modo pensante deixa a resposta terminar antes
+    do JSON. É o inverso da política anterior, que reservava sempre LLM_PF_MAX_OUTPUT_TOKENS e
+    deixava o modo pensante depender da folga que sobrasse na janela.
 
-    A reserva NÃO acompanha LLM_PF_MAX_OUTPUT_TOKENS_THINKING (teto maior usado quando o raciocínio
-    está ativo): reservar os 32k encolheria em ~16k tokens o texto analisável de todo lote, mesmo
-    sem raciocínio. O modo pensante aproveita a folga que sobra na janela para o lote em questão —
-    ver compute_llm_pf_max_output_tokens.
+    O modo é o que estiver selecionado na etapa 'Processar Conteúdo'. Se o usuário alterar o nível
+    de reflexão depois, antes de 'Solicitar Análise', a reserva já não corresponde ao teto pedido:
+    compute_llm_pf_max_output_tokens detecta a situação e emite o aviso correspondente.
 
     A conversão entre unidades entra como divisão pela razão de desvio, espelhando exatamente a
     inflação aplicada em compute_llm_pf_max_output_tokens. Descontar (1 - margem) do orçamento total,
-    como se fazia antes, não é o inverso dessa inflação e deixava o teto de saída cair abaixo de
-    LLM_PF_MAX_OUTPUT_TOKENS para prompts com overhead alto.
+    como se fazia antes, não é o inverso dessa inflação e deixava o teto de saída cair abaixo do
+    nominal para prompts com overhead alto. Pelo mesmo motivo LLM_PF_EXACT_COUNT_BUFFER entra aqui:
+    é a folga somada à contagem exata do input naquele cálculo, e sem descontá-la o teto de saída
+    ficaria 512 tokens abaixo do nominal justamente nos lotes que enchem o orçamento.
 
     Fórmula:
         ratio           = drift_ratio ou (1 + LLM_PF_TOKEN_SAFETY_MARGIN)
-        input_total_max = (LLM_PF_CONTEXT_WINDOW - LLM_PF_MAX_OUTPUT_TOKENS) / ratio
+        output_reserve  = LLM_PF_MAX_OUTPUT_TOKENS_THINKING se enable_thinking, senão
+                          LLM_PF_MAX_OUTPUT_TOKENS
+        input_total_max = (LLM_PF_CONTEXT_WINDOW - output_reserve - LLM_PF_EXACT_COUNT_BUFFER) / ratio
         budget          = input_total_max - tokens(prompt_messages) - extra_reserve
 
     O overhead do prompt é descontado em unidades de tiktoken, assumindo que ele sofre o mesmo desvio
@@ -454,6 +482,8 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
             reservado para o histórico de turnos futuros no chat). Padrão 0.
         drift_ratio: Razão tokens_reais/tokens_tiktoken medida para este documento (ver
             measure_llm_pf_token_drift). Se None, usa a margem fixa de segurança.
+        enable_thinking: Se a análise deste lote será feita com o raciocínio ativado (ver
+            is_thinking_enabled). Define qual teto de saída é reservado. Padrão False.
 
     Returns:
         Orçamento de tokens disponível para o texto de entrada, em unidades de tiktoken (mínimo 1).
@@ -461,8 +491,9 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
         Exemplo de retorno: 68430
     """
     ratio = drift_ratio if drift_ratio else (1 + LLM_PF_TOKEN_SAFETY_MARGIN)
+    output_reserve = LLM_PF_MAX_OUTPUT_TOKENS_THINKING if enable_thinking else LLM_PF_MAX_OUTPUT_TOKENS
     prompt_overhead = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in prompt_messages)
-    input_total_max = int((LLM_PF_CONTEXT_WINDOW - LLM_PF_MAX_OUTPUT_TOKENS) / ratio)
+    input_total_max = int((LLM_PF_CONTEXT_WINDOW - output_reserve - LLM_PF_EXACT_COUNT_BUFFER) / ratio)
     budget = input_total_max - prompt_overhead - extra_reserve
 
     if budget < 1:
@@ -473,11 +504,14 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
         )
         budget = 1
 
+    # O orçamento é expresso em tiktoken porque é a unidade em que o pdf_processor conta as páginas
+    # ao truncar; o equivalente em tokens reais é o que aparece no painel 'Dados do Processamento'.
     logger.info(
-        "[AUTO_TOKEN_LIMIT] overhead_prompt=%d, extra_reserve=%d, ratio=%.3f (%s), "
-        "input_total_max=%d, budget_final=%d",
-        prompt_overhead, extra_reserve, ratio,
+        "[AUTO_TOKEN_LIMIT] overhead_prompt=%d, extra_reserve=%d, thinking=%s, output_reserve=%d, "
+        "ratio=%.3f (%s), input_total_max=%d, budget_final=%d tiktoken (~%d tokens reais)",
+        prompt_overhead, extra_reserve, enable_thinking, output_reserve, ratio,
         "medido" if drift_ratio else "margem fixa", input_total_max, budget,
+        scale_tokens_to_real(budget, drift_ratio),
     )
     return budget
 
@@ -553,11 +587,11 @@ def compute_llm_pf_max_output_tokens(messages: List[Dict[str, str]], enable_thin
 
     O teto nominal depende do modo de raciocínio: com `enable_thinking=True` o modelo consome boa
     parte da saída raciocinando antes de emitir o JSON (raciocínio longo e não limitável no
-    endpoint), então usa-se LLM_PF_MAX_OUTPUT_TOKENS_THINKING, maior. Esse espaço extra vem da folga
-    que costuma sobrar na janela — a truncagem de entrada reserva apenas LLM_PF_MAX_OUTPUT_TOKENS,
-    de propósito, para não reduzir a quantidade de páginas analisáveis. Em lotes que encham o
-    orçamento de entrada o teto cai pelo `min` abaixo e a resposta pode voltar a truncar (o aviso
-    correspondente é emitido).
+    endpoint), então usa-se LLM_PF_MAX_OUTPUT_TOKENS_THINKING, maior. A truncagem automática de
+    entrada reserva esse mesmo teto (ver compute_llm_pf_auto_token_limit), de modo que o `min`
+    abaixo normalmente não corta nada. Chega-se ao corte em dois casos: 'Limite Tokens Input' fixado
+    manualmente em valor alto demais, ou o nível de reflexão alterado depois de 'Processar Conteúdo'
+    (a reserva foi dimensionada para o modo anterior). O aviso correspondente é emitido.
 
     Args:
         messages: Lista de dicts {"role": ..., "content": ...} já montada para o envio.
@@ -587,15 +621,13 @@ def compute_llm_pf_max_output_tokens(messages: List[Dict[str, str]], enable_thin
     )
 
     if max_output < nominal_max:
-        # Sem raciocínio, a truncagem automática já preserva o teto integral
-        # (compute_llm_pf_auto_token_limit reserva LLM_PF_MAX_OUTPUT_TOKENS) — aqui só se chega
-        # fixando 'Limite Tokens Input' manualmente em valor alto demais. Com raciocínio ativado, o
-        # teto nominal é maior que a reserva, então lotes grandes caem neste caso por construção e o
-        # risco é a resposta terminar sem JSON.
+        # A truncagem automática reserva o teto do modo escolhido, então aqui só se chega fixando
+        # 'Limite Tokens Input' manualmente em valor alto demais, ou alterando o nível de reflexão
+        # depois de 'Processar Conteúdo' (a reserva ficou dimensionada para o modo anterior).
         logger.warning(
             "[MAX_OUTPUT_TOKENS] Teto de saída reduzido para %d (abaixo dos %d nominais): a entrada não "
-            "deixou espaço suficiente. Com o raciocínio ativado a resposta pode ser truncada — desative o "
-            "raciocínio ou reduza o 'Limite Tokens Input' nas configurações.",
+            "deixou espaço suficiente. A resposta pode ser truncada — reprocesse o conteúdo com o nível "
+            "de reflexão atual, ou reduza o 'Limite Tokens Input' nas configurações.",
             max_output, nominal_max,
         )
 
@@ -1191,7 +1223,7 @@ def analyze_text_with_llm(
 
                 # Qwen3.5 não suporta mais o soft switch '/no_think' no texto (confirmado em teste
                 # manual no endpoint); o controle correto é 'enable_thinking' via chat_template_kwargs.
-                enable_thinking = bool(reasoning_effort) and reasoning_effort.lower() != "minimal"
+                enable_thinking = is_thinking_enabled(reasoning_effort)
                 logger.info(f"Usando {model_pf} com modo de raciocínio {'ativado' if enable_thinking else 'desativado'} (enable_thinking={enable_thinking}).")
 
                 # Chamada para chat completions (max_tokens limitado ao espaço restante da janela;

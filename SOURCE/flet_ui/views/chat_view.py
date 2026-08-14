@@ -1158,9 +1158,14 @@ class ChatViewContent(ft.Column):
                 if provider == "llm_pf":
                     instructions = self._get_active_system_prompt()
                     prompt_messages = [{"role": "system", "content": instructions}]
+                    # A reserva de saída acompanha o modo de raciocínio selecionado na otimização;
+                    # trocá-lo depois exige reotimizar (aviso em [MAX_OUTPUT_TOKENS]).
+                    enable_thinking = ai_orchestrator.is_thinking_enabled(
+                        settings.get("reasoning_effort", FALLBACK_ANALYSIS_SETTINGS["reasoning_effort"])
+                    )
                     token_limit = ai_orchestrator.compute_llm_pf_auto_token_limit(
                         prompt_messages, extra_reserve=LLM_PF_CHAT_HISTORY_RESERVE_TOKENS,
-                        drift_ratio=drift_ratio
+                        drift_ratio=drift_ratio, enable_thinking=enable_thinking
                     )
                     logger.info(f"Truncagem automática (llm_pf, chat): orçamento calculado = {token_limit} tokens.")
                 else:

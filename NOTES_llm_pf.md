@@ -75,9 +75,14 @@ e `finish_reason = "length"` — **sem nenhum JSON**. Medições com prompt triv
 **Não é culpa do `response_format`/`json_schema` strict** — o mesmo ocorre sem schema algum. É o
 raciocínio consumindo o orçamento inteiro.
 
-Por isso `LLM_PF_MAX_OUTPUT_TOKENS_THINKING = 32_000` é aplicado quando o raciocínio está ativo
-(ver `compute_llm_pf_max_output_tokens`), contra `LLM_PF_MAX_OUTPUT_TOKENS = 16_000` do modo direto.
-Validado: 32k com thinking + schema strict retorna `finish_reason=stop` e JSON completo.
+Por isso `LLM_PF_MAX_OUTPUT_TOKENS_THINKING = 24_000` é aplicado quando o raciocínio está ativo
+(ver `compute_llm_pf_max_output_tokens`), contra `LLM_PF_MAX_OUTPUT_TOKENS = 8_000` do modo direto.
+Validado: com thinking + schema strict o teto alto retorna `finish_reason=stop` e JSON completo.
+
+> **Revisão de 14/08/2026:** os valores eram 32k/16k e a truncagem de entrada reservava sempre os
+> 16k. Foram reduzidos para 24k/8k **e** passaram a ser reservados conforme o modo (ver seção 3):
+> o dimensionamento anterior era generoso frente ao consumo observado (~8,8k de saída num lote real
+> com raciocínio, ~2,3k sem) e a reserva fixa em 16k deixava o modo pensante depender de folga.
 
 ---
 
@@ -158,10 +163,33 @@ Efeito medido num lote sintético de texto jurídico (desvio 1,305x): orçamento
    > anteriores a 13/08/2026 estão em unidades de tiktoken e os posteriores no tokenizer real —
    > comparações históricas dessas séries precisam considerar o degrau de ~25%.
 
-> **Consequência a ter em mente:** num lote que *esgote* o orçamento de entrada, sobram na janela
-> exatamente os 16k da reserva — e o modo pensante pode voltar a truncar, agora de forma previsível
-> e com o aviso `[MAX_OUTPUT_TOKENS]` no log. O caminho para mudar isso seria reservar
-> `LLM_PF_MAX_OUTPUT_TOKENS_THINKING` na truncagem, ao custo de menos páginas para todos.
+### Reserva de saída por modo de raciocínio (14/08/2026)
+
+Até 13/08/2026 a truncagem reservava sempre `LLM_PF_MAX_OUTPUT_TOKENS`, e o modo pensante contava
+com a folga que sobrasse na janela. Num lote real de 222 páginas isso produziu `max_tokens = 18.803`
+contra os 32k nominais — a reserva de 16k foi respeitada, mas os 32k do modo pensante nunca haviam
+sido reservados. `compute_llm_pf_auto_token_limit` passou a receber `enable_thinking` e a reservar o
+teto do modo em vigor, descontando também `LLM_PF_EXACT_COUNT_BUFFER` (sem isso o `min` de
+`compute_llm_pf_max_output_tokens` cortava 512 tokens do nominal justo nos lotes cheios).
+
+O modo considerado é o selecionado na etapa **'Processar Conteúdo'** (ou na otimização do chat).
+Trocar o nível de reflexão depois, antes de 'Solicitar Análise', deixa a reserva dimensionada para o
+modo anterior — situação detectada pelo aviso `[MAX_OUTPUT_TOKENS]`, cuja saída agora recomenda
+reprocessar o conteúdo. `is_thinking_enabled` centraliza a regra `!= "minimal"`, antes duplicada em
+`ai_orchestrator` e `chat_llm_orchestrator`, para que reserva e requisição nunca divirjam.
+
+Orçamentos resultantes com overhead de prompt de ~11k e desvio 1,217x (lote de 222 páginas):
+
+| Modo | Reserva | Orçamento de entrada | `max_tokens` obtido |
+|---|---|---|---|
+| Antes (qualquer) | 16.000 | 81.058 tiktoken (~98,6k reais) | 18.803 (truncou) |
+| Sem raciocínio | 8.000 | 87.211 tiktoken (~106k reais) | 8.000 (íntegro) |
+| Com raciocínio | 24.000 | 74.064 tiktoken (~90k reais) | 24.000 (íntegro) |
+
+> O log `[AUTO_TOKEN_LIMIT]` imprime o orçamento em **tiktoken** (unidade em que o `pdf_processor`
+> trunca), enquanto o painel 'Dados do Processamento' mostra o equivalente em tokens reais — a
+> diferença entre os dois números é exatamente o `drift_ratio`, não uma violação do orçamento. Para
+> evitar a confusão, a linha de log passou a trazer as duas unidades.
 
 ---
 
