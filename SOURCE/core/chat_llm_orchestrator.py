@@ -57,6 +57,42 @@ def _strip_thinking_blocks(content: str) -> str:
     return content.rsplit("</think>", 1)[-1].lstrip("\n").lstrip()
 
 
+def _build_empty_content_notice(reasoning_text: str | None, finish_reason: str | None) -> str:
+    """
+    Monta a mensagem exibida no chat quando a LLM devolve `content` vazio.
+
+    Com 'enable_thinking' ativo, o Qwen3.5 pode consumir todo o orçamento de saída no raciocínio:
+    a API retorna `finish_reason='length'`, `content=''` e o teor gerado fica em `message.reasoning`.
+    Sem tratamento, o gerador não emitiria nenhum chunk e o usuário veria uma resposta em branco.
+    (Equivalente ao `_build_raw_fallback_text` usado na análise de NC, em `ai_orchestrator.py`.)
+
+    Args:
+        reasoning_text: Raciocínio bruto devolvido pela LLM; pode ser vazio.
+        finish_reason: Motivo de término informado pela API ('stop', 'length', etc.).
+
+    Returns:
+        Texto pronto para exibição no chat.
+
+        Exemplo de retorno:
+        '[AVISO: A resposta foi truncada por limite de tokens (finish_reason=length) — o modelo
+        consumiu todo o orçamento no raciocínio. Desative o raciocínio nas configurações ou faça
+        uma pergunta mais específica.]
+
+        O documento trata de uma requisição de instauração de Inquérito Poli'
+    """
+    if finish_reason == "length":
+        aviso = ("[AVISO: A resposta foi truncada por limite de tokens (finish_reason=length) — o modelo "
+                 "consumiu todo o orçamento no raciocínio. Desative o raciocínio nas configurações ou faça "
+                 "uma pergunta mais específica.]")
+    else:
+        aviso = "[AVISO: A IA não retornou uma resposta final para esta pergunta.]"
+
+    if not reasoning_text:
+        return f"{aviso}\n\n(A IA não retornou nenhum conteúdo aproveitável nesta requisição.)"
+
+    return f"{aviso}\n\n{reasoning_text}"
+
+
 class ChatLLMOrchestrator:
     """
     Orquestra a conversa entre o usuário e o LLM, com base no contexto de um documento.
@@ -242,6 +278,20 @@ class ChatLLMOrchestrator:
                             content = _strip_thinking_blocks(content)
                             full_response_content += content
                             yield {"type": "chunk", "content": content}
+                        else:
+                            # 'content' vazio: o raciocínio consumiu todo o orçamento de saída.
+                            # O endpoint (vLLM) nomeia esse campo 'reasoning'; 'reasoning_content' é o
+                            # nome adotado por outros provedores compatíveis e fica como alternativa.
+                            reasoning_text = (getattr(choice.message, "reasoning", None)
+                                              or getattr(choice.message, "reasoning_content", None))
+                            finish_reason = getattr(choice, "finish_reason", None)
+                            logger.warning(
+                                "Endpoint PF devolveu 'content' vazio no chat (finish_reason=%s); "
+                                "emitindo aviso ao usuário com o raciocínio (%d caracteres).",
+                                finish_reason, len(reasoning_text or "")
+                            )
+                            full_response_content = _build_empty_content_notice(reasoning_text, finish_reason)
+                            yield {"type": "chunk", "content": full_response_content}
 
                 elif hasattr(response, 'content'):
                     # Fallback direto para propriedade content se choices não estiver disponível
