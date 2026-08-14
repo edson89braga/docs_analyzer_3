@@ -152,7 +152,12 @@ LLM_PF_MAX_OUTPUT_TOKENS_THINKING = 32_000
 LLM_PF_CONTEXT_WINDOW = 128_000            # janela total do modelo
 LLM_PF_CHAT_HISTORY_RESERVE_TOKENS = 20_000  # reserva extra p/ chat: o document_context fixo não pode
                                               # consumir o espaço que os próximos turnos da conversa vão precisar
-LLM_PF_TOKEN_SAFETY_MARGIN = 0.10          # ~10%, calibrado no drift medido entre tiktoken e o tokenizer real do Qwen (~7,9%)
+# Margem aplicada sobre a estimativa do tiktoken. Passou a ser apenas o FALLBACK usado quando o
+# endpoint /tokenize não responde: no caminho normal a contagem é exata (tokenizer real do modelo,
+# ver count_tokens_llm_pf / measure_llm_pf_token_drift). Mantida em 10% embora o desvio real medido
+# seja de +21% a +30% em texto jurídico — elevá-la reduziria as páginas analisáveis também no modo
+# degradado, decisão ainda em aberto (ver NOTES_llm_pf.md).
+LLM_PF_TOKEN_SAFETY_MARGIN = 0.10
 
 # Fallback Default Analysis Settings (se Firestore falhar)
 FALLBACK_ANALYSIS_SETTINGS = {

@@ -2262,22 +2262,9 @@ class InternalAnalysisController:
         similarity_threshold = current_analysis_settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
         token_limit_pref = current_analysis_settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
 
-        if token_limit_pref is None:
-            # Truncagem automática: calcula o orçamento de tokens em runtime, descontando
-            # o overhead real do prompt fixo (já carregado no cache) da janela do modelo.
-            if provider == "llm_pf":
-                prompt_cache = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL) or {}
-                prompt_messages = prompt_cache.get("PROMPT_UNICO_for_INITIAL_ANALYSIS", [])
-                token_limit_pref = ai_orchestrator.compute_llm_pf_auto_token_limit(prompt_messages)
-                logger.info(f"Truncagem automática (llm_pf): orçamento calculado = {token_limit_pref} tokens.")
-            else:
-                # Sem tabela de janela de contexto por modelo para outros providers ainda;
-                # mantém o comportamento anterior (fallback numérico fixo) nesse caso.
-                token_limit_pref = 180_000
-                logger.warning(
-                    f"Truncagem automática solicitada, mas não suportada para provider '{provider}'. "
-                    f"Usando fallback fixo de {token_limit_pref} tokens."
-                )
+        # O orçamento da truncagem automática (token_limit_pref is None) é calculado adiante, após a
+        # extração: ele depende do desvio entre o tiktoken e o tokenizer real do Qwen, que só pode
+        # ser medido sobre o texto deste documento.
 
         # TODO: avaliar se tornar esses parâmetros mutáveis na Gui:
         mode_main_filter = 'get_pages_among_similars_graphs'
@@ -2359,6 +2346,29 @@ class InternalAnalysisController:
             point_time = perf_counter()
             self.page.run_thread(self._update_status_callback, "Etapa 4/5: Filtrando páginas...")
  
+            if token_limit_pref is None:
+                # Truncagem automática: calcula o orçamento de tokens em runtime, descontando
+                # o overhead real do prompt fixo (já carregado no cache) da janela do modelo.
+                if provider == "llm_pf":
+                    prompt_cache = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL) or {}
+                    prompt_messages = prompt_cache.get("PROMPT_UNICO_for_INITIAL_ANALYSIS", [])
+                    # O orçamento sai em unidades de tiktoken (é assim que o pdf_processor conta as
+                    # páginas), mas a janela do modelo é medida no tokenizer do Qwen — o desvio é
+                    # medido neste documento para converter uma unidade na outra.
+                    drift_ratio = ai_orchestrator.measure_llm_pf_token_drift(all_texts_to_loop)
+                    token_limit_pref = ai_orchestrator.compute_llm_pf_auto_token_limit(
+                        prompt_messages, drift_ratio=drift_ratio
+                    )
+                    logger.info(f"Truncagem automática (llm_pf): orçamento calculado = {token_limit_pref} tokens.")
+                else:
+                    # Sem tabela de janela de contexto por modelo para outros providers ainda;
+                    # mantém o comportamento anterior (fallback numérico fixo) nesse caso.
+                    token_limit_pref = 180_000
+                    logger.warning(
+                        f"Truncagem automática solicitada, mas não suportada para provider '{provider}'. "
+                        f"Usando fallback fixo de {token_limit_pref} tokens."
+                    )
+
             aggregated_info = self.pdf_analyzer.group_texts_by_relevance_and_token_limit(processed_page_data_combined, relevant_ordered_indices, token_limit_pref)
             
             self.user_cache = get_user_cache(self.page)

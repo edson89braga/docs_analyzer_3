@@ -255,15 +255,150 @@ def contar_tokens(texto: Union[str, Any], model_name: str) -> int:
     texto = str(texto) if not isinstance(texto, str) else texto
     return len(codificador.encode(texto))
 
-def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra_reserve: int = 0) -> int:
+# Timeout do /tokenize. A operação é local ao servidor e rápida (0,5s medidos para ~82k tokens);
+# o valor é folgado apenas para absorver latência de rede.
+LLM_PF_TOKENIZE_TIMEOUT = 20
+
+# Teto de caracteres enviados ao /tokenize ao medir o desvio do tokenizer. Existe só para evitar um
+# POST gigantesco em lotes atípicos — a proporção medida não melhora com amostras maiores.
+LLM_PF_TOKENIZE_MAX_CHARS = 400_000
+
+# Folga somada à contagem exata do /tokenize ao dimensionar max_tokens. Cobre pequenas diferenças
+# entre o que é tokenizado aqui e o que o servidor monta na requisição real (tokens de controle do
+# template, campos do response_format).
+LLM_PF_EXACT_COUNT_BUFFER = 512
+
+
+def get_llm_pf_base_url() -> str:
+    """
+    Retorna a URL base do endpoint llm_pf conforme o modo de execução.
+
+    Returns:
+        URL base, já com o sufixo '/v1'.
+
+        Exemplo de retorno: 'http://llm.pf.gov.br:31893/v1'
+    """
+    return "http://llm.pf.gov.br:31893/v1" if is_local_mode() else "http://10.2.2.10:31893/v1"
+
+
+def count_tokens_llm_pf(messages: Optional[List[Dict[str, str]]] = None, text: Optional[str] = None) -> Optional[int]:
+    """
+    Conta tokens com o tokenizer real do modelo, via endpoint `/tokenize` do vLLM.
+
+    É a contagem exata: usa o tokenizer do modelo carregado no servidor, o mesmo que a API aplica ao
+    validar (entrada + max_tokens) contra a janela de contexto. Passando `messages`, o chat template
+    é aplicado e o total inclui os tokens de controle das tags de papel — que o tiktoken ignora.
+
+    Existe porque o tiktoken (tokenizer da OpenAI) subestima gravemente o tokenizer do Qwen em texto
+    jurídico em português: desvio medido de +21% a +30% (ver NOTES_llm_pf.md). A rota `/tokenize`
+    fica fora do prefixo '/v1'.
+
+    Falhas de rede não são propagadas: a contagem é um refinamento, e todos os chamadores têm
+    fallback para a estimativa por tiktoken.
+
+    Args:
+        messages: Lista de dicts {"role": ..., "content": ...}; o chat template é aplicado.
+        text: Texto puro, alternativa a `messages` (sem chat template).
+
+    Returns:
+        Número exato de tokens, ou None se o endpoint estiver indisponível ou responder fora do
+        formato esperado.
+
+        Exemplo de retorno: 94861
+
+    Raises:
+        ValueError: Se nem `messages` nem `text` forem fornecidos.
+    """
+    if messages is None and text is None:
+        raise ValueError("count_tokens_llm_pf exige 'messages' ou 'text'.")
+
+    payload: Dict[str, Any] = {"model": LLM_PF_MODEL_ID}
+    if messages is not None:
+        payload["messages"] = messages
+    else:
+        payload["prompt"] = text
+
+    # A rota /tokenize é irmã de /v1, não filha: base_url termina em '/v1' e precisa ser removida.
+    url = f"{get_llm_pf_base_url().rstrip('/').removesuffix('/v1')}/tokenize"
+
+    try:
+        # trust_env=False pelo mesmo motivo das chamadas de inferência: o proxy corporativo não
+        # alcança a rede interna onde o endpoint está hospedado.
+        with httpx.Client(trust_env=False, timeout=LLM_PF_TOKENIZE_TIMEOUT) as http_client:
+            resp = http_client.post(url, json=payload)
+            resp.raise_for_status()
+            count = resp.json().get("count")
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning(
+            "[TOKENIZE] Falha ao consultar %s (%s: %s). Usando estimativa por tiktoken.",
+            url, type(exc).__name__, exc,
+        )
+        return None
+
+    if not isinstance(count, int):
+        logger.warning("[TOKENIZE] Resposta sem 'count' inteiro (%r). Usando estimativa por tiktoken.", count)
+        return None
+
+    return count
+
+
+def measure_llm_pf_token_drift(sample_text: Union[str, List[str]]) -> Optional[float]:
+    """
+    Mede, para um documento específico, o quanto o tiktoken subestima o tokenizer real do Qwen.
+
+    O desvio não é constante: depende do perfil do texto (português com CPFs, valores monetários e
+    números de processo fragmenta pior no vocabulário da OpenAI). Medir por documento é mais fiel do
+    que aplicar LLM_PF_TOKEN_SAFETY_MARGIN, um percentual fixo que a prática mostrou otimista.
+
+    O resultado alimenta `compute_llm_pf_auto_token_limit`, convertendo a capacidade real da janela
+    em unidades de tiktoken — que é como o `pdf_processor` conta as páginas ao truncar.
+
+    Args:
+        sample_text: Texto do documento, ou lista de textos de páginas (serão concatenados).
+
+    Returns:
+        Razão tokens_reais / tokens_tiktoken, nunca menor que 1.0, ou None se o `/tokenize` estiver
+        indisponível ou a amostra for vazia.
+
+        Exemplo de retorno: 1.305
+    """
+    if isinstance(sample_text, list):
+        sample_text = "\n".join(t for t in sample_text if t)
+
+    sample_text = sample_text[:LLM_PF_TOKENIZE_MAX_CHARS]
+    if not sample_text.strip():
+        logger.warning("[TOKENIZE] Amostra vazia; desvio do tokenizer não medido.")
+        return None
+
+    estimated = contar_tokens(sample_text, MODEL_FOR_COUNT_TOKENS)
+    if estimated < 1:
+        return None
+
+    real = count_tokens_llm_pf(text=sample_text)
+    if real is None:
+        return None
+
+    drift = max(1.0, real / estimated)
+    logger.info(
+        "[TOKENIZE] Desvio medido do tokenizer: %d tokens reais vs %d estimados (tiktoken) = %.3fx.",
+        real, estimated, drift,
+    )
+    return drift
+
+
+def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra_reserve: int = 0,
+                                    drift_ratio: Optional[float] = None) -> int:
     """
     Calcula o orçamento de tokens disponível para o texto de entrada (páginas do documento)
     no endpoint llm_pf, para uso quando o usuário deixa a truncagem manual desabilitada
     (campo 'Limite Tokens Input' vazio no drawer de configurações).
 
-    A contagem usa tiktoken (MODEL_FOR_COUNT_TOKENS) como aproximação do tokenizer real do
-    Qwen — medição empírica mostrou um desvio de ~8% (tiktoken subestima), coberto pela
-    margem de segurança LLM_PF_TOKEN_SAFETY_MARGIN.
+    A contagem usa tiktoken (MODEL_FOR_COUNT_TOKENS) como aproximação do tokenizer real do Qwen,
+    porque o `pdf_processor` conta cada página assim ao truncar — medir as 200 páginas pelo
+    `/tokenize` exigiria uma chamada de rede por página. A correção entra como fator de escala:
+    `drift_ratio`, medido uma única vez sobre o texto do documento por `measure_llm_pf_token_drift`.
+    Sem ele, cai-se em LLM_PF_TOKEN_SAFETY_MARGIN — percentual fixo que a prática mostrou otimista
+    (desvio real de +21% a +30% contra os 10% configurados, ver NOTES_llm_pf.md).
 
     A reserva de saída é o próprio LLM_PF_MAX_OUTPUT_TOKENS, e não uma constante de planejamento
     separada: pedir menos que o teto nominal produziria resposta truncada (content vazio,
@@ -275,28 +410,35 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
     sem raciocínio. O modo pensante aproveita a folga que sobra na janela para o lote em questão —
     ver compute_llm_pf_max_output_tokens.
 
-    A margem entra aqui como divisão por (1 + margem), espelhando exatamente a inflação aplicada em
-    compute_llm_pf_max_output_tokens. Descontar (1 - margem) do orçamento total, como se fazia antes,
-    não é o inverso dessa inflação e deixava o teto de saída cair abaixo de LLM_PF_MAX_OUTPUT_TOKENS
-    para prompts com overhead alto.
+    A conversão entre unidades entra como divisão pela razão de desvio, espelhando exatamente a
+    inflação aplicada em compute_llm_pf_max_output_tokens. Descontar (1 - margem) do orçamento total,
+    como se fazia antes, não é o inverso dessa inflação e deixava o teto de saída cair abaixo de
+    LLM_PF_MAX_OUTPUT_TOKENS para prompts com overhead alto.
 
     Fórmula:
-        input_total_max = (LLM_PF_CONTEXT_WINDOW - LLM_PF_MAX_OUTPUT_TOKENS) / (1 + LLM_PF_TOKEN_SAFETY_MARGIN)
-        budget = input_total_max - tokens(prompt_messages) - extra_reserve
+        ratio           = drift_ratio ou (1 + LLM_PF_TOKEN_SAFETY_MARGIN)
+        input_total_max = (LLM_PF_CONTEXT_WINDOW - LLM_PF_MAX_OUTPUT_TOKENS) / ratio
+        budget          = input_total_max - tokens(prompt_messages) - extra_reserve
+
+    O overhead do prompt é descontado em unidades de tiktoken, assumindo que ele sofre o mesmo desvio
+    do corpo do documento — aproximação aceitável, já que o prompt é uma fração pequena do total.
 
     Args:
         prompt_messages: Lista de dicts {"role": ..., "content": ...} do prompt fixo já
             montado (sem o {input_text} substituído, ou com um placeholder curto no lugar).
         extra_reserve: Reserva adicional de tokens a descontar do orçamento (ex.: espaço
             reservado para o histórico de turnos futuros no chat). Padrão 0.
+        drift_ratio: Razão tokens_reais/tokens_tiktoken medida para este documento (ver
+            measure_llm_pf_token_drift). Se None, usa a margem fixa de segurança.
 
     Returns:
-        Orçamento de tokens disponível para o texto de entrada (mínimo 1).
+        Orçamento de tokens disponível para o texto de entrada, em unidades de tiktoken (mínimo 1).
 
-        Exemplo de retorno: 90847
+        Exemplo de retorno: 68430
     """
+    ratio = drift_ratio if drift_ratio else (1 + LLM_PF_TOKEN_SAFETY_MARGIN)
     prompt_overhead = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in prompt_messages)
-    input_total_max = int((LLM_PF_CONTEXT_WINDOW - LLM_PF_MAX_OUTPUT_TOKENS) / (1 + LLM_PF_TOKEN_SAFETY_MARGIN))
+    input_total_max = int((LLM_PF_CONTEXT_WINDOW - LLM_PF_MAX_OUTPUT_TOKENS) / ratio)
     budget = input_total_max - prompt_overhead - extra_reserve
 
     if budget < 1:
@@ -307,9 +449,11 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
         )
         budget = 1
 
-    logger.debug(
-        "[AUTO_TOKEN_LIMIT] overhead_prompt=%d, extra_reserve=%d, input_total_max=%d, budget_final=%d",
-        prompt_overhead, extra_reserve, input_total_max, budget,
+    logger.info(
+        "[AUTO_TOKEN_LIMIT] overhead_prompt=%d, extra_reserve=%d, ratio=%.3f (%s), "
+        "input_total_max=%d, budget_final=%d",
+        prompt_overhead, extra_reserve, ratio,
+        "medido" if drift_ratio else "margem fixa", input_total_max, budget,
     )
     return budget
 
@@ -378,9 +522,10 @@ def compute_llm_pf_max_output_tokens(messages: List[Dict[str, str]], enable_thin
     Calcula o teto de tokens de saída (`max_tokens`) a pedir ao endpoint llm_pf.
 
     A API valida (tokens_de_entrada + max_tokens) contra a janela de contexto, então o teto nominal
-    é limitado pelo espaço que sobra para as mensagens já montadas. A estimativa de entrada usa
-    tiktoken, que subestima o tokenizer real do Qwen — daí a aplicação de
-    LLM_PF_TOKEN_SAFETY_MARGIN sobre a contagem estimada.
+    é limitado pelo espaço que sobra para as mensagens já montadas. A contagem de entrada vem do
+    `/tokenize` do próprio endpoint (tokenizer real do modelo, chat template incluído), o que torna
+    o cálculo exato; só se o endpoint estiver indisponível cai-se na estimativa por tiktoken inflada
+    por LLM_PF_TOKEN_SAFETY_MARGIN, que subestima o tokenizer do Qwen (ver NOTES_llm_pf.md).
 
     O teto nominal depende do modo de raciocínio: com `enable_thinking=True` o modelo consome boa
     parte da saída raciocinando antes de emitir o JSON (raciocínio longo e não limitável no
@@ -400,13 +545,21 @@ def compute_llm_pf_max_output_tokens(messages: List[Dict[str, str]], enable_thin
         Exemplo de retorno: 32000
     """
     nominal_max = LLM_PF_MAX_OUTPUT_TOKENS_THINKING if enable_thinking else LLM_PF_MAX_OUTPUT_TOKENS
-    input_estimate = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in messages)
-    input_safe = int(input_estimate * (1 + LLM_PF_TOKEN_SAFETY_MARGIN))
+
+    input_real = count_tokens_llm_pf(messages=messages)
+    if input_real is not None:
+        input_safe = input_real + LLM_PF_EXACT_COUNT_BUFFER
+        fonte_contagem = "exata (/tokenize)"
+    else:
+        input_real = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in messages)
+        input_safe = int(input_real * (1 + LLM_PF_TOKEN_SAFETY_MARGIN))
+        fonte_contagem = "estimada (tiktoken + margem)"
+
     max_output = max(1, min(nominal_max, LLM_PF_CONTEXT_WINDOW - input_safe))
 
     logger.info(
-        "[MAX_OUTPUT_TOKENS] input_estimado=%d, input_com_margem=%d, thinking=%s, max_tokens=%d",
-        input_estimate, input_safe, enable_thinking, max_output,
+        "[MAX_OUTPUT_TOKENS] input=%d (%s), input_com_folga=%d, thinking=%s, max_tokens=%d",
+        input_real, fonte_contagem, input_safe, enable_thinking, max_output,
     )
 
     if max_output < nominal_max:
