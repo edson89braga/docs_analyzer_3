@@ -18,7 +18,7 @@ from openai import OpenAI, AuthenticationError, APIError, InternalServerError
 
 # Imports do Projeto
 from SOURCE.settings import (DEFAULT_LLM_PROVIDER, DEFAULT_LLM_MODEL, DEFAULT_TEMPERATURE, LLM_PF_MODEL_ID, LLM_PF_MAX_OUTPUT_TOKENS,
-                            LLM_PF_CONTEXT_WINDOW, LLM_PF_TOKEN_SAFETY_MARGIN)
+                            LLM_PF_MAX_OUTPUT_TOKENS_THINKING, LLM_PF_CONTEXT_WINDOW, LLM_PF_TOKEN_SAFETY_MARGIN)
 from SOURCE.config.provider import is_local_mode
 from SOURCE.utils import with_proxy
 from SOURCE.core.prompts import (output_formats, review_function, normalizing_function, # prompts
@@ -266,11 +266,14 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
     margem de segurança LLM_PF_TOKEN_SAFETY_MARGIN.
 
     A reserva de saída é o próprio LLM_PF_MAX_OUTPUT_TOKENS, e não uma constante de planejamento
-    separada: com enable_thinking=True o modelo gasta boa parte do orçamento de saída no raciocínio
-    antes de emitir o JSON, então pedir menos que o teto nominal produz resposta truncada (content
-    vazio, finish_reason='length'). Como a truncagem acontece na etapa 'Processar Conteúdo' e o
-    reasoning_effort pode ser alterado depois, na etapa de análise, a reserva é aplicada sempre —
-    o modo sem raciocínio apenas não usa o espaço sobrando.
+    separada: pedir menos que o teto nominal produziria resposta truncada (content vazio,
+    finish_reason='length'). Como a truncagem acontece na etapa 'Processar Conteúdo' e o
+    reasoning_effort pode ser alterado depois, na etapa de análise, a reserva é aplicada sempre.
+
+    A reserva NÃO acompanha LLM_PF_MAX_OUTPUT_TOKENS_THINKING (teto maior usado quando o raciocínio
+    está ativo): reservar os 32k encolheria em ~16k tokens o texto analisável de todo lote, mesmo
+    sem raciocínio. O modo pensante aproveita a folga que sobra na janela para o lote em questão —
+    ver compute_llm_pf_max_output_tokens.
 
     A margem entra aqui como divisão por (1 + margem), espelhando exatamente a inflação aplicada em
     compute_llm_pf_max_output_tokens. Descontar (1 - margem) do orçamento total, como se fazia antes,
@@ -370,41 +373,53 @@ def parse_context_length_error(api_err: Exception) -> Optional[Tuple[int, int]]:
         return None
     return int(input_len_match.group(1)), int(max_len_match.group(1))
 
-def compute_llm_pf_max_output_tokens(messages: List[Dict[str, str]]) -> int:
+def compute_llm_pf_max_output_tokens(messages: List[Dict[str, str]], enable_thinking: bool = False) -> int:
     """
     Calcula o teto de tokens de saída (`max_tokens`) a pedir ao endpoint llm_pf.
 
     A API valida (tokens_de_entrada + max_tokens) contra a janela de contexto, então o teto nominal
-    de LLM_PF_MAX_OUTPUT_TOKENS é limitado pelo espaço que sobra para as mensagens já montadas. A
-    estimativa de entrada usa tiktoken, que subestima o tokenizer real do Qwen — daí a aplicação de
+    é limitado pelo espaço que sobra para as mensagens já montadas. A estimativa de entrada usa
+    tiktoken, que subestima o tokenizer real do Qwen — daí a aplicação de
     LLM_PF_TOKEN_SAFETY_MARGIN sobre a contagem estimada.
+
+    O teto nominal depende do modo de raciocínio: com `enable_thinking=True` o modelo consome boa
+    parte da saída raciocinando antes de emitir o JSON (raciocínio longo e não limitável no
+    endpoint), então usa-se LLM_PF_MAX_OUTPUT_TOKENS_THINKING, maior. Esse espaço extra vem da folga
+    que costuma sobrar na janela — a truncagem de entrada reserva apenas LLM_PF_MAX_OUTPUT_TOKENS,
+    de propósito, para não reduzir a quantidade de páginas analisáveis. Em lotes que encham o
+    orçamento de entrada o teto cai pelo `min` abaixo e a resposta pode voltar a truncar (o aviso
+    correspondente é emitido).
 
     Args:
         messages: Lista de dicts {"role": ..., "content": ...} já montada para o envio.
+        enable_thinking: Se o modo de raciocínio do Qwen será enviado na requisição.
 
     Returns:
         Teto de tokens de saída a enviar em `max_tokens` (mínimo 1).
 
-        Exemplo de retorno: 16000
+        Exemplo de retorno: 32000
     """
+    nominal_max = LLM_PF_MAX_OUTPUT_TOKENS_THINKING if enable_thinking else LLM_PF_MAX_OUTPUT_TOKENS
     input_estimate = sum(contar_tokens(m.get("content", ""), MODEL_FOR_COUNT_TOKENS) for m in messages)
     input_safe = int(input_estimate * (1 + LLM_PF_TOKEN_SAFETY_MARGIN))
-    max_output = max(1, min(LLM_PF_MAX_OUTPUT_TOKENS, LLM_PF_CONTEXT_WINDOW - input_safe))
+    max_output = max(1, min(nominal_max, LLM_PF_CONTEXT_WINDOW - input_safe))
 
     logger.info(
-        "[MAX_OUTPUT_TOKENS] input_estimado=%d, input_com_margem=%d, max_tokens=%d",
-        input_estimate, input_safe, max_output,
+        "[MAX_OUTPUT_TOKENS] input_estimado=%d, input_com_margem=%d, thinking=%s, max_tokens=%d",
+        input_estimate, input_safe, enable_thinking, max_output,
     )
 
-    if max_output < LLM_PF_MAX_OUTPUT_TOKENS:
-        # Com a truncagem automática isso não deve ocorrer (compute_llm_pf_auto_token_limit já
-        # preserva o teto integral); acontece quando o usuário fixa 'Limite Tokens Input' manualmente
-        # em um valor alto demais. Com raciocínio ativado o risco é a resposta terminar sem JSON.
+    if max_output < nominal_max:
+        # Sem raciocínio, a truncagem automática já preserva o teto integral
+        # (compute_llm_pf_auto_token_limit reserva LLM_PF_MAX_OUTPUT_TOKENS) — aqui só se chega
+        # fixando 'Limite Tokens Input' manualmente em valor alto demais. Com raciocínio ativado, o
+        # teto nominal é maior que a reserva, então lotes grandes caem neste caso por construção e o
+        # risco é a resposta terminar sem JSON.
         logger.warning(
             "[MAX_OUTPUT_TOKENS] Teto de saída reduzido para %d (abaixo dos %d nominais): a entrada não "
-            "deixou espaço suficiente. Com o raciocínio ativado a resposta pode ser truncada — reduza o "
-            "'Limite Tokens Input' nas configurações.",
-            max_output, LLM_PF_MAX_OUTPUT_TOKENS,
+            "deixou espaço suficiente. Com o raciocínio ativado a resposta pode ser truncada — desative o "
+            "raciocínio ou reduza o 'Limite Tokens Input' nas configurações.",
+            max_output, nominal_max,
         )
 
     return max_output
@@ -1010,7 +1025,7 @@ def analyze_text_with_llm(
                     model=model_pf,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=compute_llm_pf_max_output_tokens(messages),
+                    max_tokens=compute_llm_pf_max_output_tokens(messages, enable_thinking),
                     response_format=response_format,
                     extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}}
                 )
@@ -1024,10 +1039,13 @@ def analyze_text_with_llm(
                 if not final_response_text:
                     # Com enable_thinking=True o Qwen pode consumir todo o orçamento de saída no
                     # raciocínio: 'content' volta vazio e o teor útil (inclusive JSON parcial) fica
-                    # em 'reasoning_content'. Aproveitá-lo é melhor do que devolver nada ao usuário.
-                    final_response_text = getattr(choice.message, "reasoning_content", None)
+                    # no campo de raciocínio. Aproveitá-lo é melhor do que devolver nada ao usuário.
+                    # O endpoint (vLLM) nomeia esse campo 'reasoning'; 'reasoning_content' é o nome
+                    # adotado por outros provedores compatíveis com a API OpenAI e fica como alternativa.
+                    final_response_text = (getattr(choice.message, "reasoning", None)
+                                           or getattr(choice.message, "reasoning_content", None))
                     logger.warning(
-                        "Endpoint PF devolveu 'content' vazio (finish_reason=%s); usando 'reasoning_content' "
+                        "Endpoint PF devolveu 'content' vazio (finish_reason=%s); usando o raciocínio "
                         "como texto bruto (%d caracteres).",
                         finish_reason, len(final_response_text or "")
                     )

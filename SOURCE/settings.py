@@ -129,10 +129,20 @@ LLM_PF_MODEL_ID = "Qwen3.5-35B-A3B-FP8"  # Janela de contexto: 128k tokens (subs
 # NÃO usar um valor próximo da janela de contexto: a API valida (tokens_de_entrada + max_tokens) contra
 # a janela total, então pedir "todo o espaço restante" faz a requisição encostar no teto por construção e
 # qualquer subestimação do input (tiktoken vs. tokenizer real do Qwen) vira erro 400. Valor dimensionado
-# pelo que a resposta de fato consome, cobrindo thinking + JSON longo: com enable_thinking=True o
-# modelo gasta boa parte desse orçamento raciocinando antes de emitir o JSON, e um teto menor faz a
-# resposta terminar em finish_reason='length' com 'content' vazio.
+# pelo que a resposta de fato consome. Vale para o modo SEM raciocínio (a análise completa da NC
+# consome ~2.300 tokens de JSON).
 LLM_PF_MAX_OUTPUT_TOKENS = 16_000
+
+# Teto de saída quando enable_thinking=True. Medição no endpoint (13/08/2026): o raciocínio do
+# Qwen3.5 é longo e NÃO é limitável — 'chat_template_kwargs.thinking_budget' e o parâmetro
+# 'reasoning_effort' são aceitos pela API e ignorados pelo modelo; num prompt trivial de 48 tokens o
+# raciocínio já consome ~2.700 tokens. Com o teto de 16k, uma análise de lote grande gastava todo o
+# orçamento raciocinando e terminava em finish_reason='length' com 'content' vazio, sem nunca chegar
+# a emitir o JSON. O valor é aplicado apenas ao max_tokens da requisição (ver
+# compute_llm_pf_max_output_tokens) e continua limitado ao espaço que sobra na janela; a reserva
+# usada na truncagem de entrada segue sendo LLM_PF_MAX_OUTPUT_TOKENS, para não reduzir a quantidade
+# de páginas analisáveis.
+LLM_PF_MAX_OUTPUT_TOKENS_THINKING = 32_000
 
 # Truncagem automática de tokens de entrada (nc_analyzer e chat) ---------------------------
 # Usadas para calcular quantas páginas de documento cabem no contexto, quando o usuário

@@ -27,6 +27,10 @@ def _strip_thinking_blocks(content: str) -> str:
     Com 'enable_thinking' ativo, o Qwen3.5 devolve o raciocínio em `<think>...</think>`
     antes da resposta final; só o que vem depois interessa ao usuário.
 
+    Nota (13/08/2026): o endpoint da PF passou a separar o raciocínio no campo `message.reasoning`,
+    de modo que `content` já chega limpo — esta limpeza virou defensiva (cobre uma eventual
+    mudança de configuração do servidor e outros provedores compatíveis).
+
     Em vez de remover cada par `<think>...</think>` isoladamente, mantém-se apenas o
     conteúdo após o ÚLTIMO `</think>`. Assim, se o modelo gerar mais de um ciclo de
     raciocínio, eventuais rascunhos escritos *entre* dois blocos também são descartados
@@ -210,7 +214,7 @@ class ChatLLMOrchestrator:
                     model=model_name,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=compute_llm_pf_max_output_tokens(messages),
+                    max_tokens=compute_llm_pf_max_output_tokens(messages, enable_thinking),
                     stream=False,  # Desabilita streaming
                     extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}}
                 )
