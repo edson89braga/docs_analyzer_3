@@ -189,3 +189,18 @@ setup_event_handlers:
 -> open_prompt_dialog:
     - update_editor_text
     - save_and_close
+
+### Nota (20/08/2026) — escopo do "prompt customizado" persistido no SQLite
+
+`LocalDBManager.save_custom_prompt()` / `get_custom_prompt()` (`SOURCE/services/local_db_manager.py`)
+**não é um repositório de prompts genéricos da aplicação** — a única coisa persistida ali, via
+`ChatSettingsDrawer.save_and_close`, é o texto do system-prompt customizado da opção "Personalizado"
+no diálogo de instruções do **chat com documentos** (chave fixa `"chat_custom"`, escopada por
+`user_id`). Não existe (ainda) nenhum mecanismo de prompts customizados para a análise de
+notícias-crime (`nc_analyze_view.py`) ou qualquer outro fluxo — só o chat.
+
+**Pendência confirmada:** a tabela `chat_history`, criada no mesmo schema (`_create_tables`), nunca
+teve nenhum `INSERT`/`SELECT` implementado em lugar nenhum do código — o histórico de mensagens em
+`chat_view.py` (`chat_history_view`) vive só em memória da sessão (`ft.ListView`), não é persistido.
+Se histórico de chat entre sessões vier a ser um requisito, é essa tabela que precisa ser
+efetivamente conectada a `chat_view.py`.

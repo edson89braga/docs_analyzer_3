@@ -113,39 +113,6 @@ class LoggerSetup:
         return handler
 
     @classmethod
-    def _create_cloud_logger_handler(
-        cls,
-        formatter,
-        level=logging.INFO
-    ) -> Optional[CloudLogHandler]:
-        
-        # Decide qual uploader usar ou se cria um handler.
-        # Se o client_uploader tem contexto, priorize-o. Senão, use admin se disponível.
-        uploader_to_use: Optional['LogUploaderStrategy'] = None
-
-        if cls._admin_uploader_instance:
-            uploader_to_use = cls._admin_uploader_instance
-            logger.debug("LoggerSetup: Usando AdminLogUploader para CloudLogHandler (fallback ou sem usuário).")
-        else:
-            logger.debug("WARNING: LoggerSetup: Nenhum uploader (cliente ou admin) configurado/disponível para CloudLogHandler.")
-            return None
-
-        # Cria uma nova instância do CloudLogHandler com a estratégia decidida
-        # CloudLogHandler não é mais um singleton no LoggerSetup, mas a thread de upload é global.
-        try:
-            cloud_handler = CloudLogHandler(
-                uploader_strategy=uploader_to_use
-            )
-            cloud_handler.setLevel(level)
-            cloud_handler.setFormatter(formatter)
-            cls._active_cloud_handler_instance = cloud_handler # Guarda a referência da última instância criada
-            logger.debug(f"LoggerSetup: CloudLogHandler criado com uploader {uploader_to_use.__class__.__name__}.")
-            return cloud_handler
-        except Exception as e:
-            logger.debug(f"ERROR: LoggerSetup: Erro ao criar CloudLogHandler: {e}", exc_info=True)
-            return None
-    
-    @classmethod
     def set_cloud_user_context(cls, user_id: Optional[str], user_email: Optional[str]):
         """Define o contexto do usuário (uid + email) para a thread atual."""
         user_id_ctx.set(user_id if user_id else "anonymous_user")
@@ -283,43 +250,14 @@ class LoggerSetup:
         user_id_for_client: Optional[str] = None      # Para passar o user_id no momento da adição
     ) -> bool:
         """
-        Adiciona o CloudLogHandler ao logger raiz, se não já adicionado.
-        Cria os uploaders se necessário.
+        Descontinuado (decisão de 20/08/2026, ver NOTES_persistencia_dados.md): persistência de
+        logs de texto no Firebase Storage foi desligada. Toda a persistência de logs passa a ser
+        exclusivamente local (RotatingFileHandler em PATH_LOGS_DIR, já sempre ativo em paralelo).
+        Função mantida como no-op (em vez de removida) para não quebrar os callers existentes em
+        app.py e login_view.py, que já toleram retorno False silenciosamente.
         """
-        if not cls._initialized:
-            logger.debug("LoggerSetup ERROR: Logger não inicializado. Chame LoggerSetup.initialize() primeiro.")
-            return False
-        if not cls._instance: # Logger raiz não configurado
-            logger.debug("LoggerSetup ERROR: Logger raiz não está configurado.")
-            return False
-
-        # Verifica se um CloudLogHandler já existe para evitar duplicação
-        if cls._active_cloud_handler_instance and cls._active_cloud_handler_instance in cls._instance.handlers:
-            logger.debug("LoggerSetup: CloudLogHandler já está ativo. Verificando contexto do uploader.")
-            return True
-        
-        # Cria o AdminUploader se não existir (se não houver contexto de cliente ou como fallback)
-        if not cls._admin_uploader_instance and not (user_token_for_client and user_id_for_client) :
-            try:
-                _fms_temp = FbManagerStorage() # Instancia se necessário
-                cls._admin_uploader_instance = AdminLogUploader(_fms_temp)
-                logger.debug("LoggerSetup: Instância de AdminLogUploader criada dinamicamente em add_cloud_logging.")
-            except Exception as e_fms:
-                logger.debug(f"LoggerSetup: Erro ao criar FbManagerStorage para AdminLogUploader: {e_fms}")
-
-        cloud_log_handler = cls._create_cloud_logger_handler(
-            cls._get_formatter(detailed=True),
-            level=logging.INFO
-        )
-
-        if cloud_log_handler:
-            cls._instance.addHandler(cloud_log_handler)
-            logger.debug("LoggerSetup: CloudLogHandler adicionado ao logger raiz.")
-            return True
-        else:
-            logger.debug("LoggerSetup: Falha ao criar CloudLogHandler. Logging na nuvem não será ativado.")
-            return False
-        
+        logger.debug("LoggerSetup: add_cloud_logging() é no-op — upload de logs para o Storage foi descontinuado.")
+        return False
     @classmethod
     def _update_existing_loggers(cls):
         """Atualiza todos os loggers já criados com a nova configuração."""

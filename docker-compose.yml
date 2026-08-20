@@ -37,27 +37,31 @@ services:
       - ml-engine
 
   # 2. Painel Administrativo (Streamlit)
-  opera-admin:
-    # build: . # Usa exatamente a mesma imagem do opera-app
-    image: proj_app--llm-api-docs_analyzer_3-opera-app
-    container_name: opera-ia-admin
-    restart: unless-stopped
-    # Sobrescreve o CMD do Dockerfile para rodar o Streamlit
-    command: ["streamlit", "run", "run_admin_streamlit.py", "--server.port=8501", "--server.address=0.0.0.0"]
-    ports:
-      - "8501:8501"
-    volumes:
-      - opera_data:/app/data
-      # Mapeamento de código
-      - ./SOURCE:/app/SOURCE
-      - ./admin_py:/app/admin_py
-      - ./run_admin_streamlit.py:/app/run_admin_streamlit.py
-    environment:
-      - SERVER_DATA_DIR=/app/data
-      - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=
-      - TZ=America/Sao_Paulo
-    depends_on:
-      - ml-engine
+  # DESCONTINUADO NA VM (decisão de 20/08/2026, ver NOTES_persistencia_dados.md): o painel
+  # Streamlit passa a rodar exclusivamente a partir do repositório local (run_admin_streamlit.py),
+  # não mais na VM de produção. Bloco mantido comentado (em vez de removido) para referência —
+  # já estava definido aqui mas não em execução na prática (container não estava up).
+  # opera-admin:
+  #   # build: . # Usa exatamente a mesma imagem do opera-app
+  #   image: proj_app--llm-api-docs_analyzer_3-opera-app
+  #   container_name: opera-ia-admin
+  #   restart: unless-stopped
+  #   # Sobrescreve o CMD do Dockerfile para rodar o Streamlit
+  #   command: ["streamlit", "run", "run_admin_streamlit.py", "--server.port=8501", "--server.address=0.0.0.0"]
+  #   ports:
+  #     - "8501:8501"
+  #   volumes:
+  #     - opera_data:/app/data
+  #     # Mapeamento de código
+  #     - ./SOURCE:/app/SOURCE
+  #     - ./admin_py:/app/admin_py
+  #     - ./run_admin_streamlit.py:/app/run_admin_streamlit.py
+  #   environment:
+  #     - SERVER_DATA_DIR=/app/data
+  #     - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=
+  #     - TZ=America/Sao_Paulo
+  #   depends_on:
+  #     - ml-engine
 
   # 3. Motor de Machine Learning (FastAPI)
   ml-engine:
