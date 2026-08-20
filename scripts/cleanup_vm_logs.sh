@@ -28,9 +28,9 @@
 set -euo pipefail
 
 # ============================== CONFIGURAÇÃO ==============================
-VM_USER="PREENCHER_USUARIO"          # ex: sti
-VM_HOST="PREENCHER_IP_OU_HOST"       # ex: 10.11.8.25
-VM_REMOTE_DEPLOY_DIR="PREENCHER_CAMINHO"   # ex: /home/sti/Deploy_PF
+VM_USER="sti"          # ex: sti
+VM_HOST="10.11.8.25"       # ex: 10.11.8.25
+VM_REMOTE_DEPLOY_DIR="/home/sti/Deploy_PF"   # ex: /home/sti/Deploy_PF
 # ============================================================================
 
 CONFIRM="${1:-}"

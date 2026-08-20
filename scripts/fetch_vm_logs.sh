@@ -20,11 +20,11 @@
 set -euo pipefail
 
 # ============================== CONFIGURAÇÃO ==============================
-VM_USER="PREENCHER_USUARIO"          # ex: sti
-VM_HOST="PREENCHER_IP_OU_HOST"       # ex: 10.11.8.25
+VM_USER="sti"          # ex: sti
+VM_HOST="10.11.8.25"       # ex: 10.11.8.25
 # Diretório no HOST da VM onde está o docker-compose.yml de produção
 # (o mesmo diretório citado em "Instruções SSH VM PF Docker Deploy.txt")
-VM_REMOTE_DEPLOY_DIR="PREENCHER_CAMINHO"   # ex: /home/sti/Deploy_PF
+VM_REMOTE_DEPLOY_DIR="/home/sti/Deploy_PF"   # ex: /home/sti/Deploy_PF
 # ============================================================================
 
 VM_REMOTE_LOGS_DIR="${VM_REMOTE_DEPLOY_DIR}/logs"
@@ -43,18 +43,25 @@ fi
 
 mkdir -p "$LOCAL_DEST_DIR"
 
-echo "Verificando se rsync está disponível na VM..."
-if ssh "${VM_USER}@${VM_HOST}" "command -v rsync" >/dev/null 2>&1; then
+echo "Verificando se rsync está disponível localmente e na VM..."
+if command -v rsync >/dev/null 2>&1 && \
+    ssh "${VM_USER}@${VM_HOST}" "command -v rsync" >/dev/null 2>&1; then
     echo "Usando rsync (incremental, preserva timestamps)."
     rsync -avz --progress \
         "${VM_USER}@${VM_HOST}:${VM_REMOTE_LOGS_DIR}/" \
         "${LOCAL_DEST_DIR}/"
 else
-    echo "rsync não encontrado na VM. Usando scp -r (baixa tudo novamente a cada execução)."
+    echo "rsync não encontrado localmente ou na VM. Usando scp -r (baixa tudo novamente a cada execução)."
     scp -r "${VM_USER}@${VM_HOST}:${VM_REMOTE_LOGS_DIR}" "${LOCAL_DEST_DIR}_tmp"
-    # scp -r copia a pasta 'logs' inteira dentro de _tmp; move o conteúdo para o destino final
+    # Dependendo de o destino temporário já existir, scp pode criar _tmp/logs
+    # ou copiar os arquivos diretamente para _tmp.
     mkdir -p "$LOCAL_DEST_DIR"
-    cp -rn "${LOCAL_DEST_DIR}_tmp/logs/." "$LOCAL_DEST_DIR/"
+    if [[ -d "${LOCAL_DEST_DIR}_tmp/logs" ]]; then
+        SCP_SOURCE="${LOCAL_DEST_DIR}_tmp/logs"
+    else
+        SCP_SOURCE="${LOCAL_DEST_DIR}_tmp"
+    fi
+    cp -rn "${SCP_SOURCE}/." "$LOCAL_DEST_DIR/"
     rm -rf "${LOCAL_DEST_DIR}_tmp"
 fi
 
