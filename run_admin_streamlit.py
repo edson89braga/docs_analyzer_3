@@ -2,7 +2,7 @@
 import streamlit as st
 import pandas as pd
 import io, json
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 
 # Configuração do Logger (deve ser a primeira coisa)
 from SOURCE.logger.logger import LoggerSetup
@@ -15,6 +15,7 @@ LoggerSetup.initialize(
 # Imports dos módulos de lógica admin
 from admin_py import dashboard_analyzer, dashboard_plotter, local_data_manager, export_data
 from admin_py import admin_llm_providers, upload_prompts, cleanup_cloud_logs, user_verification
+from admin_py import feedback_analyzer
 from admin_py.set_admin import set_user_admin_status
 
 st.set_page_config(
@@ -37,6 +38,8 @@ def get_user_map():
 # --- Carregamento de Dados ---
 df_metrics = load_metrics_df()
 user_id_to_name_map = get_user_map()
+# Resolve UID -> nome uma única vez: todas as agregações usam a coluna 'user_name'.
+df_metrics = dashboard_analyzer.attach_user_names(df_metrics, user_id_to_name_map)
 
 # --- Barra Lateral de Navegação ---
 st.sidebar.title("Painel Administrativo")
@@ -56,66 +59,363 @@ if page == "Dashboard":
     if df_metrics.empty:
         st.warning("Nenhum dado de métrica encontrado. Sincronize os dados na aba 'Dados & Logs'.")
     else:
-        # --- Filtros ---
-        st.markdown("---")
-        
-        filter_cols = st.columns([3, 2])
-        with filter_cols[0]:
-            available_users = local_data_manager.get_available_users(user_id_to_name_map)
-            valid_user_names = [name for name, uid in available_users if uid in user_id_to_name_map]
-            user_options = {name: uid for name, uid in available_users if name in valid_user_names}
-            selected_user_names = st.multiselect("Filtrar por Usuário(s):", options=sorted(user_options.keys()), placeholder="Todos os Usuários")
-        with filter_cols[1]:
-            period_days = st.radio(
-                "Selecione o Período:",
-                [7, 30, 9999],
-                format_func=lambda x: "Últimos 7 Dias" if x==7 else "Últimos 30 Dias" if x==30 else "Desde o Início",
-                horizontal=True,
+        # --- Filtros Globais ---
+        # Aplicados uma única vez, aqui, e propagados para todas as abas. Garante que dois
+        # gráficos lado a lado estejam sempre olhando para o mesmo recorte.
+        data_min, data_max = dashboard_analyzer.get_date_bounds(df_metrics)
+        opcoes_filtro = dashboard_analyzer.get_filter_options(df_metrics)
+
+        with st.container(border=True):
+            fc1, fc2, fc3 = st.columns([2, 1, 1])
+            with fc1:
+                preset = st.radio(
+                    "Período:",
+                    ["7 dias", "30 dias", "90 dias", "Tudo", "Personalizado"],
+                    index=1, horizontal=True,
+                )
+                if preset == "Personalizado":
+                    intervalo = st.date_input(
+                        "Intervalo:", value=(data_min, data_max),
+                        min_value=data_min, max_value=data_max, format="DD/MM/YYYY",
+                    )
+                    # date_input com intervalo devolve uma tupla de 1 elemento enquanto o
+                    # usuário ainda não escolheu a segunda data.
+                    if isinstance(intervalo, (list, tuple)) and len(intervalo) == 2:
+                        data_inicial, data_final = intervalo
+                    else:
+                        data_inicial, data_final = data_min, data_max
+                elif preset == "Tudo":
+                    data_inicial, data_final = data_min, data_max
+                else:
+                    dias = {"7 dias": 7, "30 dias": 30, "90 dias": 90}[preset]
+                    data_final = data_max
+                    data_inicial = max(data_min, data_final - timedelta(days=dias - 1))
+                    st.caption(f"De {data_inicial.strftime('%d/%m/%Y')} a {data_final.strftime('%d/%m/%Y')}")
+
+            with fc2:
+                granularidade = st.selectbox("Agrupar por:", ["Dia", "Semana", "Mês"], index=0)
+                usuarios_disponiveis = sorted(df_metrics['user_name'].dropna().unique())
+                usuarios_sel = st.multiselect(
+                    "Usuário(s):", options=usuarios_disponiveis, placeholder="Todos os usuários",
+                )
+            with fc3:
+                modelos_sel = st.multiselect(
+                    "Modelo(s):", options=opcoes_filtro["modelos"], placeholder="Todos os modelos",
+                )
+                provedores_sel = st.multiselect(
+                    "Provedor(es):", options=opcoes_filtro["provedores"], placeholder="Todos os provedores",
+                )
+
+        uids_sel = [uid for uid, nome in user_id_to_name_map.items() if nome in usuarios_sel]
+        # Usuários presentes nas métricas mas ausentes do Auth são rotulados pelo próprio UID.
+        uids_sel += [u for u in usuarios_sel if u not in user_id_to_name_map.values()]
+
+        df_filtered = dashboard_analyzer.apply_filters(
+            df_metrics, data_inicial, data_final,
+            user_ids=uids_sel or None,
+            modelos=modelos_sel or None,
+            provedores=provedores_sel or None,
+        )
+
+        long_feedback = feedback_analyzer.build_feedback_long_table(df_filtered, user_id_to_name_map)
+        exibir_custo = dashboard_analyzer.has_cost_data(df_filtered)
+
+        tab_uso, tab_fb_geral, tab_fb_detalhe = st.tabs(
+            ["📈 Uso", "🎯 Feedback — Visão Geral", "🔍 Feedback — Detalhe"]
+        )
+
+        # ==================== ABA 1: USO ====================
+        with tab_uso:
+            kpis = dashboard_analyzer.calculate_kpis(df_filtered)
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Requisições", f"{kpis['total_requests']:,}".replace(",", "."),
+                      help="Análises de PDF + mensagens de chat")
+            c2.metric("Usuários Ativos", f"{kpis['active_users']:,}".replace(",", "."))
+            c3.metric("Documentos", f"{kpis['total_documents']:,}".replace(",", "."))
+            c4.metric("Páginas Processadas", f"{kpis['total_pages']:,}".replace(",", "."))
+            c5.metric("Tempo Médio", f"{kpis['avg_response_seconds']:.0f}s")
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Análises de PDF", f"{kpis['total_analyses']:,}".replace(",", "."))
+            c2.metric("Mensagens de Chat", f"{kpis['total_chats']:,}".replace(",", "."))
+            c3.metric("Tokens de Entrada", f"{kpis['input_tokens']:,}".replace(",", "."))
+            c4.metric("Tokens de Saída", f"{kpis['output_tokens']:,}".replace(",", "."))
+            # Custo só ocupa espaço quando existe: o uso atual é majoritariamente do provedor
+            # interno (LLM_PF), de custo zero.
+            if exibir_custo:
+                c5.metric("Custo Total (USD)", f"${kpis['total_cost_usd']:.2f}",
+                          help=f"Média de ${kpis['avg_cost_per_request']:.4f} por requisição")
+
+            st.markdown("---")
+
+            st.plotly_chart(
+                dashboard_plotter.create_requests_by_user_chart(
+                    dashboard_analyzer.prepare_requests_by_period_and_user(df_filtered, granularidade),
+                    granularidade,
+                ),
+                use_container_width=True,
             )
-        # --- Filtragem de Dados ---
-        df_filtered = df_metrics.copy()
-        if selected_user_names:
-            selected_uids = [user_options[name] for name in selected_user_names]
-            df_filtered = df_filtered[df_filtered['user_id'].isin(selected_uids)]
 
-        # --- Seção de KPIs ---
-        st.markdown("---")
-        kpis = dashboard_analyzer.calculate_kpis(df_filtered, user_id_to_name_map, period_days)
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Total de Usuários", f"{kpis['total_users']:,}")
-        c2.metric("Análises Realizadas", f"{kpis['total_analyses']:,}")
-        c3.metric("Feedbacks Recebidos", f"{kpis['total_feedbacks']:,}")
-        c4.metric("Custo Total (USD)", f"${kpis['total_cost_usd']:.2f}")
-        c5.metric("Custo Médio/Análise", f"${kpis['avg_cost_per_analysis']:.4f}")
-        st.markdown("---")
-        
-        # --- Seção de Uso e Custos ---
-        st.header("Análise de Uso e Custos")
-        usage_data = dashboard_analyzer.prepare_usage_data(df_filtered, period_days)
-        costs_data = dashboard_analyzer.prepare_cost_data(df_filtered, period_days) # Esta já estava correta
-        cost_dist_data = dashboard_analyzer.prepare_cost_distribution_data(df_filtered, period_days)
-        c1, c2, c3 = st.columns(3)
-        with c1: st.plotly_chart(dashboard_plotter.create_usage_chart(usage_data), use_container_width=True)
-        with c2: st.plotly_chart(dashboard_plotter.create_costs_chart(costs_data), use_container_width=True)
-        with c3: st.plotly_chart(dashboard_plotter.create_cost_distribution_pie(cost_dist_data), use_container_width=True)
+            if exibir_custo:
+                g1, g2 = st.columns(2)
+                with g1:
+                    st.plotly_chart(
+                        dashboard_plotter.create_token_usage_chart(
+                            dashboard_analyzer.prepare_token_usage_by_period(df_filtered, granularidade),
+                            granularidade),
+                        use_container_width=True)
+                with g2:
+                    st.plotly_chart(
+                        dashboard_plotter.create_costs_chart(
+                            dashboard_analyzer.prepare_cost_data(df_filtered, granularidade),
+                            granularidade),
+                        use_container_width=True)
+                st.plotly_chart(
+                    dashboard_plotter.create_cost_by_model_chart(
+                        dashboard_analyzer.prepare_cost_by_model(df_filtered)),
+                    use_container_width=True)
+            else:
+                st.plotly_chart(
+                    dashboard_plotter.create_token_usage_chart(
+                        dashboard_analyzer.prepare_token_usage_by_period(df_filtered, granularidade),
+                        granularidade),
+                    use_container_width=True)
+                st.caption(
+                    "💡 Indicadores de custo ocultos: nenhuma requisição do período teve custo "
+                    "registrado (uso do provedor interno)."
+                )
 
-        # --- Seção de Qualidade da IA ---
-        st.header("Análise de Qualidade da IA")
-        feedback_score_data = dashboard_analyzer.prepare_feedback_quality_data(df_filtered, period_days)
-        top_edited_data = dashboard_analyzer.prepare_top_edited_fields_data(df_filtered, period_days)
-        c1, c2 = st.columns(2)
-        with c1: st.plotly_chart(dashboard_plotter.create_feedback_score_chart(feedback_score_data), use_container_width=True)
-        with c2: st.plotly_chart(dashboard_plotter.create_top_edited_fields_chart(top_edited_data), use_container_width=True)
+            st.plotly_chart(
+                dashboard_plotter.create_user_period_heatmap(
+                    dashboard_analyzer.prepare_user_period_heatmap(df_filtered, granularidade),
+                    granularidade),
+                use_container_width=True)
 
-        # --- Seção Tabela de Atividade por Usuário ---
-        st.markdown("---")
-        st.header("Atividade por Usuário")
-        user_activity_data = dashboard_analyzer.prepare_user_activity_table(df_filtered, user_id_to_name_map, period_days)
-        st.dataframe(user_activity_data, use_container_width=True, hide_index=True,
-                      column_config={
-                          "Custo (USD)": st.column_config.NumberColumn(format="$%.4f"),
-                          "Última Atividade": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm")
-                      })
+            st.subheader("Atividade por Usuário")
+            tabela_usuarios = dashboard_analyzer.prepare_user_activity_table(df_filtered)
+            colunas_usuario = {
+                "Custo (USD)": st.column_config.NumberColumn(format="$%.4f"),
+                "Última Atividade": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+            }
+            if not exibir_custo and "Custo (USD)" in tabela_usuarios.columns:
+                tabela_usuarios = tabela_usuarios.drop(columns=["Custo (USD)"])
+                colunas_usuario.pop("Custo (USD)")
+            st.dataframe(tabela_usuarios, use_container_width=True, hide_index=True,
+                         column_config=colunas_usuario)
+
+            st.subheader("Uso por Modelo")
+            tabela_modelos = dashboard_analyzer.prepare_model_usage(df_filtered)
+            colunas_modelo = {
+                "Custo (USD)": st.column_config.NumberColumn(format="$%.4f"),
+                "Tempo Médio (s)": st.column_config.NumberColumn(format="%.1f s"),
+            }
+            if not exibir_custo and "Custo (USD)" in tabela_modelos.columns:
+                tabela_modelos = tabela_modelos.drop(columns=["Custo (USD)"])
+                colunas_modelo.pop("Custo (USD)")
+            st.dataframe(tabela_modelos, use_container_width=True, hide_index=True,
+                         column_config=colunas_modelo)
+
+        # ==================== ABA 2: FEEDBACK — VISÃO GERAL ====================
+        with tab_fb_geral:
+            kpis_uso = dashboard_analyzer.calculate_kpis(df_filtered)
+            kpis_fb = feedback_analyzer.calculate_feedback_kpis(long_feedback, kpis_uso['total_analyses'])
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Feedbacks Recebidos", f"{kpis_fb['total_feedbacks']:,}".replace(",", "."))
+            c2.metric("Taxa de Retorno", f"{kpis_fb['taxa_retorno']:.1%}",
+                      help="Proporção de análises de PDF que receberam avaliação do usuário")
+            c3.metric("Taxa de Acerto", f"{kpis_fb['taxa_acerto']:.1%}",
+                      help="Campos não editados pelo usuário sobre o total de campos avaliados")
+            c4.metric("Campos Avaliados", f"{kpis_fb['total_campos']:,}".replace(",", "."))
+            c5.metric("Reanálises Solicitadas", f"{kpis_fb['total_reanalises']:,}".replace(",", "."))
+
+            if long_feedback.empty:
+                st.info("Nenhum feedback registrado no período e nos filtros selecionados.")
+            else:
+                st.markdown("---")
+                st.plotly_chart(
+                    dashboard_plotter.create_requests_by_user_chart(
+                        dashboard_analyzer.prepare_events_by_period_and_user(
+                            df_filtered, "llm_feedback", granularidade),
+                        granularidade,
+                        value_col="eventos",
+                        title="Feedbacks por período e usuário",
+                        yaxis_title="Feedbacks",
+                    ),
+                    use_container_width=True)
+
+                st.plotly_chart(
+                    dashboard_plotter.create_feedback_score_chart(
+                        feedback_analyzer.prepare_accuracy_by_period(long_feedback, granularidade)),
+                    use_container_width=True)
+
+                st.plotly_chart(
+                    dashboard_plotter.create_accuracy_by_field_chart(
+                        feedback_analyzer.prepare_accuracy_by_field(long_feedback)),
+                    use_container_width=True)
+
+                min_amostras = st.slider(
+                    "Mínimo de avaliações por célula (campo × modelo):",
+                    min_value=1, max_value=30, value=5,
+                    help="Células com menos avaliações ficam em branco, evitando concluir a "
+                         "partir de uma ou duas ocorrências.",
+                )
+                st.plotly_chart(
+                    dashboard_plotter.create_accuracy_heatmap(
+                        feedback_analyzer.prepare_accuracy_by_field_and_model(
+                            long_feedback, min_amostras)),
+                    use_container_width=True)
+
+        # ==================== ABA 3: FEEDBACK — DETALHE ====================
+        with tab_fb_detalhe:
+            if long_feedback.empty:
+                st.info("Nenhum feedback registrado no período e nos filtros selecionados.")
+            else:
+                sub_erros, sub_tabela, sub_confusao = st.tabs(
+                    ["Erros recorrentes", "Tabela completa", "Matriz de confusão"]
+                )
+
+                # --- Erros recorrentes: leitura acionável dos valores corrigidos ---
+                with sub_erros:
+                    st.markdown(
+                        "Cada linha é uma classificação que a IA errou e a correção que o "
+                        "usuário aplicou. É o insumo direto para ajuste de prompt e das listas "
+                        "de opções."
+                    )
+                    confusoes = feedback_analyzer.prepare_top_confusions(long_feedback, top_n=30)
+                    if confusoes.empty:
+                        st.warning(
+                            "Nenhum par 'resposta da IA → correção' disponível no recorte. "
+                            "Os valores só passaram a ser gravados novamente a partir da versão "
+                            "que restaurou a persistência para campos de valor único; "
+                            "registros anteriores guardam apenas qual campo foi corrigido."
+                        )
+                    else:
+                        st.dataframe(confusoes, use_container_width=True, hide_index=True)
+
+                # --- Tabela completa: uma linha por (feedback, campo) ---
+                with sub_tabela:
+                    fc1, fc2 = st.columns(2)
+                    with fc1:
+                        campos_sel = st.multiselect(
+                            "Campo(s):", options=sorted(long_feedback['campo'].dropna().unique()),
+                            placeholder="Todos os campos")
+                    with fc2:
+                        situacao = st.radio("Situação:", ["Todos", "Apenas corrigidos", "Apenas corretos"],
+                                            horizontal=True)
+
+                    detalhe = long_feedback.copy()
+                    if campos_sel:
+                        detalhe = detalhe[detalhe['campo'].isin(campos_sel)]
+                    if situacao == "Apenas corrigidos":
+                        detalhe = detalhe[~detalhe['acertou']]
+                    elif situacao == "Apenas corretos":
+                        detalhe = detalhe[detalhe['acertou']]
+
+                    exibicao = detalhe[[
+                        'timestamp', 'user_name', 'arquivo', 'campo', 'acertou',
+                        'valor_llm', 'valor_corrigido', 'similaridade', 'modelo', 'provedor',
+                    ]].rename(columns={
+                        'timestamp': 'Data/Hora', 'user_name': 'Usuário', 'arquivo': 'Arquivo',
+                        'campo': 'Campo', 'acertou': 'Acertou', 'valor_llm': 'Resposta da IA',
+                        'valor_corrigido': 'Corrigido para', 'similaridade': 'Aproveitamento',
+                        'modelo': 'Modelo', 'provedor': 'Provedor',
+                    }).sort_values('Data/Hora', ascending=False)
+
+                    st.caption(f"{len(exibicao):,} campos avaliados no recorte.".replace(",", "."))
+                    st.dataframe(
+                        exibicao, use_container_width=True, hide_index=True, height=460,
+                        column_config={
+                            "Data/Hora": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+                            "Acertou": st.column_config.CheckboxColumn(),
+                            "Aproveitamento": st.column_config.ProgressColumn(
+                                format="%.0f%%", min_value=0, max_value=1),
+                        })
+
+                    output_fb = io.BytesIO()
+                    # Reusa o mesmo escritor da aba "Dados & Logs" — aceita um buffer no lugar
+                    # de um caminho, já que pandas.to_excel trata ambos.
+                    export_data.export_data_to_excel(exibicao.to_dict(orient="records"), output_fb)
+                    st.download_button(
+                        "Exportar para Excel", data=output_fb.getvalue(),
+                        file_name=f"feedback_detalhado_{data_inicial:%Y%m%d}_{data_final:%Y%m%d}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+                    st.markdown("---")
+                    st.subheader("Submissões de Feedback")
+                    st.caption("Selecione uma linha para ver a avaliação campo a campo.")
+                    submissoes = feedback_analyzer.prepare_submission_table(long_feedback)
+                    evento = st.dataframe(
+                        submissoes.drop(columns=['doc_id']),
+                        use_container_width=True, hide_index=True, height=280,
+                        on_select="rerun", selection_mode="single-row",
+                        column_config={
+                            "Data/Hora": st.column_config.DatetimeColumn(format="DD/MM/YYYY HH:mm"),
+                            "Taxa de Acerto": st.column_config.ProgressColumn(
+                                format="%.0f%%", min_value=0, max_value=1),
+                            "Reanálise": st.column_config.CheckboxColumn(),
+                        })
+
+                    linhas_sel = evento.selection.rows if evento and evento.selection else []
+                    if linhas_sel:
+                        doc_id = submissoes.iloc[linhas_sel[0]]['doc_id']
+                        campos_doc = long_feedback[long_feedback['doc_id'] == doc_id]
+                        cabecalho = campos_doc.iloc[0]
+
+                        st.markdown(
+                            f"**{cabecalho['user_name']}** · {cabecalho['timestamp']:%d/%m/%Y %H:%M} · "
+                            f"`{cabecalho['modelo'] or 'N/D'}` · {cabecalho['arquivo']}"
+                        )
+                        col_ok, col_erro = st.columns(2)
+                        with col_ok:
+                            st.markdown("**✅ Respostas mantidas**")
+                            for _, campo in campos_doc[campos_doc['acertou']].iterrows():
+                                st.markdown(f"- {campo['campo']}")
+                        with col_erro:
+                            st.markdown("**✏️ Respostas corrigidas**")
+                            corrigidos = campos_doc[~campos_doc['acertou']]
+                            if corrigidos.empty:
+                                st.caption("Nenhuma correção nesta submissão.")
+                            for _, campo in corrigidos.iterrows():
+                                if pd.notna(campo['valor_llm']) and pd.notna(campo['valor_corrigido']):
+                                    st.markdown(
+                                        f"- **{campo['campo']}**  \n"
+                                        f"  `{campo['valor_llm']}` → `{campo['valor_corrigido']}`")
+                                elif pd.notna(campo['similaridade']):
+                                    st.markdown(
+                                        f"- **{campo['campo']}** — texto editado "
+                                        f"(aproveitamento {campo['similaridade']:.0%})")
+                                else:
+                                    st.markdown(f"- **{campo['campo']}** — editado")
+
+                # --- Matriz de confusão por campo ---
+                with sub_confusao:
+                    campos_com_valor = feedback_analyzer.get_fields_with_values(long_feedback)
+                    if campos_com_valor.empty:
+                        st.warning(
+                            "Nenhum campo do recorte possui valores registrados. A matriz de "
+                            "confusão depende do par 'resposta da IA / correção', preservado "
+                            "apenas para campos de valor único (listas fechadas e numéricos); "
+                            "campos de texto livre têm os valores descartados na origem por "
+                            "conterem conteúdo do documento analisado."
+                        )
+                    else:
+                        rotulos = {
+                            f"{linha['campo']} ({linha['com_valor']} avaliações)": linha['nome_campo']
+                            for _, linha in campos_com_valor.iterrows()
+                        }
+                        escolhido = st.selectbox("Campo:", options=list(rotulos.keys()))
+                        nome_campo = rotulos[escolhido]
+                        matriz = feedback_analyzer.build_confusion_matrix(long_feedback, nome_campo)
+                        st.plotly_chart(
+                            dashboard_plotter.create_confusion_heatmap(
+                                matriz, escolhido.split(" (")[0]),
+                            use_container_width=True)
+                        st.caption(
+                            "A diagonal são os acertos. Células fora dela concentram as confusões "
+                            "recorrentes do modelo."
+                        )
 
 elif page == "Dados & Logs":
     st.title("📄 Sincronização e Visualização de Dados")

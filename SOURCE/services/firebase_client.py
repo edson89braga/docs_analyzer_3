@@ -25,6 +25,14 @@ from threading import Lock
 FIRESTORE_BASE_URL = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases/(default)/documents"
 STORAGE_BASE_URL = f"https://firebasestorage.googleapis.com/v0/b/{FB_STORAGE_BUCKET}/o"
 
+# Tipos de campo cujos valores original/corrigido PODEM ser persistidos junto ao feedback.
+# São campos de valor único, de taxonomia fechada (dropdowns) ou numéricos, sem conteúdo
+# textual do documento — logo, sem dado sigiloso. Os demais tipos ("textfield_multiline",
+# "textfield_lista", "textfield") transcrevem trechos da peça analisada e têm seus valores
+# descartados antes da gravação; para eles resta apenas 'llm_acertou' e a similaridade.
+# Essa distinção é o que viabiliza a matriz de confusão por campo no painel administrativo.
+FEEDBACK_VALUE_SAFE_FIELD_TYPES = ("dropdown", "radio_button", "checkbox", "textfield_valor")
+
 # --- Funções Auxiliares para Conversão de Tipos do Firestore ---
 
 def _to_firestore_value(value: Any) -> Dict[str, Any]:
@@ -671,6 +679,92 @@ class FirebaseClientFirestore:
         except Exception as e:
             logger.error(f"Erro ao coletar ou enviar métricas da análise: {e}", exc_info=True)
 
+    def save_chat_request_metrics(self, user_id: str, user_token: str, chat_session_id: str,
+                                  request_metric: Dict[str, Any]) -> bool:
+        """
+        Registra uma requisição de chat como evento na coleção unificada de métricas.
+
+        Emite um evento 'chat_request_completed' em `user_metrics/{user_id}/metrics`, o mesmo
+        caminho usado por `save_analysis_metrics` e `save_feedback_data`. Isso permite que o
+        painel administrativo contabilize análises e mensagens de chat como "requisições" na
+        mesma agregação, sem tratamento especial por origem.
+
+        Args:
+            user_id: ID do usuário autenticado.
+            user_token: Token de ID do Firebase.
+            chat_session_id: Identificador da sessão de chat, para agrupar requisições.
+            request_metric: Métricas da requisição, conforme emitidas pelo
+                ChatLLMOrchestrator em 'final_metrics' e complementadas pela view
+                (model_name, timestamp).
+
+        Returns:
+            bool: True se a métrica foi registrada, False caso contrário.
+
+            Exemplo do documento gravado:
+            {
+                "event_type": "chat_request_completed",
+                "app_version": "0.5.2",
+                "timestamp_event": "2026-08-20T14:03:11.482913",
+                "chat_session_id": "chat_20260820_140012",
+                "llm_analysis_metadata": {
+                    "input_tokens": 12134,
+                    "cached_tokens": 0,
+                    "output_tokens": 959,
+                    "reasoning_tokens": 0,
+                    "total_tokens": 13093,
+                    "total_cost_usd": 0.0,
+                    "llm_provider_used": "LLM_PF",
+                    "llm_model_used": "QWEN3.5-35B-A3B-FP8",
+                    "processing_time": "00m:24s"
+                }
+            }
+        """
+        if not user_id or not user_token:
+            logger.error("Não foi possível registrar métrica de chat: usuário não autenticado.")
+            return False
+        if not request_metric:
+            logger.debug("Métrica de chat vazia (provável erro na requisição); nada a registrar.")
+            return False
+
+        try:
+            timestamp_event = request_metric.get("timestamp") or datetime.now()
+            if isinstance(timestamp_event, datetime):
+                timestamp_event = timestamp_event.isoformat()
+
+            # Espelha a estrutura de 'pdf_analysis_completed' para que o analisador do painel
+            # leia ambos os eventos com o mesmo conjunto de colunas.
+            llm_metadata_to_log = {
+                "input_tokens": request_metric.get("input_tokens"),
+                "cached_tokens": request_metric.get("cached_tokens"),
+                "output_tokens": request_metric.get("output_tokens"),
+                "reasoning_tokens": request_metric.get("reasoning_tokens"),
+                "total_tokens": request_metric.get("total_tokens"),
+                "total_cost_usd": request_metric.get("total_cost_usd"),
+                "llm_provider_used": request_metric.get("llm_provider_used"),
+                "llm_model_used": request_metric.get("model_name"),
+                "processing_time": request_metric.get("processing_time"),
+            }
+            llm_metadata_to_log = {k: v for k, v in llm_metadata_to_log.items() if v is not None}
+
+            metric_data = {
+                "app_version": APP_VERSION,
+                "event_type": "chat_request_completed",
+                "timestamp_event": timestamp_event,
+                "chat_session_id": chat_session_id,
+                "llm_analysis_metadata": llm_metadata_to_log,
+            }
+
+            if self.save_metrics_client(user_token, user_id, metric_data):
+                logger.debug(f"Métrica de requisição de chat registrada (sessão '{chat_session_id}').")
+                return True
+
+            logger.error("Falha ao registrar métrica de requisição de chat no Firestore.")
+            return False
+
+        except Exception as e:
+            logger.error(f"Erro ao registrar métrica de requisição de chat: {e}", exc_info=True)
+            return False
+
     def save_feedback_data(self, user_id, user_token, feedback_data_list: List[Dict[str, Any]], llm_metadata_session, reanalysis_occurrence=None, related_batch_name="N/A"):
         """
         Salva os dados detalhados de feedback do usuário no Firestore como um documento separado,
@@ -694,15 +788,14 @@ class FirebaseClientFirestore:
                 analysis_timestamp_ref = datetime.now().isoformat()
                 logger.warning(f"Timestamp de referência da análise principal não encontrado em llm_metadata. Usando timestamp atual para feedback: {analysis_timestamp_ref}")
 
-            # Preparar os campos de feedback, removendo valores originais/atuais para tipos específicos
+            # Preparar os campos de feedback, preservando os valores apenas dos campos de
+            # valor único (taxonomia fechada / numérico). Ver FEEDBACK_VALUE_SAFE_FIELD_TYPES.
             processed_feedback_fields = []
             for field_data in feedback_data_list:
                 field_copy = field_data.copy() # Trabalha com uma cópia
-                #tipo_campo = field_copy.get("tipo_campo", "") 
-                #if tipo_campo in ["textfield_multiline", "textfield_lista"]:
-                # Agora, removemos sempre para evitar armazenar dados desnecessários
-                field_copy.pop("valor_original_llm", None)
-                field_copy.pop("valor_atual_ui", None)
+                if field_copy.get("tipo_campo") not in FEEDBACK_VALUE_SAFE_FIELD_TYPES:
+                    field_copy.pop("valor_original_llm", None)
+                    field_copy.pop("valor_atual_ui", None)
                 field_copy.pop("foi_editado", None)
                 processed_feedback_fields.append(field_copy)
 

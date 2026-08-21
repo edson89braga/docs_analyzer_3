@@ -15,7 +15,7 @@ from typing import List, Dict, Any, Optional, Generator, Tuple
 import openai, httpx
 from openai import AuthenticationError, APIError
 
-from SOURCE.utils import with_proxy
+from SOURCE.utils import with_proxy, format_seconds_to_min_sec
 from SOURCE.config.provider import is_local_mode
 from SOURCE.core.ai_orchestrator import (calc_costs_llm_analysis, compute_llm_pf_max_output_tokens,
                                          create_llm_pf_completion, is_thinking_enabled)
@@ -319,7 +319,9 @@ class ChatLLMOrchestrator:
                     token_usage_info["total_cost_usd"] = 0
                     token_usage_info["previous_response_id"] = None
 
-                    total_time = round(time.perf_counter() - start_time, 2)       
+                    total_time = round(time.perf_counter() - start_time, 2)
+                    token_usage_info["llm_provider_used"] = provider.upper()
+                    token_usage_info["processing_time"] = format_seconds_to_min_sec(total_time)
                     logger.info(f"Resposta do chat recebida. Model: {model_name}; Tempo de resposta: {total_time}s; Métricas: {token_usage_info}")
                     yield {"type": "final_metrics", "data": token_usage_info}
 
@@ -466,7 +468,9 @@ class ChatLLMOrchestrator:
                 )
                 token_usage_info["total_cost_usd"] = cost_usd
                 token_usage_info["previous_response_id"] = previous_response_id
-                                
+                token_usage_info["llm_provider_used"] = provider.upper()
+                token_usage_info["processing_time"] = format_seconds_to_min_sec(total_time)
+
                 logger.info(f"Resposta do chat recebida. Model: {model_name}; Tempo de resposta: {total_time}s; Métricas: {token_usage_info}")
                 yield {"type": "final_metrics", "data": token_usage_info}
             else:

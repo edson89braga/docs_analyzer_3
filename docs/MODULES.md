@@ -1,6 +1,18 @@
 
 > Data de atualização das informações abaixo: 20/09/2025
 
+> **Adendo 20/08/2026 — métricas e painel administrativo.** As métricas de chat, que eram
+> acumuladas no mapa `requests` do documento de sessão (`user_metrics/{uid}/chat_sessions/{id}`) e
+> nunca sincronizadas pelo painel, passaram a ser emitidas como evento `chat_request_completed` na
+> coleção unificada `user_metrics/{uid}/metrics` — mesma estrutura de `pdf_analysis_completed`.
+> `save_feedback_data` voltou a persistir `valor_original_llm`/`valor_atual_ui` para campos de
+> valor único (`FEEDBACK_VALUE_SAFE_FIELD_TYPES`), mantendo o descarte para texto livre, que
+> transcreve o documento analisado. O painel Streamlit foi reorganizado em três abas (Uso,
+> Feedback — Visão Geral, Feedback — Detalhe) com filtro global único e granularidade
+> selecionável; os painéis de custo passaram a ser condicionais. Detalhes, decisões e armadilhas
+> em [`NOTES_metricas_dashboard.md`](../NOTES_metricas_dashboard.md).
+
+
 > **Adendo 13/08/2026:** provider `llm_pf` migrado para `Qwen3.5-35B-A3B-FP8` (janela de
 > contexto 128k, antes 32k com `Qwen3-8B-AWQ`). O campo "Limite Tokens Input" do drawer de
 > configurações agora aceita ficar **vazio = truncagem automática**: quando `llm_provider ==

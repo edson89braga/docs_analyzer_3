@@ -1520,31 +1520,24 @@ class ChatViewContent(ft.Column):
 
     @staticmethod
     def _log_single_metric_to_firestore_static(user_token: str, user_id: str, chat_session_id: str, request_metric: Dict[str, Any]):
-        """Método estático para salvar uma única métrica no Firestore. Pode ser chamado pela thread."""
+        """
+        Registra a métrica de uma requisição de chat no Firestore. Pode ser chamado pela thread.
+
+        A gravação vai para a coleção unificada `user_metrics/{user_id}/metrics`, como evento
+        'chat_request_completed'. Anteriormente esta métrica era acumulada no mapa 'requests'
+        do documento da sessão (`user_metrics/{user_id}/chat_sessions/{id}`), caminho que o
+        painel administrativo nunca sincronizava — o consumo do chat ficava invisível nos
+        relatórios. O documento de sessão segue registrando o contexto (arquivos carregados)
+        e o resumo de encerramento.
+
+        Args:
+            user_token: Token de ID do Firebase.
+            user_id: ID do usuário autenticado.
+            chat_session_id: Identificador da sessão de chat.
+            request_metric: Métricas emitidas pelo orquestrador para esta requisição.
+        """
         firestore_client = FirebaseClientFirestore() # Cria uma instância local
-
-        request_timestamp = request_metric.get("timestamp", datetime.now())
-        request_id = f"req_{request_timestamp.strftime('%Y%m%d%H%M%S%f')}"
-
-        # Cria um dicionário aninhado. A chave 'requests' conterá um mapa,
-        # e estamos adicionando/atualizando um campo (request_id) dentro desse mapa.
-
-        metric_payload = {
-            "requests": {
-                request_id: {
-                    "timestamp": request_timestamp.isoformat(),
-                    "model_name": request_metric.get("model_name"),
-                    "input_tokens": request_metric.get("input_tokens"),
-                    "cached_tokens": request_metric.get("cached_tokens"),
-                    "output_tokens": request_metric.get("output_tokens"),
-                    "reasoning_tokens": request_metric.get("reasoning_tokens"),
-                    "total_cost_usd": request_metric.get("total_cost_usd"),
-                }
-            }
-        }
-        
-        doc_path = f"user_metrics/{user_id}/chat_sessions/{chat_session_id}"
-        firestore_client.set_document_data(user_token, doc_path, metric_payload, merge=True)
+        firestore_client.save_chat_request_metrics(user_id, user_token, chat_session_id, request_metric)
 
     def _get_valid_user_context(self) -> Optional[tuple[str, str]]:
         from SOURCE.flet_ui.app import check_and_refresh_token_if_needed
