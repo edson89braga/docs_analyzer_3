@@ -278,57 +278,90 @@ class FirebaseClientFirestore:
         document_path: str, # Ex: "collectionName/documentId" ou "collectionName" para list/create
         json_data: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
-        timeout: int = 30
+        timeout: int = 30,
+        refresh_token: Optional[str] = None
     ) -> requests.Response:
         """
         Método auxiliar para fazer requisições à API REST do Firestore.
+
+        Camada reativa contra token obsoleto: se `refresh_token` for informado e o
+        Firestore responder 401 (token expirado/inválido no momento do uso, apesar
+        do refresh proativo em segundo plano), tenta renovar o token uma única vez
+        via `FbManagerAuth.refresh_id_token` e repete a requisição original mais uma
+        vez com o novo token antes de desistir. Sem `refresh_token`, o comportamento
+        é idêntico ao anterior (o erro 401 é propagado diretamente ao chamador).
+
+        Args:
+            refresh_token (Optional[str]): Refresh token do usuário, usado apenas
+                para a tentativa de renovação reativa em caso de 401. Se None
+                (padrão), nenhuma tentativa de renovação é feita.
         """
-        headers = {
-            "Authorization": f"Bearer {user_token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
         url = f"{FIRESTORE_BASE_URL}/{document_path}"
+        current_token = user_token
+        retried_after_401 = False # Garante no máximo 1 tentativa de refresh+retry (evita loop infinito)
 
-        logger.debug(f"Firestore Request: {method} {url} | Params: {params} | JSON: {json_data is not None}")
+        while True:
+            headers = {
+                "Authorization": f"Bearer {current_token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
 
-        try:
-            response = requests.request(
-                method,
-                url,
-                headers=headers,
-                json=json_data,
-                params=params,
-                timeout=timeout
-            )
-            if not (method.upper() == "GET" and response.status_code == 404):
-                response.raise_for_status() # Levanta HTTPError para outros erros 4xx/5xx ou para 404 em não-GET
-            return response
-        except requests.exceptions.HTTPError as http_err:
-            status_code = http_err.response.status_code
+            logger.debug(f"Firestore Request: {method} {url} | Params: {params} | JSON: {json_data is not None}")
+
             try:
-                error_details = http_err.response.json()
-                error_message = error_details.get("error", {}).get("message", "Erro desconhecido do Firestore")
-                logger.error(f"Erro HTTP {status_code} do Firestore para {document_path}: {error_message} | Detalhes: {error_details}")
-                error_details_msg = f"Detalhes: {error_details}"
-            except json.JSONDecodeError:
-                logger.error(f"Erro HTTP {status_code} do Firestore para {document_path}. Resposta não JSON: {http_err.response.text}")
-                error_details_msg = f"Resposta não JSON: {error_message}"
-                        
-            if status_code == 403:
-                logger.error(
-                    f"Erro de Permissão (403) do Firestore para {method} {document_path}: {error_message}. "
-                    f"Verifique as Regras de Segurança do Firestore e o status do token do usuário. {error_details_msg}"
+                response = requests.request(
+                    method,
+                    url,
+                    headers=headers,
+                    json=json_data,
+                    params=params,
+                    timeout=timeout
                 )
-            else:
-                logger.error(f"Erro HTTP {status_code} do Firestore para {method} {document_path}: {error_message}. {error_details_msg}")
-            raise
-        except requests.exceptions.RequestException as req_err:
-            logger.error(f"Erro de requisição para Firestore em {document_path}: {req_err}", exc_info=True)
-            raise
-        except Exception as e:
-            logger.error(f"Erro inesperado em _make_firestore_request para {document_path}: {e}", exc_info=True)
-            raise
+                if not (method.upper() == "GET" and response.status_code == 404):
+                    response.raise_for_status() # Levanta HTTPError para outros erros 4xx/5xx ou para 404 em não-GET
+                return response
+            except requests.exceptions.HTTPError as http_err:
+                status_code = http_err.response.status_code
+
+                if status_code == 401 and refresh_token and not retried_after_401:
+                    retried_after_401 = True
+                    logger.warning(
+                        f"Firestore retornou 401 para {document_path}: token provavelmente expirado no momento do "
+                        "uso, apesar do refresh proativo. Tentando renovar o token (1 tentativa) e repetir a requisição."
+                    )
+                    new_token_data = self.auth_manager.refresh_id_token(refresh_token)
+                    new_id_token = new_token_data.get("id_token") if isinstance(new_token_data, dict) else None
+                    if new_id_token:
+                        logger.info(f"Token renovado após 401 do Firestore. Repetindo requisição para {document_path}.")
+                        current_token = new_id_token
+                        continue # Repete o loop uma única vez com o novo token (retried_after_401 já é True)
+                    else:
+                        logger.error(f"Falha ao renovar token após 401 do Firestore para {document_path}. Propagando erro original.")
+
+                try:
+                    error_details = http_err.response.json()
+                    error_message = error_details.get("error", {}).get("message", "Erro desconhecido do Firestore")
+                    logger.error(f"Erro HTTP {status_code} do Firestore para {document_path}: {error_message} | Detalhes: {error_details}")
+                    error_details_msg = f"Detalhes: {error_details}"
+                except json.JSONDecodeError:
+                    logger.error(f"Erro HTTP {status_code} do Firestore para {document_path}. Resposta não JSON: {http_err.response.text}")
+                    error_details_msg = f"Resposta não JSON: {error_message}"
+
+                if status_code == 403:
+                    logger.error(
+                        f"Erro de Permissão (403) do Firestore para {method} {document_path}: {error_message}. "
+                        f"Verifique as Regras de Segurança do Firestore e o status do token do usuário. {error_details_msg}"
+                    )
+                else:
+                    logger.error(f"Erro HTTP {status_code} do Firestore para {method} {document_path}: {error_message}. {error_details_msg}")
+                raise
+            except requests.exceptions.RequestException as req_err:
+                logger.error(f"Erro de requisição para Firestore em {document_path}: {req_err}", exc_info=True)
+                raise
+            except Exception as e:
+                logger.error(f"Erro inesperado em _make_firestore_request para {document_path}: {e}", exc_info=True)
+                raise
 
     def save_user_api_key_client(self, user_token: str, user_id: str, service_name: str, encrypted_api_key_bytes: bytes) -> bool:
         """

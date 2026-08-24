@@ -3450,6 +3450,7 @@ def load_prompts_from_firestore(page: ft.Page):
     logger.debug("Carregando componentes base de prompt...")
     user_token = page.session.get("auth_id_token")
     user_id = page.session.get("auth_user_id")
+    refresh_token = page.session.get("auth_refresh_token")
     user_cache = get_user_cache(page)
 
     prompts_path = os.path.join(ASSETS_DIR, 'dict_prompts.json')
@@ -3459,7 +3460,14 @@ def load_prompts_from_firestore(page: ft.Page):
     if user_token:
         prompts_doc_path = f"{PROMPTS_COLLECTION}/{PROMPTS_DOCUMENT_ID}"
         try:
-            response = firestore_client._make_firestore_request("GET", user_token, prompts_doc_path)
+            # refresh_token habilita a camada reativa de _make_firestore_request: se o
+            # token da sessão já estiver obsoleto no momento desta chamada (carregada no
+            # início da criação da view, antes de qualquer refresh proativo posterior),
+            # o método tenta renovar e repetir a requisição uma única vez em vez de falhar
+            # direto com 401 (ver Tarefa 6 / incidente confirmado em prompt_templates).
+            response = firestore_client._make_firestore_request(
+                "GET", user_token, prompts_doc_path, refresh_token=refresh_token
+            )
             if response.status_code == 200:
                 prompts_data = response.json()
                 fields = prompts_data.get("fields", {})
