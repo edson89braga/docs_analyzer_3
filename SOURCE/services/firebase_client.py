@@ -945,21 +945,31 @@ class FbManagerAuth:
                 if not self._public_keys_cache or (self._public_keys_expiry and time.time() > self._public_keys_expiry):
                     logger.debug("Cache de chaves públicas do Firebase expirado ou vazio. Buscando novas chaves.")
                     keys_url = "https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com"
-                    response = requests.get(keys_url, timeout=10)
-                    response.raise_for_status()
-                    self._public_keys_cache = response.json()
-                    
-                    # Definir expiração baseada no cache-control do response
-                    cache_control = response.headers.get('cache-control', '')
-                    max_age = 3600  # Default 1 hora
-                    if 'max-age=' in cache_control:
-                        try:
-                            max_age = int(cache_control.split('max-age=')[1].split(',')[0])
-                        except (ValueError, IndexError):
-                            pass
-                    
-                    self._public_keys_expiry = time.time() + max_age
-                
+                    try:
+                        response = requests.get(keys_url, timeout=10)
+                        response.raise_for_status()
+                        self._public_keys_cache = response.json()
+
+                        # Definir expiração baseada no cache-control do response
+                        cache_control = response.headers.get('cache-control', '')
+                        max_age = 3600  # Default 1 hora
+                        if 'max-age=' in cache_control:
+                            try:
+                                max_age = int(cache_control.split('max-age=')[1].split(',')[0])
+                            except (ValueError, IndexError):
+                                pass
+
+                        self._public_keys_expiry = time.time() + max_age
+                    except requests.exceptions.RequestException as req_error:
+                        if self._public_keys_cache:
+                            logger.warning(
+                                f"Falha de rede ao buscar novas chaves públicas do Firebase ({req_error}). "
+                                "Usando cache de chaves expirado como fallback."
+                            )
+                        else:
+                            logger.error(f"Falha de rede ao buscar chaves públicas do Firebase e nenhum cache disponível: {req_error}")
+                            return None
+
                 public_keys = self._public_keys_cache
 
             # 3. Encontrar o certificado PEM correto
