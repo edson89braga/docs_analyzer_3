@@ -1494,6 +1494,22 @@ class LLMStructuredResultDisplay(ft.Column):
     Apresenta os dados em um formulário editável, permitindo ao usuário revisar
     e ajustar os campos antes da exportação.
     """
+
+    # Campos obrigatórios para exportação. Lista compartilhada entre a validação de
+    # exportação (get_current_form_data) e a sinalização visual de campos vazios
+    # (_highlight_empty_required_fields) — não duplicar em outro lugar.
+    REQUIRED_FIELDS_FOR_EXPORT: List[str] = [
+        "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
+        "resumo_fato", # Mesmo sendo multiline, pode ser obrigatório
+        "tipo_local", "uf_fato", "municipio_fato",
+        # "valor_apuracao", # Pode ser opcional ou zero
+        "area_atribuicao",
+        "tipo_a_autuar", "destinacao",
+        # "descricao_geral"
+        # "tipificacao_penal" e "assunto_re" são Optional[str] no FormatAnaliseInicial
+        # "pessoas_envolvidas", "linha_do_tempo", "observacoes" são Optional[List[str]]
+    ]
+
     def __init__(self, page: ft.Page):
         """
         Inicializa o display de resultados estruturados.
@@ -1585,6 +1601,99 @@ class LLMStructuredResultDisplay(ft.Column):
             if e is not None: # 'e' indica chamada por evento de usuário
                 safe_control_update(self.dropdown_municipio_fato)
  
+    def _is_required_field_value_empty(self, field_name: str, value: Any) -> bool:
+        """
+        Verifica se o valor de um campo obrigatório para exportação está vazio.
+
+        Mesma lógica aplicada pela validação de exportação (ver get_current_form_data),
+        extraída aqui para ser reaproveitada também pela sinalização visual de campos vazios.
+
+        Args:
+            field_name (str): Nome do campo (chave em self.gui_fields) sendo avaliado.
+            value (Any): Valor atual do campo (ex: control.value).
+
+        Returns:
+            bool: True se o valor é considerado vazio para fins de campo obrigatório.
+        """
+        if value is None: # Principal condição para Dropdowns não selecionados ou TextFields vazios que retornam None
+            return True
+        if isinstance(value, str) and not value.strip(): # Para TextFields que podem ter string vazia
+            return True
+        # Para TextFields multiline que representam listas (como pessoas_envolvidas)
+        if field_name in ["pessoas_envolvidas", "linha_do_tempo"] and isinstance(value, str):
+            processed_list_val = [line.strip() for line in value.split('\n') if line.strip()]
+            return not processed_list_val
+        return False
+
+    def _apply_required_field_indicator(self, field_name: str, control: ft.Control) -> None:
+        """
+        Define a borda de aviso do campo conforme ele esteja vazio (obrigatório e sem valor) ou não.
+
+        Args:
+            field_name (str): Nome do campo (chave em self.gui_fields).
+            control (ft.Control): Instância do TextField/Dropdown correspondente ao campo.
+        """
+        if not isinstance(control, (ft.TextField, ft.Dropdown)):
+            return
+        is_empty = self._is_required_field_value_empty(field_name, control.value)
+        control.border_color = theme.COLOR_WARNING if is_empty else None
+
+    def _highlight_empty_required_fields(self) -> None:
+        """
+        Sinaliza visualmente (borda de aviso) os campos obrigatórios para exportação que
+        estiverem vazios, logo após o formulário ser populado pelos dados da análise LLM —
+        antes de qualquer tentativa de exportação.
+
+        Reaproveita REQUIRED_FIELDS_FOR_EXPORT, a mesma lista de campos obrigatórios usada
+        pela validação de exportação em get_current_form_data.
+        """
+        for field_name in self.REQUIRED_FIELDS_FOR_EXPORT:
+            control = self.gui_fields.get(field_name)
+            if control is not None:
+                self._apply_required_field_indicator(field_name, control)
+
+    def _on_required_field_changed(self, field_name: str, e: Optional[ft.ControlEvent] = None) -> None:
+        """
+        Reavalia a sinalização visual de um campo obrigatório após alteração do usuário.
+
+        Usado como (ou encadeado a partir de) on_change dos campos obrigatórios para
+        exportação: se o usuário preencher manualmente um campo antes sinalizado como
+        vazio, a borda de aviso é removida daquele campo especificamente.
+
+        Args:
+            field_name (str): Nome do campo (chave em self.gui_fields) que foi alterado.
+            e (Optional[ft.ControlEvent]): Evento de mudança do Flet (não utilizado diretamente).
+        """
+        control = self.gui_fields.get(field_name)
+        if control is None:
+            return
+        self._apply_required_field_indicator(field_name, control)
+        safe_control_update(control)
+
+    def _on_uf_origem_changed(self, e: Optional[ft.ControlEvent] = None) -> None:
+        """
+        Handler de mudança do campo 'UF de Origem': atualiza a lista de municípios
+        disponíveis (comportamento pré-existente) e reavalia a sinalização visual de
+        campo obrigatório vazio para 'uf_origem'.
+
+        Args:
+            e (Optional[ft.ControlEvent]): Evento de mudança do Flet.
+        """
+        self._atualizar_municipios_origem(e)
+        self._on_required_field_changed("uf_origem", e)
+
+    def _on_uf_fato_changed(self, e: Optional[ft.ControlEvent] = None) -> None:
+        """
+        Handler de mudança do campo 'UF do Fato': atualiza a lista de municípios
+        disponíveis (comportamento pré-existente) e reavalia a sinalização visual de
+        campo obrigatório vazio para 'uf_fato'.
+
+        Args:
+            e (Optional[ft.ControlEvent]): Evento de mudança do Flet.
+        """
+        self._atualizar_municipios_fato(e)
+        self._on_required_field_changed("uf_fato", e)
+
     def update_data(self, data_to_display_in_gui: formatted_initial_analysis, is_new_llm_response: bool = False):
         """
         Atualiza o display com novos dados de análise estruturada.
@@ -1642,6 +1751,10 @@ class LLMStructuredResultDisplay(ft.Column):
 
         # --- CRIAÇÃO DOS CAMPOS GUI ---
         self._create_gui_fields()
+
+        # Sinaliza visualmente os campos obrigatórios para exportação que estiverem vazios,
+        # assim que o formulário é populado pela análise — antes de qualquer tentativa de exportação.
+        self._highlight_empty_required_fields()
 
         # --- CRIAÇÃO DOS CARDS ---
         self._create_identification_card()
@@ -1710,22 +1823,24 @@ class LLMStructuredResultDisplay(ft.Column):
             label="Tipo Documento Origem",
             options=[ft.dropdown.Option(td) for td in tipos_doc],
             value=self.data.tipo_documento_origem if self.data.tipo_documento_origem in tipos_doc else "",
+            on_change=lambda e: self._on_required_field_changed("tipo_documento_origem", e),
             dense=True, expand=True, width=500
         )
-        
+
         self.gui_fields["orgao_origem"] = ft.Dropdown(
             label="Órgão de Origem",
             options=[ft.dropdown.Option(oo) for oo in origens_doc],
             value=self.data.orgao_origem if self.data.orgao_origem in origens_doc else "",
+            on_change=lambda e: self._on_required_field_changed("orgao_origem", e),
             dense=True, expand=True, width=500
         )
 
         # Dropdowns de UF e Município (Origem)
         self.dropdown_uf_origem = ft.Dropdown(
-            label="UF de Origem", 
+            label="UF de Origem",
             options=[ft.dropdown.Option(uf) for uf in ufs_list],
             value=self.data.uf_origem if self.data.uf_origem in ufs_list else "",
-            on_change=self._atualizar_municipios_origem, 
+            on_change=self._on_uf_origem_changed,
             width=145, dense=True
         )
         self.gui_fields["uf_origem"] = self.dropdown_uf_origem
@@ -1735,6 +1850,7 @@ class LLMStructuredResultDisplay(ft.Column):
             label="Município de Origem",
             options=[ft.dropdown.Option(m) for m in municipios_origem_init],
             value=self.data.municipio_origem if self.data.municipio_origem else "",
+            on_change=lambda e: self._on_required_field_changed("municipio_origem", e),
             dense=True, width=320, expand=True
         )
         self.gui_fields["municipio_origem"] = self.dropdown_municipio_origem
@@ -1742,18 +1858,19 @@ class LLMStructuredResultDisplay(ft.Column):
 
         # === Campos de Detalhes do Fato ===
         self.gui_fields["resumo_fato"] = ft.TextField(
-            label="Resumo do Fato", 
-            value=self.data.resumo_fato, 
-            multiline=True, min_lines=3, 
+            label="Resumo do Fato",
+            value=self.data.resumo_fato,
+            on_change=lambda e: self._on_required_field_changed("resumo_fato", e),
+            multiline=True, min_lines=3,
             dense=True, expand=True
         )
 
         # Dropdowns de UF e Município (Fato)
         self.dropdown_uf_fato = ft.Dropdown(
-            label="UF do Fato", 
+            label="UF do Fato",
             options=[ft.dropdown.Option(uf) for uf in ufs_list],
             value=self.data.uf_fato if self.data.uf_fato in ufs_list else "",
-            on_change=self._atualizar_municipios_fato, 
+            on_change=self._on_uf_fato_changed,
             width=145, dense=True
         )
         self.gui_fields["uf_fato"] = self.dropdown_uf_fato
@@ -1763,6 +1880,7 @@ class LLMStructuredResultDisplay(ft.Column):
             label="Município do Fato",
             options=[ft.dropdown.Option(m) for m in municipios_fato_init],
             value=self.data.municipio_fato if self.data.municipio_fato else "",
+            on_change=lambda e: self._on_required_field_changed("municipio_fato", e),
             dense=True, width=320, expand=True
         )
         self.gui_fields["municipio_fato"] = self.dropdown_municipio_fato
@@ -1772,6 +1890,7 @@ class LLMStructuredResultDisplay(ft.Column):
             label="Tipo de Local",
             options=[ft.dropdown.Option(tl) for tl in tipos_locais],
             value=self.data.tipo_local if self.data.tipo_local in tipos_locais else "",
+            on_change=lambda e: self._on_required_field_changed("tipo_local", e),
             dense=True, expand=True, width=500
         )
 
@@ -1805,23 +1924,26 @@ class LLMStructuredResultDisplay(ft.Column):
 
         # === Campos de Classificação ===
         self.gui_fields["area_atribuicao"] = ft.Dropdown(
-            label="Área de Atribuição", 
+            label="Área de Atribuição",
             options=[ft.dropdown.Option(aa) for aa in areas_de_atribuição],
             value=self.data.area_atribuicao if self.data.area_atribuicao in areas_de_atribuição else "",
+            on_change=lambda e: self._on_required_field_changed("area_atribuicao", e),
             dense=True, expand=True, width=500
         )
 
         self.gui_fields["destinacao"] = ft.Dropdown(
-            label="Destinação", 
+            label="Destinação",
             options=[ft.dropdown.Option(d) for d in destinacoes_completas],
             value=self.data.destinacao if self.data.destinacao in destinacoes_completas else "",
+            on_change=lambda e: self._on_required_field_changed("destinacao", e),
             dense=True, expand=True, width=500
         )
 
         self.gui_fields["tipo_a_autuar"] = ft.Dropdown(
-            label="Tipo a Autuar", 
+            label="Tipo a Autuar",
             options=[ft.dropdown.Option(ta) for ta in tipos_a_autuar],
             value=self.data.tipo_a_autuar if self.data.tipo_a_autuar in tipos_a_autuar else "",
+            on_change=lambda e: self._on_required_field_changed("tipo_a_autuar", e),
             dense=True, expand=True, width=500
         )
 
@@ -2056,18 +2178,9 @@ class LLMStructuredResultDisplay(ft.Column):
         collected_values_from_ui = {}
         invalid_fields_for_export: List[Tuple[str, ft.Control]] = [] # (field_name, control_instance)
  
-        # Define aqui os campos que são OBRIGATÓRIOS para a exportação; Estes devem corresponder às chaves em self.ui_fields
-        required_fields_for_export = [
-            "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
-            "resumo_fato", # Mesmo sendo multiline, pode ser obrigatório
-            "tipo_local", "uf_fato", "municipio_fato",
-            # "valor_apuracao", # Pode ser opcional ou zero
-            "area_atribuicao",
-            "tipo_a_autuar", "destinacao",
-            # "descricao_geral"
-            # "tipificacao_penal" e "assunto_re" são Optional[str] no FormatAnaliseInicial
-            # "pessoas_envolvidas", "linha_do_tempo", "observacoes" são Optional[List[str]]
-        ]
+        # Campos OBRIGATÓRIOS para a exportação (lista compartilhada com a sinalização visual
+        # do formulário — ver LLMStructuredResultDisplay.REQUIRED_FIELDS_FOR_EXPORT).
+        required_fields_for_export = self.REQUIRED_FIELDS_FOR_EXPORT
         logger.debug(f"Campos definidos como obrigatórios para exportação: {required_fields_for_export}")
  
         for field_name, control in self.gui_fields.items():
@@ -2080,18 +2193,7 @@ class LLMStructuredResultDisplay(ft.Column):
             
             # Validação para exportação
             if validate_for_export and field_name in required_fields_for_export:
-                is_empty = False
-                if value is None: # Principal condição para Dropdowns não selecionados ou TextFields vazios que retornam None
-                    is_empty = True
-                elif isinstance(value, str) and not value.strip(): # Para TextFields que podem ter string vazia
-                    is_empty = True
-                # Para TextFields multiline que representam listas (como pessoas_envolvidas)
-                elif field_name in ["pessoas_envolvidas", "linha_do_tempo"] and isinstance(value, str):
-                    processed_list_val = [line.strip() for line in value.split('\n') if line.strip()]
-                    if not processed_list_val:
-                        is_empty = True
-                
-                if is_empty:
+                if self._is_required_field_value_empty(field_name, value):
                     logger.warning(f"Campo obrigatório '{field_name}' está vazio. Valor atual: '{value}'")
                     invalid_fields_for_export.append((field_name, control))
  
