@@ -897,7 +897,7 @@ class ManagedFilePicker:
             _execute_logic()
         else:
             delay = 0.1 # Segundos
-            logger.info(f"[DEBUG] Agendando processamento do próximo arquivo ('{self.files_to_process_queue[0].name if self.files_to_process_queue else 'fila vazia'}') com delay de {delay}s.")
+            logger.debug(f"Agendando processamento do próximo arquivo ('{self.files_to_process_queue[0].name if self.files_to_process_queue else 'fila vazia'}') com delay de {delay}s.")
             threading.Timer(delay, _execute_logic).start()
 
     def _handle_picker_upload(self, e: ft.FilePickerUploadEvent):
@@ -2032,7 +2032,7 @@ class ManagedAlertDialog(ft.AlertDialog):
 
         if self.on_dialog_fully_closed:
             try:
-                logger.info(f"[DEBUG] ManagedAlertDialog: Chamando on_dialog_fully_closed com dados: {self._result_data_for_callback}")
+                logger.debug(f"ManagedAlertDialog: Chamando on_dialog_fully_closed com dados: {self._result_data_for_callback}")
                 self.on_dialog_fully_closed(self._result_data_for_callback)
             except Exception as e:
                 logger.error(f"ManagedAlertDialog: Erro ao executar on_dialog_fully_closed: {e}", exc_info=True)

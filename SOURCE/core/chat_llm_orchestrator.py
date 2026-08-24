@@ -385,7 +385,7 @@ class ChatLLMOrchestrator:
             msgs = "\n".join(msgs)
             request_kwargs_str += f"\n{msgs}"
 
-            logger.info(f"[DEBUG] Enviando request para OpenAI com kwargs: \n{request_kwargs_str}") # TODO: suprimir esse log
+            logger.debug(f"Enviando request para OpenAI com kwargs: \n{request_kwargs_str}")
 
             try:
                 response = self.client.responses.create(**request_kwargs)

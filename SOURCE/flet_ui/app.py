@@ -7,7 +7,7 @@ DEV_MODE = False
 
 from time import perf_counter
 start_time = perf_counter()
-logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando app.py")
+logger.debug(f"{start_time:.4f}s - Iniciando app.py")
 
 import flet as ft
 import time, os, threading, jwt
@@ -361,7 +361,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         dev_mode: Se True, inicia a aplicação em modo de desenvolvimento com dados mockados.
     """
     app_start_time = perf_counter()
-    logger.info(f"[DEBUG] {app_start_time:.4f}s - Função main() iniciada.")
+    logger.debug(f"{app_start_time:.4f}s - Função main() iniciada.")
 
     global _token_refresh_thread_stop_event, _token_refresh_thread_instance
 
@@ -559,7 +559,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         logger.debug(f"{local_start_time:.4f}s - Função threaded_load_settings iniciada.")
         load_default_analysis_settings(target_page)
         logger.debug("Thread de settings concluída. Dados carregados na sessão.")
-        logger.info(f"[DEBUG] {perf_counter() - local_start_time:.4f}s - Analysis settings carregado.")
+        logger.debug(f"{perf_counter() - local_start_time:.4f}s - Analysis settings carregado.")
         # Opcional: notificar a UI principal que os dados estão prontos, se necessário.
         # Ex: page.pubsub.send_all("settings_loaded")
     
@@ -598,7 +598,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         """
         # Tenta carregar a sessão do client_storage. Esta é a primeira etapa.
         load_auth_state_from_storage(page)
-        logger.info(f"[DEBUG] {perf_counter() - app_start_time:.4f}s - Auth state carregado em main.")
+        logger.debug(f"{perf_counter() - app_start_time:.4f}s - Auth state carregado em main.")
 
         # Verifica se, após a tentativa de restauração ou um novo login, existe um token válido.
         # Este é o ponto central que confirma uma sessão autenticada.        
@@ -639,7 +639,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
 
         # Dispara a navegação inicial
         logger.debug(f"Disparando navegação inicial para: {final_route}")
-        logger.info(f"[DEBUG] {perf_counter() - app_start_time:.4f}s - Navegação inicial page.go() em main a ser chamada.")
+        logger.debug(f"{perf_counter() - app_start_time:.4f}s - Navegação inicial page.go() em main a ser chamada.")
         page.go(final_route)
 
     if dev_mode:
@@ -676,4 +676,4 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
 
 
 execution_time = perf_counter() - start_time
-logger.info(f"[DEBUG] Carregado APP.py em {execution_time:.4f}s")
+logger.debug(f"Carregado APP.py em {execution_time:.4f}s")

@@ -6,8 +6,12 @@ start_time = perf_counter()
 logger.debug(f"{start_time:.4f}s - Iniciando logger.py")
 
 import os, shutil, re
+import http.client
+import socket
 from time import sleep
 
+import requests
+import urllib3
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from rich.logging import RichHandler
@@ -103,9 +107,13 @@ class LoggerSetup:
             show_time=True,
             # RichHandler ignora o formatter para o timestamp da coluna [TIME].
             # log_time_format aceita um callable → força UTC-3 (Brasília)
-            log_time_format=lambda dt: datetime.now(tz).strftime("%H:%M:%S"),            
+            log_time_format=lambda dt: datetime.now(tz).strftime("%H:%M:%S"),
             rich_tracebacks=True,
             tracebacks_show_locals=False,
+            # Suprime os frames internos de bibliotecas de rede (proxy/timeout) para não poluir
+            # o console com ~90 linhas repetidas por erro; a causa raiz no código do projeto
+            # continua visível normalmente.
+            tracebacks_suppress=[urllib3, requests, http.client, socket],
             markup=True,
             keywords=["INFO", "WARNING", "ERROR", "CRITICAL", "DEBUG"]
         )
@@ -269,7 +277,7 @@ class LoggerSetup:
             # Desativa a propagação se você quisesse handlers únicos por logger, mas queremos que eles propaguem para o raiz:
             logger_instance.propagate = True 
         
-        logger.info(f"[DEBUG] Reconfigurados {len(cls._loggers)} loggers existentes para usar a nova configuração raiz.")
+        logger.debug(f"Reconfigurados {len(cls._loggers)} loggers existentes para usar a nova configuração raiz.")
     
     @classmethod
     def get_logger(cls, name: str = None) -> logging.Logger:
@@ -551,4 +559,4 @@ def test_cloud_logging(test_identifier: str, fb_manager_instance: Optional[Any])
 
 
 execution_time = perf_counter() - start_time
-logger.info(f"[DEBUG] Carregado LOGGER em {execution_time:.4f}s")
+logger.debug(f"Carregado LOGGER em {execution_time:.4f}s")

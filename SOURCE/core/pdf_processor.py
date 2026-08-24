@@ -1234,5 +1234,5 @@ def _boundary_page_keys(
     return boundary_keys, middle_keys
 
 execution_time = perf_counter() - start_time
-logger.info(f"[DEBUG] Carregado PDF_PROCESSOR em {execution_time:.4f}s")
+logger.debug(f"Carregado PDF_PROCESSOR em {execution_time:.4f}s")
 

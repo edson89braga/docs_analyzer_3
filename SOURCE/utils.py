@@ -3,7 +3,7 @@ logger = logging.getLogger(__name__)
 
 from time import perf_counter
 start_time = perf_counter()
-logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando utils.py")
+logger.debug(f"{start_time:.4f}s - Iniciando utils.py")
 print(f"[DEBUG] {start_time:.4f}s - Iniciando utils.py")
 
 import os, keyring, re
@@ -916,5 +916,5 @@ def testando_similaridade_rouge_l():
 ### ========================================================================================================
 
 execution_time = perf_counter() - start_time
-logger.info(f"[DEBUG] Carregado UTILS em {execution_time:.4f}s")
+logger.debug(f"Carregado UTILS em {execution_time:.4f}s")
 print(f"[DEBUG] Carregado UTILS em {execution_time:.4f}s")

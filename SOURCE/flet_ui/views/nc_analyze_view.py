@@ -4,7 +4,7 @@ logger = logging.getLogger(__name__)
 
 from time import perf_counter
 start_time = perf_counter()
-logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando nc_analyze_view.py")
+logger.debug(f"{start_time:.4f}s - Iniciando nc_analyze_view.py")
 
 import flet as ft
 import threading, os, shutil, json
@@ -59,7 +59,7 @@ municipios_list = get_municipios_por_uf_cached()
 from SOURCE.services.firebase_client import FirebaseClientFirestore, _from_firestore_value
 firestore_client = FirebaseClientFirestore()
 
-logger.info(f"[DEBUG] Carregamento pesado dentro de NC_ANALYZE_VIEW em {perf_counter()-start_time:.4f}s")
+logger.debug(f"Carregamento pesado dentro de NC_ANALYZE_VIEW em {perf_counter()-start_time:.4f}s")
 
 from SOURCE.utils import get_user_cache
 
@@ -3411,7 +3411,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
             start_time_p = perf_counter()
             load_prompts_from_firestore(page)
             execution_time_p = perf_counter() - start_time_p
-            logger.info(f"[DEBUG] Carregado Prompts_from_firestore em {execution_time_p:.4f}s")
+            logger.debug(f"Carregado Prompts_from_firestore em {execution_time_p:.4f}s")
             # Verificação pós-carregamento para garantir que tudo correu bem:
             if not user_cache.get(KEY_SESSION_PROMPTS_FINAL):
                 raise RuntimeError("load_prompts_from_firestore foi chamada mas não populou o cache.")
@@ -3435,7 +3435,7 @@ def create_analyze_pdf_content(page: ft.Page) -> ft.Control:
     start_time_p = perf_counter()
     retorno = AnalyzePDFViewContent(page)
     execution_time_p = perf_counter() - start_time_p
-    logger.info(f"[DEBUG] Create_analyze_pdf_content em {execution_time_p:.4f}s")
+    logger.debug(f"Create_analyze_pdf_content em {execution_time_p:.4f}s")
     
     return retorno
 
@@ -3655,4 +3655,4 @@ def get_field_type_for_feedback(field_name: str, gui_fields: Dict[str, ft.Contro
 
 
 execution_time = perf_counter() - start_time
-logger.info(f"[DEBUG] Carregado NC_ANALYZE_VIEW em {execution_time:.4f}s")
+logger.debug(f"Carregado NC_ANALYZE_VIEW em {execution_time:.4f}s")

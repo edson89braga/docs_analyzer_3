@@ -3,7 +3,7 @@ logger = logging.getLogger(__name__)
 
 from time import perf_counter
 start_time = perf_counter()
-logger.info(f"[DEBUG] {start_time:.4f}s - Iniciando settings.py")
+logger.debug(f"{start_time:.4f}s - Iniciando settings.py")
 print(f"[DEBUG] {start_time:.4f}s - Iniciando settings.py")
 
 # --- Outras Variáveis globais temporárias (Remover em produção?)--------------------------------------------------------------
@@ -231,5 +231,5 @@ ML_ENGINE_VERSION = "1.0" # Versão local do motor de ML
 ML_ENGINE_API_URL = "http://127.0.0.1:8001"
 
 execution_time = perf_counter() - start_time
-logger.info(f"[DEBUG] Carregado SETTINGS em {execution_time:.4f}s")
+logger.debug(f"Carregado SETTINGS em {execution_time:.4f}s")
 print(f"[DEBUG] Carregado SETTINGS em {execution_time:.4f}s")

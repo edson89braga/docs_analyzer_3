@@ -1522,4 +1522,4 @@ def get_response_llm_from_pdf(pdf_path):
 ### ================================================================================================
 
 execution_time = perf_counter() - start_time
-logger.info(f"[DEBUG] Carregado AI_ORCHESTRATOR em {execution_time:.4f}s")
+logger.debug(f"Carregado AI_ORCHESTRATOR em {execution_time:.4f}s")

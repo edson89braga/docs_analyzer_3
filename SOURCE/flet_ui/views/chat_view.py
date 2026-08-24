@@ -1624,7 +1624,7 @@ def create_chat_view_content(page: ft.Page) -> ft.Control:
     start_time_p = perf_counter()
     retorno = ChatViewContent(page)
     execution_time_p = perf_counter() - start_time_p
-    logger.info(f"[DEBUG] Create_analyze_pdf_content em {execution_time_p:.4f}s")
+    logger.debug(f"Create_analyze_pdf_content em {execution_time_p:.4f}s")
     
     return retorno
 
