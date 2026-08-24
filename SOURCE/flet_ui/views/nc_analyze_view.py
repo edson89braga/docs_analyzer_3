@@ -51,7 +51,7 @@ _initialize_heavy_utils()
 
 from SOURCE.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
 import SOURCE.core.ai_orchestrator as ai_orchestrator
-from SOURCE.core.ai_orchestrator import ContextLengthExceededError
+from SOURCE.core.ai_orchestrator import ContextLengthExceededError, LLMThinkingTruncatedError
 from SOURCE.core.doc_generator import DocxExporter
 
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
@@ -1224,6 +1224,7 @@ class AnalyzePDFViewContent(ft.Column):
                 ("total_cost_brl",       "Custo Estimado (BRL)"),
                 ("llm_provider_used",    "Provedor LLM"),
                 ("llm_model_used",       "Modelo Utilizado"),
+                ("thinking_habilitado_display", "Modo de Raciocínio"),
                 ("processing_time",      "Tempo de processamento")
             ]
             
@@ -1259,7 +1260,26 @@ class AnalyzePDFViewContent(ft.Column):
                     # Você pode passar key_style e value_style personalizados se desejar
                 )
                 content_area.controls.append(ft.Container(metadata_table, padding=ft.padding.only(left=30, bottom=10)))
-            
+
+            if metadata_to_display.get("thinking_desativado_por_erro"):
+                # Aviso persistente (sobrevive a reload de sessão, diferente do snackbar mostrado no
+                # momento da análise): garante que o usuário perceba, mesmo revisitando o resultado
+                # depois, que esta análise específica saiu sem o modo de raciocínio por causa de um
+                # erro de truncamento no serviço de IA — não por escolha do usuário.
+                content_area.controls.append(
+                    ft.Container(
+                        ft.Row([
+                            ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=theme.COLOR_WARNING),
+                            ft.Text(
+                                "Modo de raciocínio foi desativado automaticamente nesta análise após "
+                                "erro de truncamento no serviço de IA. Revise o resultado com atenção.",
+                                color=theme.COLOR_WARNING, weight=ft.FontWeight.BOLD, size=13
+                            )
+                        ], spacing=5, alignment=ft.MainAxisAlignment.START),
+                        padding=ft.padding.only(top=5, left=30, bottom=10)
+                    )
+                )
+
             safe_control_update(self.gui_controls[CTL_LLM_METADATA_PANEL])
 
         safe_control_update(content_area)
@@ -2756,12 +2776,73 @@ class InternalAnalysisController:
                     assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
  
             loaded_llm_providers = self.page.session.get(KEY_SESSION_LOADED_LLM_PROVIDERS)
- 
-            llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(key_prompt_group, final_prompts_to_use, aggregated_text,
-                                                                                                 provider, model_name, temperature,
-                                                                                                 decrypted_api_key, loaded_llm_providers,
-                                                                                                 reasoning_effort=reasoning_effort)
- 
+
+            # Retry automático para truncamento por loop de raciocínio no endpoint llm_pf (Qwen3.5):
+            # quando o thinking está ativo e a resposta trunca (finish_reason='length', content
+            # vazio), tenta de novo com o mesmo modo — o loop pode não se repetir — e, persistindo,
+            # refaz sem thinking. Ampliar o teto de tokens não é tentado: diagnóstico de outro
+            # projeto que consome o mesmo endpoint (NOTES_LlmAnalysis.md §9) mostrou que um loop
+            # fechado só repete mais vezes, não converge. Sem thinking solicitado, roda uma única vez
+            # (comportamento inalterado).
+            thinking_solicitado = ai_orchestrator.is_thinking_enabled(reasoning_effort)
+            max_tentativas_llm = 3 if thinking_solicitado else 1
+            reasoning_effort_da_tentativa = reasoning_effort
+            thinking_desativado_por_erro = False
+            tokens_tentativas_descartadas = {
+                "input_tokens": 0, "cached_tokens": 0, "output_tokens": 0,
+                "reasoning_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0,
+            }
+
+            for tentativa_llm in range(1, max_tentativas_llm + 1):
+                try:
+                    llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(
+                        key_prompt_group, final_prompts_to_use, aggregated_text,
+                        provider, model_name, temperature,
+                        decrypted_api_key, loaded_llm_providers,
+                        reasoning_effort=reasoning_effort_da_tentativa)
+                    break
+                except LLMThinkingTruncatedError as ex_trunc:
+                    logger.warning(f"Thread: truncamento por raciocínio na tentativa {tentativa_llm}/"
+                                    f"{max_tentativas_llm} para '{batch_name}': {ex_trunc}")
+                    if ex_trunc.token_usage_info:
+                        for _chave in tokens_tentativas_descartadas:
+                            tokens_tentativas_descartadas[_chave] += ex_trunc.token_usage_info.get(_chave) or 0
+
+                    if tentativa_llm >= max_tentativas_llm:
+                        # Defensivo: pela regra acima a última tentativa já roda sem thinking, então
+                        # não deveria voltar a truncar por este motivo. Se voltar, repropaga para o
+                        # tratamento genérico de erro no except externo.
+                        raise
+                    elif tentativa_llm == 1:
+                        self.page.run_thread(
+                            show_snackbar, self.page,
+                            "⚠ A IA travou raciocinando e a resposta foi truncada. Tentando novamente...",
+                            theme.COLOR_WARNING, 6000
+                        )
+                    else:
+                        self.page.run_thread(
+                            show_snackbar, self.page,
+                            "⚠ Truncamento persistente no raciocínio. Repetindo a análise SEM o modo "
+                            "de raciocínio...",
+                            theme.COLOR_WARNING, 7000
+                        )
+                        reasoning_effort_da_tentativa = "minimal"
+                        thinking_desativado_por_erro = True
+
+            thinking_habilitado_na_resposta = thinking_solicitado and not thinking_desativado_por_erro
+
+            if tokens_tentativas_descartadas["total_tokens"] and token_usage_info:
+                # Soma o custo/tokens de tentativas descartadas por truncamento: cada chamada foi
+                # real e cobrada, mesmo sem resposta aproveitável — o total reportado ao usuário deve
+                # refletir o custo efetivamente incorrido, não só o da tentativa que teve sucesso.
+                # (guarda 'token_usage_info' pois a última tentativa pode falhar por outro motivo,
+                # não relacionado a truncamento, e retornar sem uso de tokens — ver bloco 'else' abaixo)
+                for _chave in ("input_tokens", "cached_tokens", "output_tokens", "reasoning_tokens", "total_tokens"):
+                    token_usage_info[_chave] = (token_usage_info.get(_chave) or 0) + tokens_tentativas_descartadas[_chave]
+                token_usage_info["total_cost_usd"] = (
+                    (token_usage_info.get("total_cost_usd") or 0.0) + tokens_tentativas_descartadas["total_cost_usd"]
+                )
+
             if llm_response_data:
                 # Se já existe uma llm_response na sessão é porque é caso de reanálise (usuário clicou em 'Solicitar Análise' novamente).
                 # Registrar essa informação para o feedback_metric
@@ -2782,13 +2863,25 @@ class InternalAnalysisController:
                 llm_meta_for_gui.update({
                     "llm_provider_used": provider.upper(),
                     "llm_model_used": model_name.upper(),
-                    "processing_time": format_seconds_to_min_sec(processing_time_llm)
+                    "processing_time": format_seconds_to_min_sec(processing_time_llm),
+                    "reasoning_effort_selecionado": reasoning_effort,
+                    "thinking_habilitado": thinking_habilitado_na_resposta,
+                    "thinking_habilitado_display": "Ativado" if thinking_habilitado_na_resposta else "Desativado",
+                    "thinking_desativado_por_erro": thinking_desativado_por_erro,
                 })
-                
+
                 self.parent_view._analysis_requested = True
                 self.page.session.set(KEY_SESSION_LLM_METADATA, llm_meta_for_gui)
                 self.page.run_thread(self.parent_view._update_gui_from_state)
-                self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
+                if thinking_desativado_por_erro:
+                    self.page.run_thread(
+                        show_snackbar, self.page,
+                        "✅ Análise concluída, mas SEM o modo de raciocínio — desativado automaticamente "
+                        "após erro de truncamento no serviço de IA. Revise o resultado com atenção.",
+                        theme.COLOR_WARNING, 9000
+                    )
+                else:
+                    self.page.run_thread(show_snackbar, self.page, "Análise LLM concluída!", theme.COLOR_SUCCESS)
                 self.page.run_thread(self._update_status_callback,  "", False, True)
  
                 data_to_log = self._get_data_to_log()

@@ -1045,7 +1045,28 @@ class ContextLengthExceededError(Exception):
     Carrega uma mensagem já formatada para exibição direta na UI.
     """
     pass
-    
+
+
+class LLMThinkingTruncatedError(Exception):
+    """
+    Levantada quando o endpoint llm_pf trunca a resposta por esgotamento do orçamento de saída
+    durante o raciocínio (finish_reason='length' com 'content' vazio e enable_thinking=True).
+
+    É o sintoma de um loop de raciocínio fechado, não de deliberação legítima só longa demais para
+    o orçamento (diagnóstico de outro projeto que consome o mesmo endpoint, em NOTES_LlmAnalysis.md
+    §9: ampliar o teto de tokens não resolve — o loop só repete mais vezes). A mitigação eficaz é
+    repetir a chamada e, persistindo, desativar o thinking; a política de retry fica a cargo do
+    chamador (ver `_llm_analysis_thread_func` em nc_analyze_view.py), não desta função.
+
+    Carrega o texto de raciocínio bruto obtido até o corte e o uso de tokens da tentativa
+    descartada — a chamada foi real e cobrada mesmo sem resposta aproveitável, e o chamador soma
+    esse custo ao total reportado ao usuário.
+    """
+    def __init__(self, reasoning_text: Optional[str] = None, token_usage_info: Optional[Dict[str, Any]] = None):
+        self.reasoning_text = reasoning_text
+        self.token_usage_info = token_usage_info
+        super().__init__("Resposta truncada durante o raciocínio (finish_reason='length', content vazio).")
+
 
 # --- Função Principal de Análise ---
 @with_proxy()
@@ -1239,7 +1260,33 @@ def analyze_text_with_llm(
                     extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}}
                 )
                 logger.info('[DEBUG]: Requisição concluída.')
-                
+
+                # Uso de tokens é extraído logo após a resposta, antes de qualquer possibilidade de
+                # 'raise' abaixo: precisa estar disponível mesmo quando a tentativa for descartada por
+                # truncamento no raciocínio (LLMThinkingTruncatedError) — a chamada foi real e cobrada,
+                # e o chamador soma esse custo ao total reportado ao usuário mesmo em retry.
+                usage = response.usage
+                if usage:
+                    token_usage_info = {
+                        "input_tokens": usage.prompt_tokens if hasattr(usage, 'prompt_tokens') else 0,
+                        "cached_tokens": 0,  # Endpoint PF pode não suportar cache
+                        "output_tokens": usage.completion_tokens if hasattr(usage, 'completion_tokens') else 0,
+                        "reasoning_tokens": 0,
+                        "total_tokens": usage.total_tokens if hasattr(usage, 'total_tokens') else 0,
+                        "successful_requests": 1,
+                        "total_cost_usd": 0.0,  # Custos não aplicáveis ou calcular se houver config
+                    }
+                else:
+                    token_usage_info = {
+                        "input_tokens": 0,
+                        "cached_tokens": 0,
+                        "output_tokens": 0,
+                        "reasoning_tokens": 0,
+                        "total_tokens": 0,
+                        "successful_requests": 1,
+                        "total_cost_usd": 0.0
+                    }
+
                 # Extrair o conteúdo da resposta
                 choice = response.choices[0]
                 finish_reason = choice.finish_reason
@@ -1247,12 +1294,28 @@ def analyze_text_with_llm(
 
                 if not final_response_text:
                     # Com enable_thinking=True o Qwen pode consumir todo o orçamento de saída no
-                    # raciocínio: 'content' volta vazio e o teor útil (inclusive JSON parcial) fica
-                    # no campo de raciocínio. Aproveitá-lo é melhor do que devolver nada ao usuário.
-                    # O endpoint (vLLM) nomeia esse campo 'reasoning'; 'reasoning_content' é o nome
-                    # adotado por outros provedores compatíveis com a API OpenAI e fica como alternativa.
-                    final_response_text = (getattr(choice.message, "reasoning", None)
-                                           or getattr(choice.message, "reasoning_content", None))
+                    # raciocínio: 'content' volta vazio. O endpoint (vLLM) nomeia esse campo
+                    # 'reasoning'; 'reasoning_content' é o nome adotado por outros provedores
+                    # compatíveis com a API OpenAI e fica como alternativa.
+                    reasoning_text = (getattr(choice.message, "reasoning", None)
+                                      or getattr(choice.message, "reasoning_content", None))
+
+                    if finish_reason == "length" and enable_thinking:
+                        # Sintoma do loop de raciocínio fechado (ver docstring de
+                        # LLMThinkingTruncatedError) — repassa ao chamador para aplicar a política de
+                        # retry (thinking -> thinking -> sem thinking), em vez de devolver o
+                        # raciocínio cru como se fosse a resposta.
+                        logger.warning(
+                            "Endpoint PF truncou durante o raciocínio (finish_reason=%s, content vazio, "
+                            "%d caracteres de raciocínio, %d tokens de saída consumidos). Repassando ao "
+                            "chamador para retry.",
+                            finish_reason, len(reasoning_text or ""), token_usage_info.get("output_tokens", 0),
+                        )
+                        raise LLMThinkingTruncatedError(reasoning_text, token_usage_info)
+
+                    # Demais casos (thinking desligado, ou finish_reason != 'length'): aproveitar o
+                    # raciocínio como texto bruto é melhor do que devolver nada ao usuário.
+                    final_response_text = reasoning_text
                     logger.warning(
                         "Endpoint PF devolveu 'content' vazio (finish_reason=%s); usando o raciocínio "
                         "como texto bruto (%d caracteres).",
@@ -1276,29 +1339,9 @@ def analyze_text_with_llm(
                     logger.warning("Retornando resposta bruta devido a falha no parsing JSON.")
                     final_response = _build_raw_fallback_text(final_response_text, finish_reason)
 
-                # Obter informações sobre o uso de tokens (se disponível)
-                usage = response.usage
-                if usage:
-                    token_usage_info = {
-                        "input_tokens": usage.prompt_tokens if hasattr(usage, 'prompt_tokens') else 0,
-                        "cached_tokens": 0,  # Endpoint PF pode não suportar cache
-                        "output_tokens": usage.completion_tokens if hasattr(usage, 'completion_tokens') else 0,
-                        "reasoning_tokens": 0,
-                        "total_tokens": usage.total_tokens if hasattr(usage, 'total_tokens') else 0,
-                        "successful_requests": 1,
-                    }
-                    token_usage_info["total_cost_usd"] = 0.0  # Custos não aplicáveis ou calcular se houver config
-                else:
-                    token_usage_info = {
-                        "input_tokens": 0,
-                        "cached_tokens": 0,
-                        "output_tokens": 0,
-                        "reasoning_tokens": 0,
-                        "total_tokens": 0,
-                        "successful_requests": 1,
-                        "total_cost_usd": 0.0
-                    }
-                    
+                # token_usage_info já foi extraído logo após a resposta (ver acima) — precisa estar
+                # disponível mesmo se LLMThinkingTruncatedError for levantada antes deste ponto.
+
             elif prompt_name == "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS":
                 raise ValueError("Modo 'Prompt segmentado' não implementado para provider 'llm_pf'.")
             
@@ -1336,9 +1379,14 @@ def analyze_text_with_llm(
             else:
                 detail = "O documento filtrado excede o limite de tokens do modelo selecionado."
             raise ContextLengthExceededError(detail) from api_err
+    except LLMThinkingTruncatedError:
+        # Repropaga sem log adicional (já logada no ponto de origem, acima): o chamador decide a
+        # política de retry (thinking -> thinking -> sem thinking); aqui seria engolida pelo
+        # 'except Exception' genérico abaixo, que não repropaga.
+        raise
     except Exception as e:
         logger.error(f"Erro inesperado durante a execução de Analyze_text_with_LLM ({provider}): {e}", exc_info=True)
-    
+
     finally:
         os.environ["OPENAI_API_KEY"] = ""
 

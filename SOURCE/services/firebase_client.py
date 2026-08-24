@@ -666,8 +666,14 @@ class FirebaseClientFirestore:
                 "llm_provider_used": llm_meta_session.get("llm_provider_used"),
                 "llm_model_used": llm_meta_session.get("llm_model_used"),
                 "processing_time": llm_meta_session.get("processing_time"), # Tempo da LLM
-                "event_timestamp_iso": llm_meta_session.get("event_timestamp_iso"), 
-            } 
+                "event_timestamp_iso": llm_meta_session.get("event_timestamp_iso"),
+                "reasoning_effort_selecionado": llm_meta_session.get("reasoning_effort_selecionado"),
+                "thinking_habilitado": llm_meta_session.get("thinking_habilitado"),
+                # True apenas quando o thinking foi desativado automaticamente por retry após
+                # truncamento (loop de raciocínio) — distingue de 'thinking_habilitado=False' por
+                # escolha do usuário no nível de reflexão. Ver LLMThinkingTruncatedError.
+                "thinking_desativado_por_erro": llm_meta_session.get("thinking_desativado_por_erro"),
+            }
             
             # Remover chaves com valor None para não poluir o Firestore
             llm_analysis_metadata_to_log = {k: v for k, v in llm_analysis_metadata_to_log.items() if v is not None}

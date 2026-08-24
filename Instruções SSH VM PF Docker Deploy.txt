@@ -10,7 +10,10 @@
 ==================================================================================================================
 # Para transferir pastas e arquivos do computador local para a VM:
 
->>> scp -r "C:\Caminho\Para\Deploy_PF" usuario_da_vm@IP_DA_VM:/home/usuario_da_vm/
+>>> scp -r "C:\Caminho\Para\Deploy_PF\SOURCE" usuario_da_vm@IP_DA_VM:/home/usuario_da_vm/Deploy_PF
+
+>>> cd "C:\Users\edson.eab\OneDrive - Polícia Federal\Scripts Python\Proj_App   -- LLM-API - Docs_Analyzer_3\Deploy_PF"
+>>> scp -r "SOURCE" sti@10.11.8.25:/home/sti/Deploy_PF
 
 ==================================================================================================================
 proj_app--llm-api-docs_analyzer_3-opera-app   latest    71fcda98119b   13 hours ago   2.04GB
