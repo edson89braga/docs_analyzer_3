@@ -1259,7 +1259,10 @@ def analyze_text_with_llm(
                         finish_reason, len(final_response_text or "")
                     )
 
-                logger.info(f"[DEBUG]: final_response_text obtido: \n{final_response_text}\n")
+                _truncated_response_preview = (final_response_text or "")[:500]
+                if final_response_text and len(final_response_text) > 500:
+                    _truncated_response_preview += "... [truncado]"
+                logger.debug(f"[DEBUG]: final_response_text obtido: \n{_truncated_response_preview}\n")
 
                 try:
                     final_response_text_clean = extract_and_clean_json(final_response_text)
