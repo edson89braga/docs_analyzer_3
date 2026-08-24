@@ -6,12 +6,5 @@
     "filename": "Opera-IAnalista_v0.52.zip",
     "notes": "Correção: sobre uso de proxy no ambiente de rede da PF."
   },
-  "ml_engine": {
-    "version": "1.0",
-    "release_date": "2025-10-01",
-    "download_url": "https://github.com/edson89braga/docs_analyzer_3/releases/download/v0.2/ml_engine_v1.0.zip",
-    "filename": "ml_engine_v1.0.zip",
-    "notes": "Versão inicial do motor de machine learning (vetorização)."
-  },
   "force_update_after_days": 7
 }

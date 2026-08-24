@@ -24,17 +24,13 @@ services:
       - PORT=8550
       - FLET_SECRET_KEY=oTSHabCz0q5slF4OjKHUmh1zr/fVZDvtoZMECrwYJRI=
       - TZ=America/Sao_Paulo
-      - ML_ENGINE_URL=http://ml-engine:8001
       - SERVER_DATA_DIR=/app/data
-      - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=      
+      - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=
       # --- Configuração de Proxy Corporativo ---
       # Descomente e preencha com os dados da rede (ex: http://usuario:senha@10.x.x.x:porta)
       - HTTP_PROXY=http://proxy.dpf.gov.br:8080
       - HTTPS_PROXY=http://proxy.dpf.gov.br:8080
-      # Impede que o tráfego interno (motor de ML) seja enviado para o proxy corporativo:
-      - NO_PROXY=localhost,127.0.0.1,10.2.2.10,10.2.2.10:31893,ml-engine
-    depends_on:
-      - ml-engine
+      - NO_PROXY=localhost,127.0.0.1,10.2.2.10,10.2.2.10:31893
 
   # 2. Painel Administrativo (Streamlit)
   # DESCONTINUADO NA VM (decisão de 20/08/2026, ver NOTES_persistencia_dados.md): o painel
@@ -60,24 +56,10 @@ services:
   #     - SERVER_DATA_DIR=/app/data
   #     - DPF_SECRET_SIST_OPERA_FIREBASE_ENCRYPTION_KEY=m0MMyi6H8ih9wjRTDZPsV6lqJKUQiI8KuuThQjK9eHc=
   #     - TZ=America/Sao_Paulo
-  #   depends_on:
-  #     - ml-engine
 
-  # 3. Motor de Machine Learning (FastAPI)
-  ml-engine:
-    # build: 
-    #  context: ../Proj_App   -- LLM-API - Vector_Engine_2
-    image: proj_app--llm-api-docs_analyzer_3-ml-engine
-    container_name: opera-ia-ml-engine
-    restart: unless-stopped
-    ports:
-      - "8001:8001"
-    environment:
-      - PYTHONUNBUFFERED=1
-      - TZ=America/Sao_Paulo
-    # O engine de ML muda pouco, mas se quiser mapear o código dele também:
-    # volumes:
-    #   - ../Proj_App   -- LLM-API - Vector_Engine_2/engine.py:/app/engine.py
+  # 3. Motor de Machine Learning (FastAPI) — DESCONTINUADO (ver NOTES_ocr.md): a seleção de páginas
+  # por TF-IDF se mostrou tão eficaz quanto os embeddings semânticos (all-MiniLM-L6-v2) e muito mais
+  # barata/rápida, sem a necessidade de manter um segundo container. Bloco removido.
 
 volumes:
   opera_data:

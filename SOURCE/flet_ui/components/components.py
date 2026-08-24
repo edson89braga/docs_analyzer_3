@@ -182,6 +182,69 @@ def show_confirmation_dialog(
     confirm_dialog.open = True
     safe_page_update(page)
 
+### CancelableProgressDialog: -------------------------------------------------------------------------------
+
+def show_cancelable_progress_dialog(
+    page: ft.Page, title: str, initial_message: str, on_cancel: Callable[[], None]
+) -> Tuple[ft.AlertDialog, Callable[[str], None]]:
+    """
+    Exibe um diálogo modal de progresso com botão de cancelamento explícito.
+
+    Diferente de show_loading_overlay/hide_loading_overlay (usados para as etapas normais e não
+    cancelináveis do pipeline), este diálogo serve a operações potencialmente longas em que o
+    usuário deve poder abortar no meio (ex.: OCR página a página).
+
+    Args:
+        page (ft.Page): Página onde o diálogo será exibido.
+        title (str): Título do diálogo.
+        initial_message (str): Mensagem de progresso inicial.
+        on_cancel (Callable[[], None]): Chamado uma única vez quando o usuário clica em "Cancelar".
+
+    Returns:
+        Tuple[ft.AlertDialog, Callable[[str], None]]: Tupla (dialog, update_message_fn) — 'dialog'
+        já está aberto no overlay da página; 'update_message_fn(texto)' atualiza a mensagem exibida.
+    """
+    message_text = ft.Text(initial_message, size=14)
+    cancel_state = {"clicked": False}
+
+    def _handle_cancel(e):
+        if cancel_state["clicked"]:
+            return
+        cancel_state["clicked"] = True
+        cancel_button.disabled = True
+        message_text.value = message_text.value + "\n\nCancelando após a página atual..."
+        safe_page_update(page)
+        on_cancel()
+
+    cancel_button = ft.TextButton("Cancelar OCR", on_click=_handle_cancel)
+
+    dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text(title),
+        content=ft.Column(
+            [ft.ProgressRing(), message_text],
+            tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=15
+        ),
+        actions=[cancel_button],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+    page.overlay.append(dialog)
+    dialog.open = True
+    safe_page_update(page)
+
+    def update_message(text: str):
+        message_text.value = text
+        safe_control_update(message_text)
+
+    return dialog, update_message
+
+def close_progress_dialog(page: ft.Page, dialog: ft.AlertDialog):
+    """Fecha e remove da página um diálogo criado por show_cancelable_progress_dialog."""
+    dialog.open = False
+    safe_page_update(page)
+    if dialog in page.overlay:
+        page.overlay.remove(dialog)
+
 ### SelectionDialog: ---------------------------------------------------------------------------------------
 
 SelectionCallback = Callable[[Optional[Any]], None]

@@ -85,8 +85,6 @@ ANALYZE_PDF_DEFAULTS_DOC_ID = "analyze_pdf_defaults"
 CHAT_DOCS_DEFAULTS_DOC_ID = "chat_docs_defaults"
 LLM_PROVIDERS_CONFIG_COLLECTION = "llm_providers_config" # Já existe como PROVIDERS_COLLECTION em llm_settings_view
 LLM_PROVIDERS_DEFAULT_DOC_ID = "default_list"          # Já existe como DEFAULT_PROVIDERS_DOC_ID em llm_settings_view
-LLM_EMBEDDINGS_CONFIG_COLLECTION = "llm_providers_config" # Pode ser a mesma coleção dos provedores
-LLM_EMBEDDINGS_DEFAULT_DOC_ID = "model_embeddings_list" # Documento com a lista de custos
 
 PROMPTS_COLLECTION = "prompt_templates"
 PROMPTS_DOCUMENT_ID = "initial_analysis_v1"
@@ -102,8 +100,6 @@ KEYRING_USER_ENCRYPTION_KEY = "encryption_key" # Chave Fernet
 KEY_SESSION_LOADED_LLM_PROVIDERS = "app_loaded_llm_providers" # Lista de dicts dos provedores
 KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS = "app_cloud_analysis_defaults" # Padrões carregados da nuvem (nc_analyze)
 KEY_SESSION_CLOUD_CHAT_DEFAULTS = "app_cloud_chat_defaults" # Padrões carregados da nuvem, já mesclados com overrides de chat_docs_defaults
-KEY_SESSION_TOKENS_EMBEDDINGS = "app_tokens_embeddings"
-KEY_SESSION_MODEL_EMBEDDINGS_LIST = "app_model_embeddings_list"
 
 # --- Configurações do Banco de Dados Local (SQLite) ---
 DB_APP_SETTINGS_TABLE = "app_settings"
@@ -162,7 +158,7 @@ LLM_PF_TOKEN_SAFETY_MARGIN = 0.10
 # Fallback Default Analysis Settings (se Firestore falhar)
 FALLBACK_ANALYSIS_SETTINGS = {
     "pdf_extractor": "PyMuPdf-fitz",
-    "vectorization_model": "tfidf_vectorizer", # "all-MiniLM-L6-v2",
+    "auto_ocr_enabled": True, # Ocerização automática (RapidOCR) de páginas ininteligíveis
     "similarity_threshold": 0.97, # 0.87
     "language_detector": "langdetect",
     "token_counter": "tiktoken",
@@ -225,10 +221,6 @@ CHAT_PROMPTS_DEFAULTS_DOC_ID = "chat_prompts_defaults"
 
 # --- Configurações do Atualizador Automático ---
 VERSION_INFO_URL = "https://raw.githubusercontent.com/edson89braga/docs_analyzer_3/refs/heads/master/release_info/version.json" # json original
-
-# --- Configurações do Motor de ML Local ---
-ML_ENGINE_VERSION = "1.0" # Versão local do motor de ML
-ML_ENGINE_API_URL = "http://127.0.0.1:8001"
 
 execution_time = perf_counter() - start_time
 logger.debug(f"Carregado SETTINGS em {execution_time:.4f}s")

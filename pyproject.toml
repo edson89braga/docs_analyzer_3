@@ -34,7 +34,11 @@ dependencies = [
     "plotly (>=6.3.0,<7.0.0)",
     "pyinstaller (>=6.14.1,<7.0.0)",
     "networkx (>=3.5,<4.0)",
-    "streamlit (>=1.55.0,<2.0.0)",    
+    "streamlit (>=1.55.0,<2.0.0)",
+    "rapidocr (==3.8.3)", # Fixado (não usar range): versões >=3.9 mudaram a validação de parâmetros
+                          # do engine e quebram a combinação Det.ocr_version=PPOCRV5 + Rec.lang_type=LATIN
+                          # usada aqui (mesma versão já validada em outro projeto interno).
+    "onnxruntime (>=1.26.0,<2.0.0)",
 
 ]
 

@@ -39,7 +39,7 @@ class BaseSettingsDrawer(ft.Column):
     KEY_MAP = {
         "llm_provider_dd": "llm_provider",
         "llm_model_dd":    "llm_model",
-        "proc_vectorization_dd":        "vectorization_model",
+        "auto_ocr_switch":               "auto_ocr_enabled",
         "similarity_threshold_slider":  "similarity_threshold",
         "llm_token_limit_tf":           "llm_input_token_limit",
         "temperature_slider":           "llm_temperature",
@@ -82,14 +82,9 @@ class BaseSettingsDrawer(ft.Column):
         """
         Constrói a seção comum de configurações de Processamento de Documento.
         """        
-        self.gui_controls["proc_vectorization_dd"] = ft.Dropdown(
-            label="Modelo de Vetorização",
-            options=[
-                ft.dropdown.Option("tfidf_vectorizer", "Tf-Idf Vectorizer"),
-                ft.dropdown.Option("all-MiniLM-L6-v2", "all-MiniLM-L6-v2"),
-                ft.dropdown.Option("text-embedding-3-small", "OpenAI text-embedding-3-small"),
-            ],
-            width=default_width
+        self.gui_controls["auto_ocr_switch"] = ft.Switch(
+            label="Ocerização automática de páginas ininteligíveis",
+            value=True,
         )
 
         self.gui_controls["similarity_threshold_value_label"] = ft.Text("", weight=ft.FontWeight.BOLD)
@@ -100,7 +95,7 @@ class BaseSettingsDrawer(ft.Column):
 
         return [
             ft.Text("Processamento de Documento", style=ft.TextThemeStyle.TITLE_MEDIUM),
-            self.gui_controls["proc_vectorization_dd"],
+            self.gui_controls["auto_ocr_switch"],
             ft.Column([
                 ft.Text("Limiar de similaridade"),
                 ft.Row([self.gui_controls["similarity_threshold_slider"], self.gui_controls["similarity_threshold_value_label"]]),
@@ -194,7 +189,7 @@ class BaseSettingsDrawer(ft.Column):
         if "llm_model_dd" in self.gui_controls:
             self.gui_controls["llm_model_dd"].on_change = self._handle_model_change
         
-        for ctrl in ["proc_vectorization_dd", "llm_token_limit_tf", "llm_max_output_length_tf", 
+        for ctrl in ["auto_ocr_switch", "llm_token_limit_tf", "llm_max_output_length_tf",
                      "reasoning_effort_dd", "verbosity_level_dd"]:
             if ctrl in self.gui_controls:
                 self.gui_controls[ctrl].on_change = self._handle_setting_change

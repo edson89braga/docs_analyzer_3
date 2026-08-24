@@ -27,7 +27,7 @@ class UpdateStatus:
 
 def check_for_component_update(component_key: str, local_version_str: str) -> UpdateStatus:
     """
-    Verifica se há uma nova versão para um componente específico (ex: 'app' ou 'ml_engine').
+    Verifica se há uma nova versão para um componente específico (ex: 'app').
 
     1. Baixa e lê o arquivo version.json.
     2. Compara a versão local com a remota.

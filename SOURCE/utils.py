@@ -13,7 +13,7 @@ from rich import print
 from typing import Union, Optional, Any, List
 
 from SOURCE.settings import (K_PROXY_ENABLED, K_PROXY_IP_URL, K_PROXY_PORT, K_PROXY_USERNAME, 
-                            K_PROXY_PASSWORD_SAVED, ASSETS_DIR, ML_ENGINE_API_URL)
+                            K_PROXY_PASSWORD_SAVED, ASSETS_DIR)
 
 # Dicionário para servir como cache no lado do servidor para dados pesados da sessão.
 # A chave será o ID da sessão do Flet (page.session_id).

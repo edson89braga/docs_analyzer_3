@@ -22,6 +22,7 @@ from SOURCE.flet_ui.components.components import (
     ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable,
     CardWithHeader, show_confirmation_dialog, ReadOnlySelectableTextField,
     safe_control_update, safe_page_update,
+    show_cancelable_progress_dialog, close_progress_dialog,
 )
 
 from SOURCE.flet_ui.components.file_list_manager import FileListManager
@@ -37,7 +38,6 @@ from SOURCE.settings import (UPLOAD_TEMP_DIR, ASSETS_DIR, WEB_TEMP_EXPORTS_SUBDI
                           cotacao_dolar_to_real, KEY_SESSION_NC_ANALYZE_SETTINGS,
                           KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS,
                           KEY_SESSION_LOADED_LLM_PROVIDERS,
-                          KEY_SESSION_TOKENS_EMBEDDINGS, KEY_SESSION_MODEL_EMBEDDINGS_LIST,
                           PROMPTS_COLLECTION, PROMPTS_DOCUMENT_ID)
 
 from SOURCE.utils import (format_seconds_to_min_sec, clean_and_convert_to_float, convert_to_list_of_strings,
@@ -1109,6 +1109,7 @@ class AnalyzePDFViewContent(ft.Column):
                 ("relevant_pages_global_keys_formatted",         "Páginas Relevantes consideradas"),
                 #"count_selected_relevant":                      "Qtd. Páginas Selecionadas como Relevantes",
                 ("count_discarded_similarity",                   "Páginas Irrelevantes por Similaridade"),
+                ("ocr_pages_global_keys_formatted",              "Páginas Ocerizadas Automaticamente"),
                 ("unintelligible_pages_global_keys_formatted",   "Páginas Descartadas (Ininteligíveis)"),
                 #"count_discarded_unintelligible":               "Qtd. Páginas Descartadas (Ininteligíveis)",
                 ("total_tokens_before_truncation",               "Tokens totais das Páginas Relevantes"),
@@ -1117,40 +1118,41 @@ class AnalyzePDFViewContent(ft.Column):
                 ("final_aggregated_tokens",                      "Tokens totais das Páginas Selecionadas"),
                 ("supressed_tokens_percentage",                  "Percentual de Tokens Suprimidos"),
                 ("processing_time",                              "Tempo de processamento"),
-                ("calculated_embedding_cost_usd",                "Custos de Embeddings")
             ]
 
             ordered_keys = [key for key, _ in labels]
             labels = {k: v for k, v in labels}
             data_rows = []
- 
-            calculated_embedding_cost_usd = metadata_to_display.get("calculated_embedding_cost_usd")
+
             for key in ordered_keys: # A lista `ordered_keys` garante a ordem de exibição
                 if key in ["count_selected_relevant", "count_discarded_unintelligible", "count_selected_final"]:
                     continue
- 
+
                 if key in metadata_to_display and key in labels:
                     label_text = f"{labels[key]}:"
                     value = metadata_to_display.get(key)
-                    
+
                     if key == "final_pages_global_keys_formatted" and value == metadata_to_display.get("relevant_pages_global_keys_formatted"):
                         continue # Quando não houver supressão de páginas por limites de token
-                    
-                    if key == "calculated_embedding_cost_usd" and not calculated_embedding_cost_usd:
-                        calculated_embedding_cost_usd = 0
- 
+
+                    if key == "ocr_pages_global_keys_formatted" and not metadata_to_display.get("count_ocr_applied"):
+                        continue # Não exibe a linha quando nenhuma página precisou de OCR
+
                     display_value = str(value if value is not None else "N/A")
 
                     if key == "total_pages_processed":
                         initial_total_tokens = metadata_to_display.get("total_tokens_before_filter", 0)
                         final_total_tokens = metadata_to_display.get("final_aggregated_tokens", 0)
                         if initial_total_tokens != final_total_tokens:
-                            display_value = f"{value} ({initial_total_tokens:,} tokens)".replace(",", ".")                        
+                            display_value = f"{value} ({initial_total_tokens:,} tokens)".replace(",", ".")
                     elif key == "supressed_tokens_percentage" and isinstance(value, (int, float)):
                         value = 0 if value < 0 else value
                         display_value = f"{value:.2f}%"
                     elif key == "relevant_pages_global_keys_formatted" and value is not None:
                         total_value = metadata_to_display.get("count_selected_relevant")
+                        display_value = f"{total_value} : {display_value}"
+                    elif key == "ocr_pages_global_keys_formatted" and value is not None:
+                        total_value = metadata_to_display.get("count_ocr_applied")
                         display_value = f"{total_value} : {display_value}"
                     elif key == "unintelligible_pages_global_keys_formatted" and value is not None:
                         total_value = metadata_to_display.get("count_discarded_unintelligible")
@@ -1158,13 +1160,7 @@ class AnalyzePDFViewContent(ft.Column):
                     elif key == "final_pages_global_keys_formatted" and value is not None:
                         total_value = metadata_to_display.get("count_selected_final")
                         display_value = f"{total_value} : {display_value}"
-                    elif key == "calculated_embedding_cost_usd":
-                        if not calculated_embedding_cost_usd:
-                            continue
-                        cost_embeddings_usd_str = f"U$ {calculated_embedding_cost_usd:.4f}"
-                        cost_embeddings_brl_str = f"R$ {(calculated_embedding_cost_usd * cotacao_dolar_to_real):.4f}"
-                        display_value = f"{cost_embeddings_usd_str} : {cost_embeddings_brl_str}"
-                                        
+
                     data_rows.append((label_text, display_value))
  
             if data_rows:
@@ -1183,12 +1179,17 @@ class AnalyzePDFViewContent(ft.Column):
                 ])                
 
                 if metadata_to_display.get("count_discarded_unintelligible", 0) > 0:
+                    warning_text = (
+                        "Páginas ininteligíveis mesmo após tentativa automática de OCR."
+                        if metadata_to_display.get("auto_ocr_enabled")
+                        else "Páginas ininteligíveis detectadas. Ative a ocerização automática nas "
+                             "configurações ou trate-as manualmente."
+                    )
                     final_metadata_content.controls.append(
                     ft.Container(
                         ft.Row([
                             ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=theme.COLOR_WARNING),
-                            ft.Text("Páginas ininteligíveis detectadas. Considere usar OCR nelas.",
-                                    color=theme.COLOR_WARNING, weight=ft.FontWeight.BOLD)
+                            ft.Text(warning_text, color=theme.COLOR_WARNING, weight=ft.FontWeight.BOLD)
                         ], spacing=5, alignment=ft.MainAxisAlignment.START),
                             padding=ft.padding.only(top=10, left=20, bottom=10)
                         )
@@ -2351,11 +2352,10 @@ class InternalAnalysisController:
             current_settings['llm_temperature'] = float(current_settings.get('llm_temperature', FALLBACK_ANALYSIS_SETTINGS['llm_temperature']))
         except (ValueError, TypeError):
             current_settings['llm_temperature'] = FALLBACK_ANALYSIS_SETTINGS['llm_temperature']
+        current_settings['auto_ocr_enabled'] = bool(current_settings.get('auto_ocr_enabled', FALLBACK_ANALYSIS_SETTINGS['auto_ocr_enabled']))
         try:
-            current_settings['vectorization_model'] = current_settings.get('vectorization_model', FALLBACK_ANALYSIS_SETTINGS['vectorization_model'])
             current_settings['similarity_threshold'] = float(current_settings.get('similarity_threshold', FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']))
         except (ValueError, TypeError):
-            current_settings['vectorization_model'] =  FALLBACK_ANALYSIS_SETTINGS['vectorization_model']
             current_settings['similarity_threshold'] = FALLBACK_ANALYSIS_SETTINGS['similarity_threshold']
         
         return current_settings
@@ -2383,6 +2383,57 @@ class InternalAnalysisController:
         txt_to_update.weight = ft.FontWeight.BOLD if is_error else ft.FontWeight.NORMAL
         safe_control_update(txt_to_update)
         
+    def _run_auto_ocr_step(
+        self,
+        processed_page_data_combined: Dict[str, Dict[str, Any]],
+        all_global_page_keys_ordered: List[str],
+        all_texts_to_loop: List[str],
+    ) -> List[str]:
+        """
+        Executa a etapa de OCR automático (RapidOCR) sobre as páginas ininteligíveis do lote,
+        exibindo um diálogo de progresso página a página com botão de cancelamento. Chamada de
+        dentro da thread de processamento de PDF (_pdf_processing_thread_func).
+
+        Args:
+            processed_page_data_combined (Dict[str, Dict[str, Any]]): Dados por página, mutados
+                in-place nas páginas recuperadas via OCR.
+            all_global_page_keys_ordered (List[str]): Chaves de página na ordem do lote.
+            all_texts_to_loop (List[str]): Textos por página (mesma ordem), mutados in-place.
+
+        Returns:
+            List[str]: Chaves globais das páginas recuperadas via OCR.
+        """
+        pending_count = sum(
+            1 for k in all_global_page_keys_ordered if not processed_page_data_combined[k]['inteligible']
+        )
+        if not pending_count:
+            return []
+
+        ocr_cancel_event = threading.Event()
+        dialog_ref: Dict[str, Any] = {"dialog": None, "update": None}
+
+        def _ocr_progress(current: int, total: int, file_name: str, page_num: int):
+            message = f"Página {current}/{total} — {file_name}, pág. {page_num}"
+            def _update_ui():
+                if dialog_ref["dialog"] is None:
+                    dialog, update_fn = show_cancelable_progress_dialog(
+                        self.page, "Ocerizando páginas ininteligíveis...", message, ocr_cancel_event.set
+                    )
+                    dialog_ref["dialog"], dialog_ref["update"] = dialog, update_fn
+                else:
+                    dialog_ref["update"](message)
+            self.page.run_thread(_update_ui)
+
+        recovered_keys, _still_bad_keys = self.pdf_analyzer.apply_ocr_to_unintelligible_pages(
+            processed_page_data_combined, all_global_page_keys_ordered, all_texts_to_loop,
+            progress_callback=_ocr_progress, cancel_check=ocr_cancel_event.is_set,
+        )
+
+        if dialog_ref["dialog"] is not None:
+            self.page.run_thread(close_progress_dialog, self.page, dialog_ref["dialog"])
+
+        return recovered_keys
+
     def _pdf_processing_thread_func(self, pdf_paths: List[str], batch_name: str, analyze_llm_after: bool, is_reanalysis: bool = False):
         """
         Função executada em uma thread separada para realizar o processamento de PDF.
@@ -2401,7 +2452,7 @@ class InternalAnalysisController:
         logger.info(f"Usando configurações de análise para processamento: {current_analysis_settings}")
         pdf_extractor = current_analysis_settings.get("pdf_extractor", FALLBACK_ANALYSIS_SETTINGS["pdf_extractor"])
         provider = current_analysis_settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
-        vectorization_model = current_analysis_settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
+        auto_ocr_enabled = current_analysis_settings.get("auto_ocr_enabled", FALLBACK_ANALYSIS_SETTINGS["auto_ocr_enabled"])
         similarity_threshold = current_analysis_settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
         token_limit_pref = current_analysis_settings.get("llm_input_token_limit", FALLBACK_ANALYSIS_SETTINGS["llm_input_token_limit"])
 
@@ -2424,7 +2475,6 @@ class InternalAnalysisController:
         llm_stage_started = False
         try:
             start_time = perf_counter()
-            import requests
 
             if not self.parent_view._is_mounted or not self.page:
                 logger.debug("_pdf_processing_thread_func abortada: view desmontada.")
@@ -2438,50 +2488,27 @@ class InternalAnalysisController:
  
             processed_page_data_combined, all_global_page_keys_ordered = \
                                 self.pdf_analyzer.build_combined_page_data(processed_files_metadata, all_indices, all_texts_to_storage)
- 
-            self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
- 
-            ready_embeddings, tokens_embeddings = None, None
-            calculated_embedding_cost_usd = 0
-            if vectorization_model == "text-embedding-3-small":
-                decrypted_api_key = self.page.session.get(f"decrypted_api_key_{provider}")
-                if decrypted_api_key:
-                    logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
-                else:
-                    decrypted_api_key = get_api_key_in_firestore(self.page, provider, self.firestore_client)
-                    assert decrypted_api_key, "Chave de API não encontrada ou não cadastrada! Verifique."
- 
-                loaded_embeddings_providers = self.page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
-                ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
-                                                                                     all_texts_to_loop, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
 
-            elif vectorization_model == "all-MiniLM-L6-v2":
-                from SOURCE.services.ml_client import get_embeddings_from_engine
-                logger.info("Requisitando get_embeddings_from_engine ...")
-                ready_embeddings = get_embeddings_from_engine(all_texts_to_loop)
-                logger.info("Requisição concluída.")
-
-            embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.pdf_analyzer.get_similarity_and_tfidf_score_docs(
-                                                                            all_texts_to_loop, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
-            
-            point_time = perf_counter()
-            self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
- 
-            if tokens_embeddings:
-                self.page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
-                logger.debug(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
-            else:
-                if self.page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
-                    self.page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
-                    logger.debug("Tokens de embedding removidos da sessão (não retornados pela análise).")
-                
             if not processed_page_data_combined:
                 raise ValueError("Nenhum dado processável encontrado nos PDFs.")
-            
+
+            ocr_recovered_keys: List[str] = []
+            if auto_ocr_enabled:
+                ocr_recovered_keys = self._run_auto_ocr_step(processed_page_data_combined, all_global_page_keys_ordered, all_texts_to_loop)
+
+            self.page.run_thread(self._update_status_callback, f"Etapa 2/5: Processando {len(processed_page_data_combined)} páginas...")
+
+            tfidf_vectors_combined, tf_idf_scores_array_combined = self.pdf_analyzer.get_similarity_and_tfidf_score_docs(all_texts_to_loop)
+
+            point_time = perf_counter()
+            self.page.run_thread(self._update_status_callback, "Etapa 3/5: Classificando páginas...")
+
             #pr-int('\n[DEBUG]:\n', processed_page_data_combined, '\n\n')
             classified_data = self.pdf_analyzer.filter_and_classify_pages(processed_page_data_combined, all_global_page_keys_ordered,
-                                                                          embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined,
-                                                                          mode_main_filter, mode_filter_similar, similarity_threshold)
+                                                                          tfidf_vectors_combined=tfidf_vectors_combined,
+                                                                          tf_idf_scores_array_combined=tf_idf_scores_array_combined,
+                                                                          mode_main_filter=mode_main_filter, mode_filter_similar=mode_filter_similar,
+                                                                          similarity_threshold=similarity_threshold)
             
             relevant_ordered_indices, unintelligible_indices, count_similars = classified_data
             count_sel, count_unint = len(relevant_ordered_indices), len(unintelligible_indices)
@@ -2548,6 +2575,9 @@ class InternalAnalysisController:
                 "total_tokens_before_filter": ai_orchestrator.scale_tokens_to_real(tokens_antes_filtro, drift_ratio),
                 "relevant_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(relevant_ordered_indices),
                 "count_selected_relevant": count_sel,
+                "ocr_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(ocr_recovered_keys),
+                "count_ocr_applied": len(ocr_recovered_keys),
+                "auto_ocr_enabled": auto_ocr_enabled,
                 "unintelligible_pages_global_keys_formatted": self.pdf_analyzer.format_global_keys_for_display(unintelligible_indices),
                 "count_discarded_unintelligible": count_unint,
                 "count_discarded_similarity": count_similars,
@@ -2557,7 +2587,6 @@ class InternalAnalysisController:
                 "final_aggregated_tokens": ai_orchestrator.scale_tokens_to_real(tokens_final_agg, drift_ratio),
                 "supressed_tokens_percentage": perc_supressed,
                 "processing_time": format_seconds_to_min_sec(total_processing_time),
-                "calculated_embedding_cost_usd": calculated_embedding_cost_usd
             }
             self.page.session.set(KEY_SESSION_PROCESSING_METADATA, proc_meta_for_ui)
             self.page.session.set(KEY_SESSION_SHARED_PROCESSING_METADATA, proc_meta_for_ui)
@@ -2579,16 +2608,6 @@ class InternalAnalysisController:
                 # Se não vai para a LLM, a UI precisa ser atualizada agora com os resultados do processamento.
                 self.page.run_thread(self.parent_view._update_gui_from_state)
                 self.page.run_thread(show_snackbar, self.page, f"Conteúdo de '{batch_name}' processado. Pronto para análise LLM.", theme.COLOR_SUCCESS)
-
-        except requests.exceptions.ConnectionError as conn_err:
-            logger.warning(f"Erro de conexão ao tentar se comunicar com o motor de ML: {conn_err}")
-            def update_ui_on_conn_error():
-                hide_loading_overlay(self.page)
-                msg_amigavel = ("Não foi possível conectar ao motor de Vetorização. "
-                                "Ele pode ainda estar inicializando em segundo plano. "
-                                "Por favor, aguarde alguns instantes e tente novamente.")
-                show_snackbar(self.page, msg_amigavel, color=theme.COLOR_WARNING, duration=8000)
-            self.page.run_thread(update_ui_on_conn_error)
 
         except Exception as ex_proc:
             logger.error(f"Thread: Erro no processamento de PDF para '{batch_name}': {ex_proc}", exc_info=True)
@@ -2645,7 +2664,6 @@ class InternalAnalysisController:
                 - user_token (str): Token de autenticação do usuário.
                 - filenames_uploaded (List[str]): Lista de nomes dos arquivos PDF carregados.
                 - proc_meta_session (Dict[str, Any]): Metadados do processamento de PDF.
-                - tokens_embeddings_session (Tuple): Informações sobre tokens de embeddings.
                 - llm_meta_session (Dict[str, Any]): Metadados da análise LLM.
                 - current_settings (Dict[str, Any]): Configurações de análise atuais.
                 - default_settings (Dict[str, Any]): Configurações padrão da nuvem.
@@ -2656,7 +2674,7 @@ class InternalAnalysisController:
         if not context:
             logger.error("Não foi possível obter contexto de usuário válido para coletar dados de log.")
             # Retorna uma tupla com Nones para evitar que o chamador quebre
-            return (None, None, [], {}, None, {}, {}, {}, None, [])
+            return (None, None, [], {}, {}, {}, {}, None, [])
             
         user_token, user_id = context
     
@@ -2672,7 +2690,6 @@ class InternalAnalysisController:
         filenames_uploaded = [f.get('name', 'unknown_file') for f in files_ordered_session if isinstance(f, dict)]
         
         proc_meta_session = self.page.session.get(KEY_SESSION_PROCESSING_METADATA) or {}
-        tokens_embeddings_session = self.page.session.get(KEY_SESSION_TOKENS_EMBEDDINGS)
         current_settings = self.page.session.get(KEY_SESSION_NC_ANALYZE_SETTINGS) or {}
         default_settings = self.page.session.get(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS) or {}
         
@@ -2688,7 +2705,7 @@ class InternalAnalysisController:
         # else:
         #     fields_to_log = []
         
-        return (user_id, user_token, filenames_uploaded, proc_meta_session, tokens_embeddings_session, llm_meta_session,
+        return (user_id, user_token, filenames_uploaded, proc_meta_session, llm_meta_session,
             current_settings, default_settings, llm_response_obj)
     
     def _llm_analysis_thread_func(self, aggregated_text: str, batch_name: str, is_reanalysis: bool = False):
@@ -2885,9 +2902,7 @@ class InternalAnalysisController:
                 self.page.run_thread(self._update_status_callback,  "", False, True)
  
                 data_to_log = self._get_data_to_log()
-                if self.firestore_client.save_analysis_metrics(*data_to_log):
-                    # Zerar embeddings para não recalcular caso click analyze_only sem reprocessamento
-                    self.parent_view._remove_data_session(KEY_SESSION_TOKENS_EMBEDDINGS)
+                self.firestore_client.save_analysis_metrics(*data_to_log)
 
                 if prompt_was_edited:
                     self.page.run_thread(self.parent_view._restore_original_prompts_and_notify)                    

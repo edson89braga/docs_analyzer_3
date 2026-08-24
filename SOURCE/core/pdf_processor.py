@@ -353,75 +353,13 @@ def count_tokens(text: str, model_name: str = model_name_for_tokens) -> int:
 from numpy import array as np_array
 from numpy import ndarray as np_ndarray
 from numpy import any as np_any
+from numpy import frombuffer as np_frombuffer
+from numpy import uint8 as np_uint8
 
 from nltk.corpus import stopwords
 from sklearn.metrics.pairwise import cosine_similarity
 from sklearn.preprocessing import normalize as sk_normalize
 from sklearn.feature_extraction.text import TfidfVectorizer
-
-# Cache para o modelo SentenceTransformer para evitar recarregamentos
-from SOURCE import app_cache
-def get_sentence_transformer_model(model_name: str = 'all-MiniLM-L6-v2'):
-    """
-    Retorna a instância do modelo SentenceTransformer que foi pré-carregado.
-    Espera pelo carregamento se ele ainda não estiver concluído.
-
-    -> Função descontinuada com a migração do sentence_transformer_model para api localhost.
-    """
-    # Espera que o evento seja sinalizado. Timeout para evitar bloqueio infinito.
-    is_ready = app_cache.model_loading_event.wait(timeout=120.0)
-
-    if not is_ready:
-        logger.error("Timeout! O carregamento do modelo demorou mais de 120 segundos.")
-        raise TimeoutError("O modelo de IA demorou muito para inicializar.")
-
-    if app_cache.sentence_transformer_model is None:
-        logger.critical("O processo de carregamento do modelo terminou, mas o modelo não está disponível (falhou).")
-        raise RuntimeError("O modelo de IA para vetorização não pôde ser carregado.")
-        
-    return app_cache.sentence_transformer_model
-
-#@timing_decorator()
-def get_vectors(pages_texts: List[str], model_embedding: str = 'all-MiniLM-L6-v2') -> np_ndarray:
-    """
-    Gera vetores de embedding para uma lista de textos usando um modelo SentenceTransformer.
-
-    -> Função descontinuada com a migração do sentence_transformer_model para api localhost.
-
-    Args:
-        pages_texts (List[str]): Lista de textos para os quais gerar embeddings.
-        model_embedding (str): Nome do modelo de embedding a ser usado.
-
-    Returns:
-        np_ndarray: Um array NumPy contendo os vetores de embedding.
-    """
-    logger.debug(f'Modelo embeddings in get_vectors: {model_embedding}')
-    model = get_sentence_transformer_model(model_embedding)
-
-    # Verifica se a aplicação está rodando em modo 'frozen' (compilado)
-    if getattr(sys, 'frozen', False):
-        logger.warning("Ambiente 'frozen' detectado. Multiprocessamento será desativado para a vetorização.")
-        vectors_combined = model.encode(
-            pages_texts,
-            batch_size=1,         # Processa um texto por vez, desativa o paralelismo interno do batch.
-            show_progress_bar=False,
-            convert_to_numpy=True # Evita manipulação de tensores PyTorch após a codificação.
-        )
-    else:
-        logger.debug("Ambiente de desenvolvimento. Multiprocessamento ativado (padrão).")
-        vectors_combined = model.encode(pages_texts)
-
-    if not isinstance(vectors_combined, np_ndarray):
-        vectors_combined = np_array(vectors_combined)
-    
-    # Verifica se o array não está vazio
-    if vectors_combined.size == 0:
-        logger.warning(f"Array 'ready_embeddings' fornecido está vazio para o modelo '{model_embedding}'. Retornando matriz de similaridade vazia.")
-        return np_array([])
-
-    if len(vectors_combined) != len(pages_texts):
-        logger.warning(f"Quantidade de vetores ({len(vectors_combined)}) difere da quantidade de textos ({len(pages_texts)}).")
-    return vectors_combined
 
 def get_similarity_matrix(vectors_combined: np_ndarray, normalizer: bool = True) -> np_ndarray:
     """
@@ -516,9 +454,174 @@ def check_if_has_similar_items(
     logger.debug("Procedido: check_if_has_similar_items")
     return retorno
 
+### pdf_ocr: #########################################################################################
+import threading
+from typing import Any, Callable
+
+# Mesma combinação de modelo já validada em produção noutro projeto interno (ver
+# scripts_epol/rotina_epol_1/SOURCE/pdf_processor/ocr.py): PPOCRV5 (detecção) + LATIN (reconhecimento)
+# cobre o charset Latin completo, incluindo os diacríticos do português (ã, ç, ê, õ, etc.).
+# Fixar rapidocr==3.8.3 no pyproject.toml é proposital: versões 3.9+ mudaram a validação de
+# parâmetros do engine e passam a rejeitar esta combinação.
+OCR_MODEL_VERSION = "PPOCRV5"
+OCR_LANG_TYPE = "LATIN"
+OCR_RENDER_DPI = 300
+
+class OcrEngineError(Exception):
+    """Levantada quando o engine RapidOCR falha ao inicializar — tipicamente por falta dos modelos
+    ONNX em cache local (site-packages/rapidocr/models) e bloqueio de rede/proxy para baixá-los."""
+
+_ocr_engine_lock = threading.Lock()
+_ocr_engine: Any = None
+
+def get_ocr_engine() -> Any:
+    """
+    Retorna o engine RapidOCR, inicializando-o na primeira chamada (lazy singleton por processo).
+
+    O carregamento dos modelos ONNX (poucos segundos) ocorre só na 1ª chamada; chamadas seguintes
+    retornam a instância já cacheada, compartilhada entre sessões/usuários no modo servidor
+    (thread-safe: onnxruntime aceita inferência concorrente na mesma sessão).
+
+    Returns:
+        Any: Instância singleton do engine RapidOCR pronta para uso.
+
+    Raises:
+        OcrEngineError: Se o RapidOCR falhar ao inicializar (normalmente por falta dos modelos ONNX
+                        em cache local nesta máquina/imagem).
+    """
+    global _ocr_engine
+    if _ocr_engine is None:
+        with _ocr_engine_lock:
+            if _ocr_engine is None:
+                from rapidocr import LangRec, OCRVersion, RapidOCR
+                params = {
+                    "Det.ocr_version": OCRVersion[OCR_MODEL_VERSION],
+                    "Rec.lang_type": LangRec[OCR_LANG_TYPE],
+                }
+                logger.debug(f"Inicializando engine RapidOCR (version={OCR_MODEL_VERSION}, lang={OCR_LANG_TYPE})...")
+                try:
+                    _ocr_engine = RapidOCR(params=params)
+                except Exception as e:
+                    raise OcrEngineError(
+                        "Falha ao inicializar o engine RapidOCR. Verifique se os modelos ONNX estão "
+                        "em cache local (site-packages/rapidocr/models) — ver NOTES_ocr.md."
+                    ) from e
+                logger.info("Engine RapidOCR pronto.")
+    return _ocr_engine
+
+def _render_page_as_numpy(pdf_path: str, page_index: int, dpi: int = OCR_RENDER_DPI) -> np_ndarray:
+    """
+    Rasteriza uma página de PDF como array numpy RGB, para submissão ao engine de OCR.
+
+    Args:
+        pdf_path (str): Caminho do arquivo PDF.
+        page_index (int): Índice da página (base 0).
+        dpi (int): Resolução de renderização em pontos por polegada. zoom = dpi / 72.
+
+    Returns:
+        np_ndarray: Array com shape (altura, largura, 3) e dtype uint8.
+    """
+    import fitz
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[page_index]
+        zoom = dpi / 72
+        mat = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB)
+        arr = np_frombuffer(pix.samples, dtype=np_uint8)
+        return arr.reshape(pix.height, pix.width, 3)
+    finally:
+        doc.close()
+
+def _reconstruct_text_from_layout(boxes: list, txts) -> str:
+    """
+    Reconstrói texto com espaçamento correto a partir das caixas e textos detectados pelo OCR.
+
+    O RapidOCR detecta regiões de texto individualmente — cada caixa é um trecho (palavra, frase
+    curta ou linha). Concatenar as caixas na ordem bruta gera saídas sem espaços entre palavras da
+    mesma linha. Algoritmo: agrupa caixas por proximidade vertical (mesma linha) e, dentro de cada
+    linha, ordena por posição horizontal antes de unir com espaço.
+
+    Args:
+        boxes (list): Lista de caixas, cada uma com 4 pontos [[x, y], ...] no sentido horário.
+        txts: Sequência de textos reconhecidos, alinhada 1:1 com boxes.
+
+    Returns:
+        str: Texto reconstruído, com espaços intra-linha e quebras ('\\n') entre linhas.
+
+        Exemplo de retorno:
+        "MINISTÉRIO DA JUSTIÇA\\nPOLÍCIA FEDERAL\\nSR/SP - Protocolo"
+    """
+    items: list = []  # (center_y, left_x, height, txt)
+    for box, txt in zip(boxes, txts):
+        if not txt or not txt.strip():
+            continue
+        ys = [float(p[1]) for p in box]
+        xs = [float(p[0]) for p in box]
+        center_y = (min(ys) + max(ys)) / 2.0
+        height = max(ys) - min(ys) or 1.0
+        left_x = min(xs)
+        items.append((center_y, left_x, height, txt.strip()))
+
+    if not items:
+        return ""
+
+    items.sort(key=lambda t: t[0])
+    avg_height = sum(t[2] for t in items) / len(items)
+    line_threshold = avg_height * 0.6
+
+    lines = []
+    current_line = [items[0]]
+    ref_y = items[0][0]
+    for item in items[1:]:
+        if abs(item[0] - ref_y) <= line_threshold:
+            current_line.append(item)
+        else:
+            lines.append(current_line)
+            current_line = [item]
+            ref_y = item[0]
+    lines.append(current_line)
+
+    result_lines = []
+    for line in lines:
+        line.sort(key=lambda t: t[1])
+        result_lines.append(" ".join(t[3] for t in line))
+
+    return "\n".join(result_lines)
+
+def ocr_page_text(engine: Any, pdf_path: str, page_index: int, dpi: int = OCR_RENDER_DPI) -> str:
+    """
+    Extrai texto de uma página de PDF via OCR (RapidOCR).
+
+    Args:
+        engine (Any): Engine RapidOCR (obtido via get_ocr_engine()).
+        pdf_path (str): Caminho do arquivo PDF.
+        page_index (int): Índice da página a processar (base 0).
+        dpi (int): Resolução de renderização para conversão em imagem.
+
+    Returns:
+        str: Texto extraído, com espaços/quebras de linha reconstituídos. String vazia se
+             nenhum texto foi detectado (página em branco ou imagem ilegível).
+    """
+    img = _render_page_as_numpy(pdf_path, page_index, dpi)
+    result = engine(img)
+
+    if not result:
+        return ""
+    if (hasattr(result, "boxes") and hasattr(result, "txts")
+            and result.boxes is not None and result.txts is not None):
+        return _reconstruct_text_from_layout(result.boxes, result.txts)
+    if hasattr(result, "txts") and result.txts:
+        return "\n".join(result.txts)
+    try:
+        return "\n".join(item[1] for item in result if item[1])
+    except (TypeError, IndexError):
+        logger.warning(f"Formato de resultado OCR desconhecido: {type(result)}")
+        return ""
+
 ### pdf_document_analyzer: #########################################################################################
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Callable
 # Importando as funções e classes dos "módulos" acima
 # from .pdf_extraction_strategies import PDFTextExtractorStrategy, PdfPlumberExtractor (se fossem arquivos separados)
 # from .text_processing_utils import ( (se fossem arquivos separados)
@@ -727,70 +830,147 @@ class PDFDocumentAnalyzer:
         logger.debug("Procedido: build_combined_page_data")
         return combined_processed_page_data, all_global_page_keys_ordered
 
+    def apply_ocr_to_unintelligible_pages(
+        self,
+        combined_processed_page_data: Dict[str, Dict[str, Any]],
+        all_global_page_keys_ordered: List[str],
+        all_texts_for_analysis_list: List[str],
+        progress_callback: Optional[Callable[[int, int, str, int], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> Tuple[List[str], List[str]]:
+        """
+        Tenta recuperar via OCR o texto das páginas marcadas como ininteligíveis, mutando os
+        dados e a lista de textos in-place, para que páginas antes descartadas (tipicamente
+        digitalizadas sem camada de texto) participem normalmente da seleção por TF-IDF.
+
+        Args:
+            combined_processed_page_data (Dict[str, Dict[str, Any]]): Dados por página (ver
+                build_combined_page_data). Mutado in-place nas páginas ocerizadas.
+            all_global_page_keys_ordered (List[str]): Chaves de página na mesma ordem usada para
+                montar all_texts_for_analysis_list.
+            all_texts_for_analysis_list (List[str]): Textos por página, na mesma ordem de
+                all_global_page_keys_ordered. Mutada in-place nas páginas ocerizadas.
+            progress_callback (Optional[Callable]): Chamado antes de cada página com
+                (índice_atual_1based, total, nome_arquivo, número_página_1based), para progresso na UI.
+            cancel_check (Optional[Callable[[], bool]]): Chamado a cada página; se retornar True,
+                interrompe o OCR das páginas restantes (mantendo o que já foi recuperado até então).
+
+        Returns:
+            Tuple[List[str], List[str]]: (chaves_recuperadas, chaves_ainda_ininteligiveis_apos_ocr).
+
+            Exemplo de retorno:
+            (["file0_page3", "file0_page4"], ["file1_page0"])
+        """
+        pending_keys = [
+            key for key in all_global_page_keys_ordered
+            if not combined_processed_page_data[key]['inteligible']
+        ]
+        if not pending_keys:
+            return [], []
+
+        try:
+            engine = get_ocr_engine()
+        except OcrEngineError as e:
+            logger.error(f"OCR automático indisponível, páginas ininteligíveis mantidas como estão: {e}")
+            return [], pending_keys
+
+        key_to_list_index = {key: i for i, key in enumerate(all_global_page_keys_ordered)}
+        recovered_keys: List[str] = []
+        still_unintelligible_keys: List[str] = []
+        total = len(pending_keys)
+
+        for i, key in enumerate(pending_keys, start=1):
+            if cancel_check and cancel_check():
+                logger.info(f"OCR automático cancelado pelo usuário após {i - 1}/{total} página(s).")
+                still_unintelligible_keys.extend(pending_keys[i - 1:])
+                break
+
+            page_data = combined_processed_page_data[key]
+            file_name = os.path.basename(page_data.get('original_pdf_path', ''))
+            page_num_display = page_data.get('page_index_in_file', -1) + 1
+
+            if progress_callback:
+                progress_callback(i, total, file_name, page_num_display)
+
+            try:
+                ocr_text = ocr_page_text(engine, page_data['original_pdf_path'], page_data['page_index_in_file'])
+            except Exception as e:
+                logger.error(f"Falha ao ocerizar '{file_name}' pág. {page_num_display}: {e}", exc_info=True)
+                still_unintelligible_keys.append(key)
+                continue
+
+            processed_text = function_preprocess_text_basic(ocr_text)
+            page_data['text_stored'] = processed_text
+            page_data['number_words'] = count_unique_words(processed_text)
+            page_data['number_tokens'] = count_tokens(processed_text, model_name=model_name_for_tokens)
+            page_data['inteligible'] = is_text_intelligible(processed_text)
+            page_data['ocr_applied'] = True
+
+            if key in key_to_list_index:
+                all_texts_for_analysis_list[key_to_list_index[key]] = processed_text
+
+            if page_data['inteligible']:
+                recovered_keys.append(key)
+            else:
+                still_unintelligible_keys.append(key)
+
+        logger.info(f"OCR automático concluído: {len(recovered_keys)}/{total} página(s) recuperada(s).")
+        return recovered_keys, still_unintelligible_keys
+
     #@timing_decorator()
-    def get_similarity_and_tfidf_score_docs(self, all_texts_for_analysis_list: List[str], 
-                                            model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: np_array = None, preprocess_text_advanced: bool = False, 
+    def get_similarity_and_tfidf_score_docs(self, all_texts_for_analysis_list: List[str],
+                                            preprocess_text_advanced: bool = False,
                                             ) -> Dict[str, Dict[str, Any]]:
-        
-        # assert model_embedding in ['all-MiniLM-L6-v2', 'tfidf_vectorizer', 'text-embedding-3-small'], "Modelo de embeddings inválido. Deve ser 'all-MiniLM-L6-v2' ou 'tfidf_vectorizer'."
-        
+        """
+        Calcula a relevância TF-IDF de cada página e seus vetores esparsos.
+
+        A vetorização por embeddings (ml_engine local e OpenAI text-embedding-3-small) foi
+        descontinuada: a comparação em produção mostrou que a seleção de páginas por TF-IDF é
+        tão eficaz quanto e substancialmente mais barata/rápida (ver NOTES_ocr.md).
+
+        Args:
+            all_texts_for_analysis_list (List[str]): Textos pré-processados, um por página.
+            preprocess_text_advanced (bool): Se True, aplica remoção de pontuação/caracteres
+                                              especiais antes de vetorizar.
+
+        Returns:
+            Dict[str, Dict[str, Any]]: Tupla (vetores_tfidf_esparsos, scores_tfidf).
+        """
         if preprocess_text_advanced:
             all_texts_for_analysis_list = [function_preprocess_text_advanced(text) for text in all_texts_for_analysis_list]
-        
-        # --- 2. Análise de Similaridade e TF-IDF (COMBINADA para todos os arquivos) ---
-        logger.info(f"Realizando análise de similaridade e TF-IDF para {len(all_texts_for_analysis_list)} páginas combinadas.")
-        try:
-            #similarity_matrix_combined = analyze_text_similarity(all_texts_for_storage_combined, model_embedding=model_embedding, ready_embeddings=ready_embeddings)
-            #tf_idf_scores_array_combined = calculate_text_relevance_tfidf(all_texts_for_storage_combined)
-            
-            if ready_embeddings is not None and ready_embeddings.size > 0:
-                assert len(ready_embeddings) == len(all_texts_for_analysis_list)
-                embedding_vectors_combined = ready_embeddings
-            elif model_embedding == 'all-MiniLM-L6-v2':
-                # Esta chamada foi movida de nc_analyze_view.py para cá para centralizar a lógica.
-                from SOURCE.services.ml_client import get_embeddings_from_engine
-                embedding_vectors_combined = get_embeddings_from_engine(all_texts_for_analysis_list)
-                # CRÍTICO: Verificar se a obtenção dos embeddings falhou.
-                if embedding_vectors_combined.size == 0:
-                    raise ValueError("Falha ao gerar vetores de embedding a partir do motor de ML.")
-            else: # 'tfidf_vectorizer'
-                # Deve ser None para não causar erro no método filter_and_classify_pages ao comandar get_similarity_matrix
-                logger.info("Fallback com model_embedding = tfidf_vectorizer")
-                embedding_vectors_combined = None 
 
+        logger.info(f"Realizando análise TF-IDF para {len(all_texts_for_analysis_list)} páginas combinadas.")
+        try:
             tf_idf_scores_array_combined, tfidf_vectors_combined = get_tfidf_scores(all_texts_for_analysis_list)
-            
         except Exception as e:
-            logger.error(f"Erro durante análise combinada de similaridade/TF-IDF: {e}", exc_info=True)
+            logger.error(f"Erro durante análise combinada de TF-IDF: {e}", exc_info=True)
             raise
-            # Pode optar por continuar sem esses dados ou retornar erro.
-            # Por ora, os scores/semelhantes podem ficar zerados/vazios.
 
         logger.info(f"Análise em lote concluída. Total de páginas processadas globalmente: {len(all_texts_for_analysis_list)}")
-        return embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined
+        return tfidf_vectors_combined, tf_idf_scores_array_combined
 
     #@timing_decorator()
     def analyze_pdf_documents(self, pdf_paths_ordered: List[str],
                               clean_spaces=True, lowercase=False,
-                              model_embedding: str = 'all-MiniLM-L6-v2', ready_embeddings: np_array = None, preprocess_text_advanced: bool = False) -> Dict[str, Dict[str, Any]]:
+                              preprocess_text_advanced: bool = False) -> Dict[str, Dict[str, Any]]:
 
         processed_files_metadata, all_indices_in_batch, all_texts_for_storage_dict, all_texts_for_analysis_list = self.extract_texts_and_preprocess_files(
                                                                                                                         pdf_paths_ordered, clean_spaces, lowercase)
         if not processed_files_metadata:
             logger.warning("Nenhum arquivo PDF produziu dados na fase de extração.")
             return {}
-    
-        combined_processed_page_data, all_global_page_keys_ordered = self.build_combined_page_data(processed_files_metadata, 
+
+        combined_processed_page_data, all_global_page_keys_ordered = self.build_combined_page_data(processed_files_metadata,
                                                                             all_indices_in_batch, all_texts_for_storage_dict)
 
         if not all_texts_for_storage_dict or not all_texts_for_analysis_list:
             logger.warning("Nenhum texto para análise combinado de todos os arquivos. Pulando análise de similaridade e relevância.")
             return combined_processed_page_data
-        
-        embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined = self.get_similarity_and_tfidf_score_docs(
-                                                                    all_texts_for_analysis_list, model_embedding, ready_embeddings, preprocess_text_advanced)
 
-        return combined_processed_page_data, all_global_page_keys_ordered, embedding_vectors_combined, tfidf_vectors_combined, tf_idf_scores_array_combined
+        tfidf_vectors_combined, tf_idf_scores_array_combined = self.get_similarity_and_tfidf_score_docs(
+                                                                    all_texts_for_analysis_list, preprocess_text_advanced)
+
+        return combined_processed_page_data, all_global_page_keys_ordered, tfidf_vectors_combined, tf_idf_scores_array_combined
 
     def analyze_pre_extracted_texts(
         self,

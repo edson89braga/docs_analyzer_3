@@ -42,6 +42,9 @@ def preload_heavy_modules():
         from SOURCE.core import prompts, pdf_processor, ai_orchestrator, doc_generator, chat_llm_orchestrator
         from SOURCE.flet_ui.views import nc_analyze_view, chat_view
         from SOURCE import app_cache
+
+        pdf_processor.get_ocr_engine()  # Pré-carrega os modelos ONNX do OCR (evita 1ª chamada lenta em produção)
+        
         app_cache.heavy_imports_loading_event.set()
         logger.info("Módulos pré-carregados com sucesso.")
     except Exception as e:

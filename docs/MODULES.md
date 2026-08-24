@@ -1,6 +1,20 @@
 
 > Data de atualização das informações abaixo: 20/09/2025
 
+> **Adendo 24/08/2026 — ocerização automática e fim da `ml_engine`.** A `ml_engine` (FastAPI +
+> PyTorch, embeddings `all-MiniLM-L6-v2`) e a opção `text-embedding-3-small` (OpenAI) foram
+> **removidas**: `vectorization_model` deixou de existir como configuração — TF-IDF (`sklearn`) é
+> agora o único modo de seleção de páginas. `ml_client.py`/`engine_manager.py` foram deletados;
+> `ai_orchestrator.get_embeddings_from_api`/`calc_costs_embedding_process` e as chaves de sessão
+> `KEY_SESSION_MODEL_EMBEDDINGS_LIST`/`KEY_SESSION_TOKENS_EMBEDDINGS` também. Em troca, páginas
+> marcadas como ininteligíveis passam por **OCR automático** (RapidOCR, `pdf_processor.py` →
+> `apply_ocr_to_unintelligible_pages()`) antes da etapa de TF-IDF, com diálogo de progresso
+> cancelável na UI (`show_cancelable_progress_dialog`, `components.py`) e toggle
+> `auto_ocr_enabled` no drawer de configurações (substituiu o dropdown de vetorização). Distribuição
+> desktop (PyInstaller) descontinuada — só a versão hospedada segue mantida. Detalhes, parâmetros do
+> engine (versão/idioma fixados), bootstrap dos modelos ONNX no Docker (sem download em runtime) e
+> limitações conhecidas em [`NOTES_ocr.md`](../NOTES_ocr.md).
+
 > **Adendo 20/08/2026 — métricas e painel administrativo.** As métricas de chat, que eram
 > acumuladas no mapa `requests` do documento de sessão (`user_metrics/{uid}/chat_sessions/{id}`) e
 > nunca sincronizadas pelo painel, passaram a ser emitidas como evento `chat_request_completed` na

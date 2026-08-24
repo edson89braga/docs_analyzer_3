@@ -4,6 +4,29 @@
 
 ---
 
+## ⚠️ Adendo de atualização (24/08/2026)
+
+> O restante deste README descreve a arquitetura de uma **refatoração apartada** (repositório/branch
+> separado), não o código deste repositório. Este adendo,
+> ao contrário, documenta uma mudança real já aplicada **neste** repositório (MVP em produção):
+
+- **Distribuição desktop descontinuada.** Não são mais gerados/distribuídos executáveis Windows
+  (PyInstaller) do ÓPERA para usuários finais. **Somente a versão hospedada** (Docker, VM Linux da
+  PF, acesso via navegador) segue mantida e recebendo atualizações.
+- **Ocerização (OCR) automática.** Páginas de PDF marcadas como ininteligíveis (tipicamente
+  digitalizadas sem camada de texto) agora passam automaticamente por OCR (RapidOCR) antes de serem
+  descartadas, com progresso página a página exibido na UI e opção de cancelar a etapa. Configurável
+  (liga/desliga) no drawer de configurações de análise.
+- **Fim da `ml_engine` e dos embeddings semânticos/OpenAI para seleção de páginas.** A seleção de
+  páginas relevantes usa exclusivamente **TF-IDF** agora — o serviço separado de embeddings
+  (`ml_engine`, FastAPI + PyTorch) e a opção `text-embedding-3-small` (OpenAI) foram removidos por
+  não trazerem ganho de qualidade que justificasse o custo/complexidade extra.
+
+Detalhes técnicos, decisões e limitações conhecidas: [`NOTES_ocr.md`](NOTES_ocr.md) e
+[`docs/MODULES.md`](docs/MODULES.md).
+
+---
+
 ## Contexto
 
 Este projeto é uma reformulação completa de um sistema legado que operava sem LangChain e expunha uma interface MVP em [Flet](https://flet.dev). A reescrita abandona a interface desktop e refoca o sistema como um núcleo de processamento headless, projetado para futura exposição via API REST (FastAPI) e interface React.

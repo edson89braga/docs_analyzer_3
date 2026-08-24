@@ -19,12 +19,12 @@ from SOURCE.flet_ui.components.components import (
     show_loading_overlay, hide_loading_overlay,
     show_snackbar, CompactKeyValueTable,
     safe_control_update, safe_page_update,
+    show_cancelable_progress_dialog, close_progress_dialog,
 )
 # Adiciona import do novo orquestrador e settings
 from SOURCE.core.chat_llm_orchestrator import ChatLLMOrchestrator
 import SOURCE.core.ai_orchestrator as ai_orchestrator
 from SOURCE.settings import (FALLBACK_ANALYSIS_SETTINGS, KEY_SESSION_CHAT_SETTINGS,
-                            KEY_SESSION_MODEL_EMBEDDINGS_LIST, KEY_SESSION_TOKENS_EMBEDDINGS,
                             LLM_PF_CHAT_HISTORY_RESERVE_TOKENS)
 from SOURCE.settings import (UPLOAD_TEMP_DIR, cotacao_dolar_to_real,
                           KEY_SESSION_LOADED_LLM_PROVIDERS, DEFAULT_LLM_PROVIDER,
@@ -1053,6 +1053,59 @@ class ChatViewContent(ft.Column):
         show_loading_overlay(self.page, "Otimizando páginas relevantes...")
         threading.Thread(target=context_wrap(self._preprocess_documents, raw_pages_text), daemon=True).start()
 
+    def _run_auto_ocr_step(
+        self,
+        page: ft.Page,
+        analyzer,
+        processed_data: Dict[str, Dict[str, Any]],
+        ordered_keys: List[str],
+        all_texts_list: List[str],
+    ) -> List[str]:
+        """
+        Executa a etapa de OCR automático (RapidOCR) sobre as páginas ininteligíveis do lote,
+        exibindo um diálogo de progresso página a página com botão de cancelamento. Mesma lógica
+        de nc_analyze_view._run_auto_ocr_step, adaptada à captura local de `page` desta view.
+
+        Args:
+            page (ft.Page): Referência de página capturada localmente na thread.
+            analyzer (PDFDocumentAnalyzer): Instância usada para a extração/análise deste lote.
+            processed_data (Dict[str, Dict[str, Any]]): Dados por página, mutados in-place nas
+                páginas recuperadas via OCR.
+            ordered_keys (List[str]): Chaves de página na ordem do lote.
+            all_texts_list (List[str]): Textos por página (mesma ordem), mutados in-place.
+
+        Returns:
+            List[str]: Chaves globais das páginas recuperadas via OCR.
+        """
+        pending_count = sum(1 for k in ordered_keys if not processed_data[k]['inteligible'])
+        if not pending_count:
+            return []
+
+        ocr_cancel_event = threading.Event()
+        dialog_ref: Dict[str, Any] = {"dialog": None, "update": None}
+
+        def _ocr_progress(current: int, total: int, file_name: str, page_num: int):
+            message = f"Página {current}/{total} — {file_name}, pág. {page_num}"
+            def _update_ui():
+                if dialog_ref["dialog"] is None:
+                    dialog, update_fn = show_cancelable_progress_dialog(
+                        page, "Ocerizando páginas ininteligíveis...", message, ocr_cancel_event.set
+                    )
+                    dialog_ref["dialog"], dialog_ref["update"] = dialog, update_fn
+                else:
+                    dialog_ref["update"](message)
+            page.run_thread(_update_ui)
+
+        recovered_keys, _still_bad_keys = analyzer.apply_ocr_to_unintelligible_pages(
+            processed_data, ordered_keys, all_texts_list,
+            progress_callback=_ocr_progress, cancel_check=ocr_cancel_event.is_set,
+        )
+
+        if dialog_ref["dialog"] is not None:
+            page.run_thread(close_progress_dialog, page, dialog_ref["dialog"])
+
+        return recovered_keys
+
     def _preprocess_documents(self, pre_extracted_texts):
         """
         Usa o PDFDocumentAnalyzer para extrair e consolidar o texto dos arquivos.
@@ -1074,7 +1127,6 @@ class ChatViewContent(ft.Column):
             return
 
         try:
-            import requests
             # Usa os textos pré-extraídos
             files_info = page.session.get(KEY_SESSION_CHAT_FILES) or []
             pdf_paths_ordered = [f['path_or_message'] for f in files_info]
@@ -1082,66 +1134,30 @@ class ChatViewContent(ft.Column):
             settings = self._get_current_analysis_settings()
             # pdf_extractor = # Utiliza o padrão; assim como mode_main_filter e mode_filter_similar
             provider = settings.get("llm_provider", FALLBACK_ANALYSIS_SETTINGS["llm_provider"])
-            vectorization_model = settings.get("vectorization_model", FALLBACK_ANALYSIS_SETTINGS["vectorization_model"])
+            auto_ocr_enabled = settings.get("auto_ocr_enabled", FALLBACK_ANALYSIS_SETTINGS["auto_ocr_enabled"])
             similarity_threshold = settings.get("similarity_threshold", FALLBACK_ANALYSIS_SETTINGS["similarity_threshold"])
 
             # Reutiliza a lógica de pré-processamento do nc_analyzer
             from SOURCE.core.pdf_processor import PDFDocumentAnalyzer
             analyzer = PDFDocumentAnalyzer()
-            
+
             start_time = perf_counter()
 
             # Pipeline de análise de PDF
-            # processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores = analyzer.analyze_pdf_documents(pdf_paths)
             processed_data, ordered_keys, all_texts_list = analyzer.analyze_pre_extracted_texts(pre_extracted_texts, pdf_paths_ordered)
 
             if not processed_data:
                 raise ValueError("Nenhum texto foi extraído dos documentos.")
 
-            # --- embedding proccess ---
-            ready_embeddings, tokens_embeddings = None, None
-            calculated_embedding_cost_usd = 0
-            if vectorization_model == "text-embedding-3-small":
+            ocr_recovered_keys: List[str] = []
+            if auto_ocr_enabled:
+                ocr_recovered_keys = self._run_auto_ocr_step(page, analyzer, processed_data, ordered_keys, all_texts_list)
 
-                decrypted_api_key = page.session.get(f"decrypted_api_key_{provider}")
-                if decrypted_api_key:
-                    logger.debug(f"Chave API descriptografada para '{provider}' obtida da sessão.")
-                else:
-                    error_msg = "Chave API não configurada. Por favor, configure-a no menu 'Provedores LLM'."
-                    logger.error(error_msg)
-                    page.run_thread(hide_loading_overlay, page)
-                    page.run_thread(show_snackbar, page, error_msg, color=theme.COLOR_ERROR)
-                    return # Aborta a thread
-                
-                loaded_embeddings_providers = page.session.get(KEY_SESSION_MODEL_EMBEDDINGS_LIST)
-
-                ready_embeddings, tokens_embeddings, calculated_embedding_cost_usd = ai_orchestrator.get_embeddings_from_api(
-                                                                                     all_texts_list, vectorization_model, decrypted_api_key, loaded_embeddings_providers)
-
-            elif vectorization_model == "all-MiniLM-L6-v2":
-                from SOURCE.services.ml_client import get_embeddings_from_engine
-                logger.info("Requisitando get_embeddings_from_engine ...")
-                ready_embeddings = get_embeddings_from_engine(all_texts_list)
-                logger.info("Requisição concluída.")
-            
-            else:
-                logger.info("Chat_view: Fallback com model_embedding = tfidf_vectorizer")
-                
-            emb_vectors, tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list, model_embedding=vectorization_model, ready_embeddings=ready_embeddings)
-            
-             
-            if tokens_embeddings:
-                page.session.set(KEY_SESSION_TOKENS_EMBEDDINGS, (tokens_embeddings, vectorization_model))
-                logger.debug(f"Tokens de embedding ({tokens_embeddings}) salvos na sessão.")
-            else:
-                if page.session.contains_key(KEY_SESSION_TOKENS_EMBEDDINGS):
-                    page.session.remove(KEY_SESSION_TOKENS_EMBEDDINGS)
-                    logger.debug("Tokens de embedding removidos da sessão (não retornados pela análise).")
-
-            # --- ----       
+            tfidf_vectors, tfidf_scores = analyzer.get_similarity_and_tfidf_score_docs(all_texts_list)
 
             relevant_indices, unintelligible_indices, count_similars = analyzer.filter_and_classify_pages(
-                processed_data, ordered_keys, emb_vectors, tfidf_vectors, tfidf_scores, similarity_threshold=similarity_threshold
+                processed_data, ordered_keys, tfidf_vectors_combined=tfidf_vectors, tf_idf_scores_array_combined=tfidf_scores,
+                similarity_threshold=similarity_threshold
             )
             
             # O pdf_processor conta as páginas em unidades de tiktoken, mas a janela do modelo é
@@ -1191,17 +1207,19 @@ class ChatViewContent(ft.Column):
                 "total_tokens_before_filter": ai_orchestrator.scale_tokens_to_real(tokens_antes_filtro, drift_ratio),
                 "relevant_pages_global_keys_formatted": analyzer.format_global_keys_for_display(relevant_indices),
                 "count_selected_relevant": len(relevant_indices),
+                "ocr_pages_global_keys_formatted": analyzer.format_global_keys_for_display(ocr_recovered_keys),
+                "count_ocr_applied": len(ocr_recovered_keys),
+                "auto_ocr_enabled": auto_ocr_enabled,
                 "unintelligible_pages_global_keys_formatted": analyzer.format_global_keys_for_display(unintelligible_indices),
                 "count_discarded_unintelligible": len(unintelligible_indices),
-                "count_discarded_similarity": count_similars, 
+                "count_discarded_similarity": count_similars,
                 "total_tokens_before_truncation": ai_orchestrator.scale_tokens_to_real(tokens_antes_trunc, drift_ratio),
                 "final_pages_global_keys_formatted": analyzer.format_global_keys_for_display(pages_agg_indices),
                 "count_selected_final": len(pages_agg_indices),
                 "final_aggregated_tokens": ai_orchestrator.scale_tokens_to_real(final_tokens, drift_ratio),
                 "supressed_tokens_percentage": perc_supressed,
                 "processing_time": format_seconds_to_min_sec(total_processing_time),
-                "calculated_embedding_cost_usd": calculated_embedding_cost_usd
-            } 
+            }
 
             page.session.set(KEY_SESSION_CHAT_PROCESSING_METADATA, processing_metadata)
             page.session.set(KEY_SESSION_SHARED_PROCESSING_METADATA, processing_metadata)
@@ -1224,16 +1242,6 @@ class ChatViewContent(ft.Column):
                 show_snackbar(page, f"Conteúdo otimizado (filtrado) a ser utilizado no Chat.", color=theme.COLOR_SUCCESS)     
 
             page.run_thread(update_ui_after_processing)
-
-        except requests.exceptions.ConnectionError as conn_err:
-            logger.warning(f"Erro de conexão ao tentar se comunicar com o motor de ML: {conn_err}")
-            def update_ui_on_conn_error():
-                hide_loading_overlay(page)
-                msg_amigavel = ("Não foi possível conectar ao motor de Vetorização. "
-                                "Ele pode ainda estar inicializando em segundo plano. "
-                                "Por favor, aguarde alguns instantes e tente novamente.")
-                show_snackbar(page, msg_amigavel, color=theme.COLOR_WARNING, duration=8000)
-            page.run_thread(update_ui_on_conn_error)
 
         except Exception as e:
             logger.error(f"Erro ao pré-processar documentos para o chat: {e}", exc_info=True)
@@ -1339,16 +1347,15 @@ class ChatViewContent(ft.Column):
             "total_pages_processed":                "Páginas totais Processadas",
             "relevant_pages_global_keys_formatted": "Páginas Relevantes consideradas",
             "count_discarded_similarity":           "Páginas Irrelevantes por Similaridade",
+            "ocr_pages_global_keys_formatted":      "Páginas Ocerizadas Automaticamente",
             "unintelligible_pages_global_keys_formatted":  "Páginas Descartadas (Ininteligíveis)",
             "total_tokens_before_truncation":       "Tokens totais das Páginas Relevantes",
             "final_pages_global_keys_formatted":    "Páginas Selecionadas até limite de tokens",
             "final_aggregated_tokens":              "Tokens totais das Páginas Selecionadas",
             "supressed_tokens_percentage":          "Percentual de Tokens Suprimidos",
             "processing_time":                "Tempo de processamento",
-            "calculated_embedding_cost_usd":  "Custos de Embeddings",
         }
 
-        calculated_embedding_cost_usd = metadata_to_display.get("calculated_embedding_cost_usd")
         data_rows = []
         for key, label_text in labels.items():
             if key in metadata_to_display:
@@ -1357,9 +1364,9 @@ class ChatViewContent(ft.Column):
 
                 if key == "final_pages_global_keys_formatted" and value == metadata_to_display.get("relevant_pages_global_keys_formatted"):
                     continue # Quando não houver supressão de páginas por limites de token
-                
-                if key == "calculated_embedding_cost_usd" and not calculated_embedding_cost_usd:
-                    calculated_embedding_cost_usd = 0
+
+                if key == "ocr_pages_global_keys_formatted" and not metadata_to_display.get("count_ocr_applied"):
+                    continue # Não exibe a linha quando nenhuma página precisou de OCR
 
                 # Lógica de formatação mesclada
                 if key == "total_pages_processed":
@@ -1371,42 +1378,52 @@ class ChatViewContent(ft.Column):
                     display_value = f"{value:.2f}%" if value > 0 else "0.00%"
                 elif key == "relevant_pages_global_keys_formatted" and metadata_to_display.get("count_selected_relevant") is not None:
                     display_value = f"{metadata_to_display['count_selected_relevant']} : {display_value}"
+                elif key == "ocr_pages_global_keys_formatted" and value is not None:
+                    total_value = metadata_to_display.get("count_ocr_applied")
+                    display_value = f"{total_value} : {display_value}"
                 elif key == "unintelligible_pages_global_keys_formatted" and value is not None:
                     total_value = metadata_to_display.get("count_discarded_unintelligible")
-                    display_value = f"{total_value} : {display_value}"                    
+                    display_value = f"{total_value} : {display_value}"
                 elif key == "final_pages_global_keys_formatted" and metadata_to_display.get("count_selected_final") is not None:
                     if value != metadata_to_display.get("relevant_pages_global_keys_formatted"):
                         display_value = f"{metadata_to_display['count_selected_final']} : {display_value}"
                     else:
                         continue # Não mostrar se for igual às páginas relevantes
-                elif key == "calculated_embedding_cost_usd":
-                    if not calculated_embedding_cost_usd:
-                        continue
-                    cost_embeddings_usd_str = f"U$ {calculated_embedding_cost_usd:.4f}"
-                    cost_embeddings_brl_str = f"R$ {(calculated_embedding_cost_usd * cotacao_dolar_to_real):.4f}"
-                    display_value = f"{cost_embeddings_usd_str} : {cost_embeddings_brl_str}"                
-                
-                # Não exibir campos irrelevantes ou com valor zero/vazio
-                # if "count_" in key or value is None or value == 0 or value == "N/A" or value == "0.00%":
-                #    continue
 
                 data_rows.append((f"{label_text}:", display_value))
 
         if data_rows:
             metadata_table = CompactKeyValueTable(
                 data=data_rows,
-                key_col_width=290,  
-                value_col_width=None, 
-                row_spacing=4, col_spacing=8,      
-                default_text_size=14                
+                key_col_width=290,
+                value_col_width=None,
+                row_spacing=4, col_spacing=8,
+                default_text_size=14
             )
-            
+
             final_metadata_content = ft.Column([
                 ft.Container(height=5),
                 ft.Container(ft.Text("Dados do Processamento:", weight=ft.FontWeight.BOLD, size=14), padding=ft.padding.only(left=20)),
                 ft.Container(metadata_table, padding=ft.padding.only(left=30, top=10, bottom=10)),
             ])
-            
+
+            if metadata_to_display.get("count_discarded_unintelligible", 0) > 0:
+                warning_text = (
+                    "Páginas ininteligíveis mesmo após tentativa automática de OCR."
+                    if metadata_to_display.get("auto_ocr_enabled")
+                    else "Páginas ininteligíveis detectadas. Ative a ocerização automática nas "
+                         "configurações ou trate-as manualmente."
+                )
+                final_metadata_content.controls.append(
+                    ft.Container(
+                        ft.Row([
+                            ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color=theme.COLOR_WARNING),
+                            ft.Text(warning_text, color=theme.COLOR_WARNING, weight=ft.FontWeight.BOLD)
+                        ], spacing=5, alignment=ft.MainAxisAlignment.START),
+                        padding=ft.padding.only(top=10, left=20, bottom=10)
+                    )
+                )
+
             self.file_list_manager.update_metadata_display(final_metadata_content)
         else:
             self.file_list_manager.update_metadata_display(None)

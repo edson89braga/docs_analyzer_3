@@ -18,9 +18,7 @@ from ..settings import (APP_TITLE, APP_VERSION, APP_DEFAULT_SETTINGS_COLLECTION,
                         KEY_SESSION_CLOUD_CHAT_DEFAULTS,
                         FALLBACK_ANALYSIS_SETTINGS, LLM_PROVIDERS_CONFIG_COLLECTION,
                         LLM_PROVIDERS_DEFAULT_DOC_ID, KEY_SESSION_LOADED_LLM_PROVIDERS,
-                        LLM_EMBEDDINGS_CONFIG_COLLECTION, LLM_EMBEDDINGS_DEFAULT_DOC_ID,
-                        KEY_SESSION_NC_ANALYZE_SETTINGS, KEY_SESSION_CHAT_SETTINGS,
-                        KEY_SESSION_MODEL_EMBEDDINGS_LIST)
+                        KEY_SESSION_NC_ANALYZE_SETTINGS, KEY_SESSION_CHAT_SETTINGS)
 
 from .layout import show_snackbar, create_app_bar, create_navigation_rail, handle_logout
 #from .components import ...
@@ -57,7 +55,6 @@ def load_default_analysis_settings(page: ft.Page):
     if not user_token or not user_id:
         logger.warning("Token/ID de usuário não encontrado. Usando fallbacks locais para configurações.")
         page.session.set(KEY_SESSION_LOADED_LLM_PROVIDERS, [])
-        page.session.set(KEY_SESSION_MODEL_EMBEDDINGS_LIST, [])
         page.session.set(KEY_SESSION_CLOUD_ANALYSIS_DEFAULTS, FALLBACK_ANALYSIS_SETTINGS.copy())
         page.session.set(KEY_SESSION_NC_ANALYZE_SETTINGS, FALLBACK_ANALYSIS_SETTINGS.copy())
         chat_fallback_settings = FALLBACK_ANALYSIS_SETTINGS.copy()
@@ -68,7 +65,7 @@ def load_default_analysis_settings(page: ft.Page):
 
     # --- Carregamento de dados globais (Provedores, Custos, Padrões da Nuvem) ---
     # Esta parte é executada uma vez para popular a sessão com dados de referência.
-    _load_global_providers_and_costs(page, user_token)
+    _load_global_llm_providers(page, user_token)
 
     # Carrega os defaults base para nc_analyze
     nc_analyze_defaults = _load_specific_cloud_defaults(
@@ -105,8 +102,8 @@ def load_default_analysis_settings(page: ft.Page):
         page.session.set(KEY_SESSION_CHAT_SETTINGS, chat_defaults.copy())
         logger.info("Configurações para 'Chat com Documentos' definidas a partir dos padrões da nuvem (não encontradas localmente).")
 
-def _load_global_providers_and_costs(page: ft.Page, user_token: str):
-    """Carrega a lista de provedores LLM e custos de embedding do Firestore."""
+def _load_global_llm_providers(page: ft.Page, user_token: str):
+    """Carrega a lista de provedores LLM do Firestore."""
     # Carregar Lista de Provedores LLM
     loaded_providers_list = []
     providers_doc_path = f"{LLM_PROVIDERS_CONFIG_COLLECTION}/{LLM_PROVIDERS_DEFAULT_DOC_ID}"
@@ -120,28 +117,6 @@ def _load_global_providers_and_costs(page: ft.Page, user_token: str):
     except Exception as e:
         logger.error(f"Exceção ao carregar provedores LLM: {e}", exc_info=True)
     page.session.set(KEY_SESSION_LOADED_LLM_PROVIDERS, loaded_providers_list)
-
-    # Carregar Custos de Modelos de Embedding
-    loaded_embeddings_list = []
-    embeddings_doc_path = f"{LLM_EMBEDDINGS_CONFIG_COLLECTION}/{LLM_EMBEDDINGS_DEFAULT_DOC_ID}"
-    try:
-        response = firestore_client._make_firestore_request("GET", user_token, embeddings_doc_path)
-        if response.status_code == 200:
-            data = response.json()
-            values = data.get("fields", {}).get("all_models", {}).get("arrayValue", {}).get("values", [])
-            for v in values:
-                if "mapValue" in v:
-                    embedding_dict = _from_firestore_value(v)
-                    if isinstance(embedding_dict, dict) and "name" in embedding_dict and "cost_per_million" in embedding_dict:
-                        try:
-                            embedding_dict["cost_per_million"] = float(embedding_dict["cost_per_million"])
-                            loaded_embeddings_list.append(embedding_dict)
-                        except (ValueError, TypeError):
-                            pass # Log warning se necessário
-            logger.info(f"{len(loaded_embeddings_list)} custos de embedding carregados.")
-    except Exception as e:
-        logger.error(f"Exceção ao carregar custos de embedding: {e}", exc_info=True)
-    page.session.set(KEY_SESSION_MODEL_EMBEDDINGS_LIST, loaded_embeddings_list)
 
 def _load_specific_cloud_defaults(page: ft.Page, user_token: str, doc_id: str) -> dict:
     """Carrega um documento de configurações específico do Firestore, com fallback local."""

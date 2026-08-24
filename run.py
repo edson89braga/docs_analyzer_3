@@ -252,23 +252,13 @@ def load_to_utils():
     logger.info("[DEBUG] Start func.: load_to_utils")
 
     import unicodedata  # Não deletar; serve para antecipar importações
-    import pdfplumber, fitz # 
+    import pdfplumber, fitz #
     from unidecode import unidecode
-
-    # -> SentenceTransformer foi apartado para ml_engine.exe e será servido com FastAPI
-    # from sentence_transformers import SentenceTransformer
-    # try:
-    #     model_name = 'all-MiniLM-L6-v2'
-    #     model_local_path = os.path.join(ASSETS_DIR, 'models', model_name)
-    #     logger.info(f"Pré-carregando modelo SentenceTransformer de: {model_local_path}")
-    #     app_cache.sentence_transformer_model = SentenceTransformer(model_local_path) # device='cpu'
-    #     logger.info("Modelo SentenceTransformer pré-carregado e disponível globalmente.")
-    # except Exception as e:
-    #     logger.critical(f"FALHA CRÍTICA ao pré-carregar o modelo SentenceTransformer: {e}", exc_info=True)
-    #     # A aplicação pode continuar, mas a funcionalidade de vetorização falhará.
-    # finally:
-    #     # CRUCIAL: Sinaliza que o processo de carregamento (com sucesso ou falha) terminou.
-    #     app_cache.model_loading_event.set()
+    from SOURCE.core.pdf_processor import get_ocr_engine
+    try:
+        get_ocr_engine()  # Pré-carrega os modelos ONNX do OCR (evita 1ª chamada lenta)
+    except Exception as e:
+        logger.warning(f"Pré-carregamento do engine de OCR falhou (será tentado novamente sob demanda): {e}")
 
     execution_time_l = perf_counter() - start_time_l
     logger.info(f"[DEBUG] Finish func.: load_to_utils em {execution_time_l:.4f}s")
@@ -288,32 +278,20 @@ import flet as ft
 from SOURCE.flet_ui.app import main
 from SOURCE.flet_ui.views.others_view import create_session_taken_over_view
 from SOURCE.services.update_manager import UpdateStatus, check_for_component_update
-from SOURCE.settings import APP_VERSION, ML_ENGINE_VERSION
+from SOURCE.settings import APP_VERSION
 
 # --- Variáveis globais para armazenar os status das verificações ---
 _APP_UPDATE_STATUS: Optional[UpdateStatus] = None
-_ENGINE_UPDATE_STATUS: Optional[UpdateStatus] = None
 
 # Verifica se este script está sendo executado diretamente
 if __name__ == "__main__":
-    
+
     initialize_app()
-    from time import sleep
-    from SOURCE.settings import get_resource_path
-    from SOURCE.services.engine_manager import MLEngineManager
 
-    engine_executable_path = get_resource_path('ml_engine/engine.exe')
-    ml_engine_manager = MLEngineManager(engine_path=engine_executable_path)
-
-    if getattr(sys, 'frozen', False): 
+    if getattr(sys, 'frozen', False):
     # --- Verificação de Atualizações (executa antes de tudo) ---
         logger.info("Verificando atualização da aplicação principal...")
         _APP_UPDATE_STATUS = check_for_component_update("app", APP_VERSION)
-
-        # Só verifica o motor de ML se a aplicação principal não precisar ser atualizada
-        if not _APP_UPDATE_STATUS.update_available:
-            logger.info("Verificando atualização do motor de ML...")
-            _ENGINE_UPDATE_STATUS = check_for_component_update("ml_engine", ML_ENGINE_VERSION)
 
     # Cleanups movido para função on_disconnect:
     # register_temp_files_cleanup(UPLOAD_TEMP_DIR)
@@ -329,10 +307,6 @@ if __name__ == "__main__":
         """Função que de fato encerra o processo do servidor."""
         logger.info(f"Janela de tolerância de {SHUTDOWN_GRACE_PERIOD}s expirou. Desligando o servidor.")
 
-        # --- Encerramento do Motor de ML ---
-        # Chama o método stop() explicitamente antes de finalizar a aplicação principal.
-        ml_engine_manager.stop()
-
         # Executa a limpeza da sessão Flet que foi capturada.
         if cleanup_func:
             cleanup_func(None)
@@ -342,11 +316,6 @@ if __name__ == "__main__":
     def start_main_app_flow(page: ft.Page):
         """Inicia a lógica principal da aplicação Flet após a verificação de atualização."""
         global _ACTIVE_SESSION_ID, _SHUTDOWN_TIMER
-
-        # --- Gerenciamento do Motor de ML (Vetorização) (em background) ---
-        # Inicia o motor de ML em uma thread separada para não bloquear a UI do Flet
-        ml_engine_thread = threading.Thread(target=ml_engine_manager.start, daemon=True)
-        ml_engine_thread.start()
 
         # Primeiro, chama o main original para que ele configure page.on_disconnect
         original_main_function(page)
@@ -397,24 +366,13 @@ if __name__ == "__main__":
         if _APP_UPDATE_STATUS and _APP_UPDATE_STATUS.update_available:
             update_info_to_process = _APP_UPDATE_STATUS
             component_to_update = "Aplicação Principal"
-        elif _ENGINE_UPDATE_STATUS and _ENGINE_UPDATE_STATUS.update_available:
-            update_info_to_process = _ENGINE_UPDATE_STATUS
-            component_to_update = "Motor de ML"
 
         def start_updater_and_exit(update_status: UpdateStatus, component_name: str):
             """Função executada em thread para iniciar o updater e depois encerrar."""
             logger.info(f"Usuário confirmou a atualização do '{component_name}'. Iniciando o updater...")
 
-            # Garante que o motor de ML seja encerrado antes de tentar atualizar.
-            ml_engine_manager.stop()
-            sleep(1) # Pausa um pouco mais longa para garantir que o motor pare.
-
-            target_dir = None
-            if component_name == "Motor de ML":
-                target_dir = get_resource_path('ml_engine')
-
             # Inicia o updater
-            retorno = run_updater(update_status.update_info, target_dir_override=target_dir)
+            retorno = run_updater(update_status.update_info)
 
             # Tenta fechar a janela do navegador via JavaScript após um delay
             try: page.launch_url("javascript:window.close();")

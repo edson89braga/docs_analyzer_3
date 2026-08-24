@@ -24,6 +24,16 @@ COPY pyproject.toml /app/
 RUN poetry config virtualenvs.create false \
     && poetry install --no-root --no-interaction --no-ansi
 
+# Pré-instala os modelos ONNX do RapidOCR (evita download em runtime na VM, que não tem acesso
+# direto à internet — ver NOTES_ocr.md). Os arquivos vêm de modelos_ocr/ (gitignorado, populado
+# manualmente antes do build) e são copiados para dentro do pacote rapidocr já instalado.
+COPY modelos_ocr/ /tmp/modelos_ocr/
+RUN python -c "import rapidocr, os, shutil; \
+    dest = os.path.join(os.path.dirname(rapidocr.__file__), 'models'); \
+    os.makedirs(dest, exist_ok=True); \
+    [shutil.copy(os.path.join('/tmp/modelos_ocr', f), dest) for f in os.listdir('/tmp/modelos_ocr')]" \
+    && rm -rf /tmp/modelos_ocr
+
 # Copia o código fonte
 COPY . /app/
 

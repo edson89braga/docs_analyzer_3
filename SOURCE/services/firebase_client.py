@@ -617,7 +617,7 @@ class FirebaseClientFirestore:
             logger.error(f"Falha ao salvar métrica (cliente) para Firestore ({full_document_path}): {e}")
             return False
 
-    def save_analysis_metrics(self, user_id, user_token, filenames_uploaded, proc_meta_session, tokens_embeddings_session, llm_meta_session,
+    def save_analysis_metrics(self, user_id, user_token, filenames_uploaded, proc_meta_session, llm_meta_session,
             current_settings, default_settings, llm_response_obj, fields_to_log=[]):
         """
         Coleta os metadados da análise e os envia para registro no Firestore.
@@ -646,13 +646,12 @@ class FirebaseClientFirestore:
                 "count_discarded_unintelligible": proc_meta_session.get("count_discarded_unintelligible"),
                 "count_discarded_similarity": proc_meta_session.get("count_discarded_similarity"),
                 
-                "processing_time": proc_meta_session.get("processing_time")
-            }
+                "processing_time": proc_meta_session.get("processing_time"),
 
-            if tokens_embeddings_session:
-                processing_metadata_to_log["tokens_embeddings_session"] = tokens_embeddings_session[0]
-                processing_metadata_to_log["vectorization_model"] = tokens_embeddings_session[1]      
-                processing_metadata_to_log["calculated_embedding_cost_usd"] = proc_meta_session.get("calculated_embedding_cost_usd")
+                "ocr_pages_global_keys_formatted": proc_meta_session.get("ocr_pages_global_keys_formatted"),
+                "count_ocr_applied": proc_meta_session.get("count_ocr_applied"),
+                "auto_ocr_enabled": proc_meta_session.get("auto_ocr_enabled"),
+            }
 
             processing_metadata_to_log = {k: v for k, v in processing_metadata_to_log.items() if v is not None}
 
