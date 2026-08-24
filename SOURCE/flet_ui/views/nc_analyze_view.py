@@ -147,6 +147,10 @@ class AnalyzePDFViewContent(ft.Column):
         self._is_drawer_open = False
         self._files_processed = False
         self._analysis_requested = False
+        # Guarda de reentrância: True enquanto uma thread de processamento/análise
+        # (disparada por 'Processar Conteúdo' ou 'Solicitar Análise') está em andamento,
+        # para ignorar cliques duplicados no mesmo botão (ver _initiate_analysis_step).
+        self._is_action_in_progress = False
         self._prompt_text_fields: Dict[str, ft.TextField] = {}
 
         # --- Adicionado para visualização do prompt ---
@@ -661,6 +665,13 @@ class AnalyzePDFViewContent(ft.Column):
         """
         logger.info(f"Iniciando etapa de análise: '{step_type}'")
 
+        # 0. Guarda de reentrância: ignora cliques duplicados enquanto uma etapa
+        # anterior (processamento de PDF e/ou análise LLM) ainda está em andamento.
+        if self._is_action_in_progress:
+            show_snackbar(self.page, "Processamento em andamento. Aguarde a conclusão antes de tentar novamente.", theme.COLOR_WARNING)
+            logger.warning(f"Ação '{step_type}' ignorada: outra ação de análise já está em andamento.")
+            return
+
         # 1. Verificar se há arquivos carregados (necessário para todas as etapas)
         ordered_files = self.page.session.get(KEY_SESSION_PDF_FILES_ORDERED)
         if not ordered_files and step_type != "analyze_only": # "analyze_only" pode teoricamente rodar se já processado
@@ -687,8 +698,12 @@ class AnalyzePDFViewContent(ft.Column):
             action_context_name_for_feedback = "Processar Arquivos"
             
             def primary_process_action():
+                # Ativa a guarda de reentrância só agora, quando o pipeline será de fato
+                # disparado (evita travar a flag caso o feedback_workflow_manager cancele
+                # a ação, ex. usuário fecha o diálogo de feedback sem confirmar).
+                self._is_action_in_progress = True
                 # Apenas reseta o estado. A UI será atualizada pelo método de reset.
-                self._reset_processing_and_llm_results() 
+                self._reset_processing_and_llm_results()
                 self.analysis_controller.start_pdf_processing_only(pdf_paths, batch_name)
             
             primary_action_callable = primary_process_action
@@ -707,10 +722,12 @@ class AnalyzePDFViewContent(ft.Column):
                 # A lógica de decidir entre pipeline completo ou só LLM está dentro de proceed_with_llm_analysis
                 # do exemplo anterior, que agora será parte de primary_analyze_action.        
                 aggregated_text = self.user_cache.get(KEY_SESSION_PDF_AGGREGATED_TEXT_INFO)
-                if not aggregated_text: 
+                if not aggregated_text:
                     show_snackbar(self.page, "Não há texto agregado para análise. Verifique o processamento.", theme.COLOR_ERROR)
                     return
-                
+
+                # Ativa a guarda de reentrância só agora (ver comentário em primary_process_action).
+                self._is_action_in_progress = True
                 # Apenas reseta os resultados da LLM.
                 self._reset_llm_results()
                 self.analysis_controller.start_llm_analysis_only(aggregated_text, batch_name, is_reanalysis=is_reanalysis)
@@ -721,6 +738,8 @@ class AnalyzePDFViewContent(ft.Column):
             action_context_name_for_feedback = "Processar e Solicitar Nova Análise"
             
             def primary_full_pipeline_action():
+                # Ativa a guarda de reentrância só agora (ver comentário em primary_process_action).
+                self._is_action_in_progress = True
                 self._reset_processing_and_llm_results()
                 self.analysis_controller.start_full_analysis_pipeline(pdf_paths, batch_name, is_reanalysis=is_reanalysis)
             
@@ -1040,9 +1059,10 @@ class AnalyzePDFViewContent(ft.Column):
         self.gui_controls[CTL_RESTART_BTN].disabled = not files_exist
         
         # Botões de processamento/análise
-        # Desabilitados se já processados/analisados ou se não há arquivos
-        self.gui_controls[CTL_PROCESS_BTN].disabled = not (files_exist and not self._files_processed)
-        self.gui_controls[CTL_ANALYZE_BTN].disabled = not (files_exist)
+        # Desabilitados se já processados/analisados, se não há arquivos, ou se uma
+        # ação de processamento/análise já está em andamento (guarda de reentrância).
+        self.gui_controls[CTL_PROCESS_BTN].disabled = self._is_action_in_progress or not (files_exist and not self._files_processed)
+        self.gui_controls[CTL_ANALYZE_BTN].disabled = self._is_action_in_progress or not (files_exist)
 
         # Botão de Exportar
         self._update_export_button_menu()
@@ -2274,7 +2294,12 @@ class InternalAnalysisController:
         if pdf_extractor == 'PdfPlumber':
             self.pdf_analyzer.extractor = PdfPlumberExtractor()
             logger.debug("Alterando pdf_extractor para PdfPlumber!")
-  
+
+        # Indica se a etapa de análise LLM chegou a ser efetivamente disparada (só ocorre
+        # se todo o processamento de PDF for bem-sucedido). Usado no 'finally' para saber
+        # se a guarda de reentrância (_is_action_in_progress) deve ser liberada aqui ou
+        # deixada para _llm_analysis_thread_func liberar ao final da etapa seguinte.
+        llm_stage_started = False
         try:
             start_time = perf_counter()
             import requests
@@ -2424,6 +2449,7 @@ class InternalAnalysisController:
  
             if analyze_llm_after:
                 self.page.run_thread(self._update_status_callback,  "Etapa 5/5: Requisitando análise da LLM...")
+                llm_stage_started = True
                 self.start_llm_analysis_only(aggregated_info[1], batch_name, from_pipeline=True, is_reanalysis=is_reanalysis) # Passa o texto agregado
                 self.page.run_thread(self._update_status_callback, "", False, True)
             else: # Só processou, não vai para LLM agora
@@ -2450,12 +2476,17 @@ class InternalAnalysisController:
             # Overlay é global da página: escondido antes da checagem de montagem para
             # não ficar preso na tela caso o usuário tenha navegado durante o processamento.
             hide_loading_overlay(self.page)
+            # Libera a guarda de reentrância aqui, exceto quando a etapa de análise LLM foi
+            # de fato disparada em sequência: nesse caso é _llm_analysis_thread_func quem
+            # libera ao final (senão o botão reabilitaria antes da análise LLM terminar).
+            if not analyze_llm_after or not llm_stage_started:
+                self.parent_view._is_action_in_progress = False
             if not self.parent_view._is_mounted or not self.parent_view.page:
                 logger.debug("Finalização de _pdf_processing_thread_func ignorada: view desmontada.")
                 return
             # Garante que, mesmo em erro, os botões sejam reavaliados.
             # Se a análise não prosseguir para a LLM, a atualização da UI já foi feita no try.
-            if not analyze_llm_after:
+            if not analyze_llm_after or not llm_stage_started:
                 self.page.run_thread(self.parent_view._update_button_states)
 
     def _get_valid_user_context(self) -> Optional[Tuple[str, str]]:
@@ -2551,9 +2582,10 @@ class InternalAnalysisController:
             is_reanalysis (bool): Indica se esta é uma reanálise, afetando o comportamento de logging e feedback.
         """
         import SOURCE.core.ai_orchestrator as ai_orchestrator
- 
+
         if not self.parent_view._is_mounted or not self.page:
             logger.debug("_llm_analysis_thread_func abortada: view desmontada.")
+            self.parent_view._is_action_in_progress = False
             return
 
         current_analysis_settings = self._get_current_analysis_settings()
@@ -2587,11 +2619,24 @@ class InternalAnalysisController:
             logger.info("Usando PROMPT ORIGINAL para esta análise.")
             final_prompts_to_use = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL)
 
-        if not final_prompts_to_use:        
-            logger.error("Prompts ausentes para a thread de análise!")
+        if not final_prompts_to_use:
+            # A sessão pode ter perdido os prompts (ex. cache expirado após uma cascata de
+            # timeouts de rede). Antes de desistir, tenta reconstruí-los reaproveitando a
+            # mesma rotina usada na criação da view (load_prompts_from_firestore).
+            logger.warning("Prompts ausentes na sessão para a thread de análise. Tentando reconstruir via load_prompts_from_firestore...")
+            try:
+                load_prompts_from_firestore(self.page)
+                self.user_cache = get_user_cache(self.page)
+                final_prompts_to_use = self.user_cache.get(KEY_SESSION_PROMPTS_FINAL)
+            except Exception as ex_reload_prompts:
+                logger.error(f"Falha ao reconstruir prompts via load_prompts_from_firestore: {ex_reload_prompts}", exc_info=True)
+
+        if not final_prompts_to_use:
+            logger.error("Prompts ausentes para a thread de análise mesmo após tentativa de reconstrução!")
             self.page.run_thread(self.parent_view._update_gui_from_state)
             self.page.run_thread(self._update_status_callback, f"Erro crítico: Não foi possível carregar os prompts de análise.", True, True)
             hide_loading_overlay(self.page)
+            self.parent_view._is_action_in_progress = False
             return # Aborta a execução da thread
 
         try:
@@ -2684,12 +2729,22 @@ class InternalAnalysisController:
             # tivesse navegado para outra view durante a análise.
             hide_loading_overlay(self.page)
 
+            # Esta função é sempre a etapa terminal do fluxo (chamada diretamente em
+            # 'analyze_only', ou encadeada a partir de _pdf_processing_thread_func em
+            # 'process_and_analyze'): libera a guarda de reentrância incondicionalmente aqui.
+            self.parent_view._is_action_in_progress = False
+
             # Só a partir daqui tocamos em controles da view: se ela já foi desmontada,
             # os controles não têm mais 'uid'/'page' válidos e o Flet lança AssertionError,
             # matando esta thread.
             if not self.parent_view._is_mounted or not self.parent_view.page:
                 logger.debug("Finalização de _llm_analysis_thread_func ignorada: view desmontada.")
                 return
+
+            # Garante a reabilitação dos botões de ação mesmo se a chamada de
+            # _update_gui_from_state feita no try/except acima tiver corrido antes da
+            # liberação da guarda de reentrância acima.
+            self.page.run_thread(self.parent_view._update_button_states)
 
             self.parent_view.file_list_manager.collapse_container()
             self.gui_controls[CTL_LLM_METADATA_PANEL].visible = True
