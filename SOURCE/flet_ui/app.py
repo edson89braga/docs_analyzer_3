@@ -34,6 +34,7 @@ from SOURCE.services.firebase_client import FbManagerAuth, FirebaseClientFiresto
 from SOURCE.services.local_db_manager import LocalDBManager
 from SOURCE.config.provider import is_local_mode
 from SOURCE.logger.logger import LoggerSetup
+from SOURCE.logger.cloud_logger_handler import context_wrap
 
 # --- Rastreamento Global de Conexões ---
 global_active_sessions = set()
@@ -464,6 +465,8 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         global_active_sessions.add(page.session_id)
         logger.info(f"[MONITORIA] Nova sessão. Usuários conectados agora: {len(global_active_sessions)}")
 
+    LoggerSetup.set_session_context(page.session_id)
+
     # --- Limpeza ao Fechar ---
     def on_disconnect(e):
         """
@@ -507,6 +510,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
             pass
         ...
         LoggerSetup.set_cloud_user_context(None, None)
+        LoggerSetup.set_session_context(None)
         logger.debug("Contexto do logger de nuvem limpo ao desconectar.")
 
         if is_local_mode():
@@ -608,20 +612,19 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
 
             if not app_cache.heavy_imports_loading_event.is_set():
                 logger.debug("Iniciando pré-carregamento de módulos pesados em background (modo local).")
-                threading.Thread(target=_preload_heavy_modules_in_background, daemon=True).start()          
-            
-            threading.Thread(target=threaded_load_settings, args=(page,), daemon=True).start()
-            
+                threading.Thread(target=context_wrap(_preload_heavy_modules_in_background), daemon=True).start()
+
+            threading.Thread(target=context_wrap(threaded_load_settings, page), daemon=True).start()
+
             # Inicia thread de renovação de token (isso já é non-blocking)
             if "refresh_thread" not in page.data or not page.data["refresh_thread"].is_alive():
                 stop_event = threading.Event()
                 page.data["refresh_stop_event"] = stop_event
                 page.data["refresh_thread"] = threading.Thread(
-                    target=_proactive_token_refresh_loop,
-                    args=(page, stop_event),
+                    target=context_wrap(_proactive_token_refresh_loop, page, stop_event),
                     daemon=True
                 )
-                page.data["refresh_thread"].start()            
+                page.data["refresh_thread"].start()
             
             # Navega para a home imediatamente após verificar a autenticação
             final_route = "/home"

@@ -11,6 +11,7 @@ from SOURCE.services.firebase_client import FbManagerAuth # Ajuste o caminho se 
 from SOURCE.flet_ui.components.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField, show_confirmation_dialog
 from SOURCE.flet_ui import theme # Para cores de erro, etc.
 from SOURCE.logger.logger import LoggerSetup
+from SOURCE.logger.cloud_logger_handler import context_wrap
 
 import logging
 logger = logging.getLogger(__name__)
@@ -254,11 +255,13 @@ def create_login_view(page: ft.Page) -> ft.View:
                 load_settings_func = page.data.get("load_settings_func")
                 if load_settings_func:
                     logger.info("Disparando carregamento de configurações de usuário em background após login.")
-                    threading.Thread(target=load_settings_func, args=(page,), daemon=True).start()
+                    threading.Thread(target=context_wrap(load_settings_func, page), daemon=True).start()
                 else:
                     logger.error("Função 'load_settings_func' não encontrada em page.data! As configurações do usuário podem não ser carregadas.")
 
-                LoggerSetup.set_cloud_user_context(id_token, user_id)
+                # BUGFIX: parâmetros estavam trocados — a assinatura é (user_id, user_email),
+                # mas era chamada com (id_token, user_id).
+                LoggerSetup.set_cloud_user_context(user_id, user_email_from_auth)
                 # TENTA ADICIONAR CLOUD LOGGING AQUI
                 try:
                     if not LoggerSetup._active_cloud_handler_instance:

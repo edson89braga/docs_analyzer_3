@@ -16,6 +16,7 @@ from enum import Enum
 #from rich import print
 
 from SOURCE import app_cache
+from SOURCE.logger.cloud_logger_handler import context_wrap
 from SOURCE.flet_ui.components.components import (
     show_snackbar, show_loading_overlay, hide_loading_overlay,
     ManagedFilePicker, wrapper_panel_1, CompactKeyValueTable,
@@ -2705,7 +2706,7 @@ class InternalAnalysisController:
             batch_name (str): Nome do lote de arquivos.
         """
         show_loading_overlay(self.page, "Iniciando processamento...")
-        thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, False), daemon=True)
+        thread = threading.Thread(target=context_wrap(self._pdf_processing_thread_func, pdf_paths, batch_name, False), daemon=True)
         thread.start()
 
     def start_llm_analysis_only(self, aggregated_text: str, batch_name: str, from_pipeline:bool = False, is_reanalysis: bool = False):
@@ -2720,7 +2721,7 @@ class InternalAnalysisController:
         if not from_pipeline: # Se chamado diretamente (não pelo pipeline do fast_forward)
             ...
         # A thread _llm_analysis_thread_func já lida com hide_loading_overlay no finally
-        thread = threading.Thread(target=self._llm_analysis_thread_func, args=(aggregated_text, batch_name, is_reanalysis), daemon=True)
+        thread = threading.Thread(target=context_wrap(self._llm_analysis_thread_func, aggregated_text, batch_name, is_reanalysis), daemon=True)
         thread.start()
     
     def start_full_analysis_pipeline(self, pdf_paths: List[str], batch_name: str, is_reanalysis: bool = False):
@@ -2733,7 +2734,7 @@ class InternalAnalysisController:
             is_reanalysis (bool): Indica se esta é uma reanálise.
         """
         show_loading_overlay(self.page, "Iniciando processamento e análise...")
-        thread = threading.Thread(target=self._pdf_processing_thread_func, args=(pdf_paths, batch_name, True, is_reanalysis), daemon=True)
+        thread = threading.Thread(target=context_wrap(self._pdf_processing_thread_func, pdf_paths, batch_name, True, is_reanalysis), daemon=True)
         thread.start()
 
 class InternalExportManager:

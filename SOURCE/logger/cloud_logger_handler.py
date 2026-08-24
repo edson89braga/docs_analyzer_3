@@ -8,7 +8,7 @@ logger.debug(f"{start_time:.4f}s - Iniciando cloud_logger_handler.py")
 
 import atexit, os, re
 from threading import Thread, Lock, Event
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +25,37 @@ PATH_LOGS_DIR = Path(PATH_LOGS_DIR)
 # Variáveis de contexto para manter isolamento entre requisições concorrentes
 user_id_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_id_ctx", default="anonymous_user")
 user_email_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("user_email_ctx", default=None)
+session_id_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("session_id_ctx", default=None)
+
+
+def context_wrap(target: Callable[..., Any], *args: Any, **kwargs: Any) -> Callable[[], Any]:
+    """Captura o contexto atual (contextvars) e retorna um callable que o executa.
+
+    `threading.Thread` não herda contextvars automaticamente da thread que o criou
+    (diferente de `asyncio.Task`). Esta função captura o contexto (session_id_ctx,
+    user_id_ctx, user_email_ctx etc.) no momento em que é chamada — tipicamente na
+    thread "pai" — e retorna um callable que, ao ser executado pela thread filha,
+    roda `target(*args, **kwargs)` dentro desse contexto copiado.
+
+    Args:
+        target: Função a ser executada dentro do contexto capturado.
+        *args: Argumentos posicionais repassados a `target`.
+        **kwargs: Argumentos nomeados repassados a `target`.
+
+    Returns:
+        Callable sem argumentos, pronto para ser usado como `target` de
+        `threading.Thread`.
+
+        Exemplo de uso:
+        threading.Thread(target=context_wrap(minha_funcao, arg1, arg2), daemon=True).start()
+    """
+    ctx = contextvars.copy_context()
+
+    def _run_in_context() -> Any:
+        return ctx.run(target, *args, **kwargs)
+
+    return _run_in_context
+
 
 class LogUploaderStrategy(ABC):
     @abstractmethod

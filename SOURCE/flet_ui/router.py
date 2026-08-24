@@ -11,7 +11,8 @@ import threading
 from typing import Optional, Dict, Callable, Any
 from pathlib import Path
 
-from SOURCE.settings import UPLOAD_TEMP_DIR 
+from SOURCE.settings import UPLOAD_TEMP_DIR
+from SOURCE.logger.cloud_logger_handler import context_wrap
 
 from .theme import COLOR_WARNING, COLOR_ERROR, PADDING_L 
 from .layout import create_app_bar, _find_nav_index_for_route, route_to_base_nav_index, icones_navegacao
@@ -454,7 +455,7 @@ def route_change_content_only(
         # Agenda a atualização da UI na thread principal
         page_ref.run_thread(lambda: _execute_ui_update(_update_ui_with_new_content))
 
-    threading.Thread(target=_load_and_set_view, args=(page, route, nav_token), daemon=True).start()
+    threading.Thread(target=context_wrap(_load_and_set_view, page, route, nav_token), daemon=True).start()
 
 
 execution_time = perf_counter() - start_time

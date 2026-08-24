@@ -9,6 +9,7 @@ from datetime import datetime
 from scipy import optimize
 
 from SOURCE import app_cache
+from SOURCE.logger.cloud_logger_handler import context_wrap
 from SOURCE.flet_ui import theme
 from SOURCE.flet_ui.components.file_list_manager import FileListManager
 from SOURCE.flet_ui.components.settings_drawer import ChatSettingsDrawer
@@ -550,8 +551,7 @@ class ChatViewContent(ft.Column):
 
         # Inicia a thread, passando a referência fraca e o contexto da sessão
         threading.Thread(
-            target=ChatViewContent._handle_ai_response_thread,
-            args=(view_ref, session_id, user_token, user_id, chat_session_id, previous_response_id, instructions, thinking_message_id, document_context, history_for_api, user_text),
+            target=context_wrap(ChatViewContent._handle_ai_response_thread, view_ref, session_id, user_token, user_id, chat_session_id, previous_response_id, instructions, thinking_message_id, document_context, history_for_api, user_text),
             daemon=True
         ).start()
 
@@ -818,8 +818,7 @@ class ChatViewContent(ft.Column):
 
         # Inicia a thread, passando a referência fraca e o contexto da sessão
         threading.Thread(
-            target=ChatViewContent._handle_ai_response_thread,
-            args=(view_ref, session_id, user_token, user_id, chat_session_id, previous_response_id, instructions, thinking_message_id, document_context, history_for_api, user_question),
+            target=context_wrap(ChatViewContent._handle_ai_response_thread, view_ref, session_id, user_token, user_id, chat_session_id, previous_response_id, instructions, thinking_message_id, document_context, history_for_api, user_question),
             daemon=True
         ).start()
     
@@ -1039,7 +1038,7 @@ class ChatViewContent(ft.Column):
         # opto por tornar disabled o botão de processar quando o chat já começou.
 
         show_loading_overlay(self.page, "Extraindo texto dos documentos...")
-        threading.Thread(target=self._extract_raw_context_from_files, args=(files, optimize_too), daemon=True).start()
+        threading.Thread(target=context_wrap(self._extract_raw_context_from_files, files, optimize_too), daemon=True).start()
 
     def _handle_optimize_click(self, e: ft.ControlEvent):
         """Inicia o pré-processamento opcional dos documentos."""
@@ -1052,7 +1051,7 @@ class ChatViewContent(ft.Column):
         # Aqui deve haver o mesmo bloqueio que temos em _handle_process_click.
 
         show_loading_overlay(self.page, "Otimizando páginas relevantes...")
-        threading.Thread(target=self._preprocess_documents, args=(raw_pages_text,), daemon=True).start()
+        threading.Thread(target=context_wrap(self._preprocess_documents, raw_pages_text), daemon=True).start()
 
     def _preprocess_documents(self, pre_extracted_texts):
         """

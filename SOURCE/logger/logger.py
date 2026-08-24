@@ -18,7 +18,7 @@ from rich.logging import RichHandler
 from datetime import datetime, timedelta, timezone as dt_timezone
 from typing import List, Optional, Any, TYPE_CHECKING
 
-from .cloud_logger_handler import CloudLogHandler, AdminLogUploader, user_id_ctx, user_email_ctx
+from .cloud_logger_handler import CloudLogHandler, AdminLogUploader, user_id_ctx, user_email_ctx, session_id_ctx
  
 from SOURCE.settings import (PATH_LOGS_DIR, CLOUD_LOGGER_FOLDER, APP_VERSION)
 
@@ -53,6 +53,22 @@ class ModuleFilter(logging.Filter):
         # record.name contém o nome completo do logger (ex: 'src.flet_ui.views.home_view')
         return record.name.startswith(self.prefixes)
 
+class SessionContextFilter(logging.Filter):
+    """
+    Filtro que injeta `session_id` e `user_id` (uid Firebase) em cada LogRecord,
+    lendo os contextvars correspondentes (propagados manualmente para threads via
+    `cloud_logger_handler.context_wrap`, já que `threading.Thread` não herda
+    contextvars automaticamente).
+
+    Aplicado apenas aos handlers de arquivo (via `_create_file_handler`) — o
+    handler de console permanece sem esses campos.
+    """
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Injeta session_id/user_id no record e sempre permite a passagem do log."""
+        record.session_id = session_id_ctx.get() or "-"
+        record.user_id = user_id_ctx.get() or "-"
+        return True
+
 class LoggerSetup:
     """Classe responsável pela configuração e setup de loggers."""
     
@@ -72,7 +88,9 @@ class LoggerSetup:
                 dt = datetime.fromtimestamp(record.created, tz)
                 return dt.strftime(datefmt or '%Y-%m-%d %H:%M:%S')
         
-        fmt = '%(asctime)s | %(levelname)-8s | %(name)s | %(funcName)s:%(lineno)d | %(message)s' if detailed else '%(message)s'
+        # Formato detalhado (arquivo): inclui session_id/user_id, injetados via SessionContextFilter
+        # (anexado apenas aos handlers de arquivo em _create_file_handler, nunca ao console).
+        fmt = '%(asctime)s | %(levelname)-8s | %(session_id)s | %(user_id)s | %(name)s | %(funcName)s:%(lineno)d | %(message)s' if detailed else '%(message)s'
         return LocalFormatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S')
         
     _instance: Optional[logging.Logger] = None
@@ -95,6 +113,8 @@ class LoggerSetup:
         )
         handler.setLevel(level)
         handler.setFormatter(formatter)
+        # Injeta session_id/user_id em todo handler de arquivo (nunca no console).
+        handler.addFilter(SessionContextFilter())
         return handler
 
     @classmethod
@@ -125,6 +145,11 @@ class LoggerSetup:
         """Define o contexto do usuário (uid + email) para a thread atual."""
         user_id_ctx.set(user_id if user_id else "anonymous_user")
         user_email_ctx.set(user_email)
+
+    @classmethod
+    def set_session_context(cls, session_id: Optional[str]) -> None:
+        """Define o session_id (sessão Flet) para a thread atual, usado no log de arquivo."""
+        session_id_ctx.set(session_id)
 
     @classmethod
     def _setup_temporary_logger(cls, logger_name):
