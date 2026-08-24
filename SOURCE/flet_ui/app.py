@@ -362,7 +362,7 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         dev_mode: Se True, inicia a aplicação em modo de desenvolvimento com dados mockados.
     """
     app_start_time = perf_counter()
-    logger.debug(f"{app_start_time:.4f}s - Função main() iniciada.")
+    logger.debug("Função main() iniciada.")
 
     global _token_refresh_thread_stop_event, _token_refresh_thread_instance
 
