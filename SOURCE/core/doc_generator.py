@@ -8,6 +8,7 @@ start_time = perf_counter()
 logger.debug(f"{start_time:.4f}s - Iniciando doc_generator.py")
 
 import os
+import unicodedata
 from typing import List, Tuple, Any
 from docx import Document
 
@@ -50,9 +51,34 @@ class DocxExporter:
             "destinacao": "Destinação",
             "pessoas_envolvidas": "Pessoas Envolvidas",
             "linha_do_tempo": "Linha do Tempo",
-            "observacoes": "Observações"
+            "observacoes": "Observações",
+            "materia_especial": "Matéria Especial"
         }
         return name_map.get(field_name, field_name.replace("_", " ").title())
+
+    @staticmethod
+    def _normalize_for_comparison(text: str) -> str:
+        """Normaliza texto para comparação de placeholders, removendo acentos/diacríticos
+        e diferenças de maiúsculas/minúsculas.
+
+        Usa decomposição NFKD e descarta os caracteres combinantes (acentos), preservando
+        um caractere normalizado para cada caractere-base original — o que mantém o mesmo
+        comprimento do texto original para os acentos latinos usuais (ex.: "ç", "ã", "é"),
+        permitindo localizar a posição do match no texto original a partir da posição
+        encontrada no texto normalizado.
+
+        Args:
+            text: Texto a ser normalizado.
+
+        Returns:
+            Texto normalizado (sem diacríticos, em minúsculas).
+
+            Exemplo de retorno:
+            "observacoes" (a partir de "Observações")
+        """
+        texto_decomposto = unicodedata.normalize('NFKD', text)
+        sem_diacriticos = ''.join(c for c in texto_decomposto if not unicodedata.combining(c))
+        return sem_diacriticos.lower()
 
     def _format_list_item(self, field_name: str, item: Any) -> str:
         """Formata um item de lista (como PessoaEnvolvida) para texto natural."""
@@ -199,7 +225,8 @@ class DocxExporter:
                 "tipo_documento_origem", "orgao_origem", "uf_origem", "municipio_origem",
                 "tipo_local", "uf_fato", "municipio_fato", "valor_apuracao",
                 "area_atribuicao", "tipificacao_penal", "tipo_a_autuar", "assunto_re", "destinacao",
-                "descricao_geral", "resumo_fato", "pessoas_envolvidas", "linha_do_tempo", "observacoes"
+                "descricao_geral", "resumo_fato", "pessoas_envolvidas", "linha_do_tempo", "observacoes",
+                "materia_especial"
             ]
 
             placeholders_found_in_template = set()
@@ -215,16 +242,24 @@ class DocxExporter:
                     value (Any): O valor a ser inserido no lugar do placeholder.
                 """
                 placeholder = f"<{field_name}>" # Formato do placeholder: <nome_do_campo>
+                # Comparação insensível a acentos/maiúsculas (ex.: "<observacoes>" casa com "<Observações>").
+                # A normalização preserva o comprimento do texto original, então a posição encontrada
+                # no texto normalizado corresponde à mesma posição no texto original.
+                normalized_placeholder = self._normalize_for_comparison(placeholder)
                 placeholder_found = False
                 inline = paragraph.runs
-                
+
                 # Primeira tentativa: substituição direta em runs individuais
                 for line in range(len(inline)):
-                    if inline[line].text != '' and placeholder in inline[line].text:
-                        placeholders_found_in_template.add(placeholder[1:-1])
-                        inline[line].text = inline[line].text.replace(placeholder, str(value))
-                        placeholder_found = True
-                
+                    run_text = inline[line].text
+                    if run_text != '':
+                        idx = self._normalize_for_comparison(run_text).find(normalized_placeholder)
+                        if idx != -1:
+                            placeholders_found_in_template.add(field_name)
+                            end_idx = idx + len(normalized_placeholder)
+                            inline[line].text = run_text[:idx] + str(value) + run_text[end_idx:]
+                            placeholder_found = True
+
                 # Se não encontrou o placeholder em runs individuais
                 if not placeholder_found:
                     # Tenta encontrar placeholders que atravessam múltiplos runs
@@ -232,41 +267,43 @@ class DocxExporter:
                     current_text = ''
                     start_run_index = -1
                     last_run_index = -1
-                    
+
                     # Percorre todos os runs para encontrar o placeholder completo
                     for run_index, run in enumerate(inline):
                         current_text += run.text
-                        
+
                         # Verifica se o placeholder foi completamente encontrado
-                        if placeholder in current_text:
-                            placeholders_found_in_template.add(placeholder[1:-1])
+                        if normalized_placeholder in self._normalize_for_comparison(current_text):
+                            placeholders_found_in_template.add(field_name)
                             last_run_index = run_index
-                            
+
                             # Encontra o primeiro run do placeholder
                             temp_text = ''
                             for i in range(run_index, -1, -1):
                                 temp_text = inline[i].text + temp_text
-                                if placeholder in temp_text:
+                                if normalized_placeholder in self._normalize_for_comparison(temp_text):
                                     start_run_index = i
                                     break
-                            
+
                             # Preserva formatação do primeiro run
                             first_run = inline[start_run_index]
-                            
+
                             # Calcula o texto total dos runs do placeholder
                             total_text = ''.join(r.text for r in inline[start_run_index:last_run_index+1])
-                            total_text = total_text.replace(placeholder, str(value))
-                            
+                            idx = self._normalize_for_comparison(total_text).find(normalized_placeholder)
+                            end_idx = idx + len(normalized_placeholder)
+                            total_text = total_text[:idx] + str(value) + total_text[end_idx:]
+
                             # Remove runs extras
                             for extra_run in inline[start_run_index+1:last_run_index+1]:
                                 extra_run.text = ''
-                            
+
                             # Substitui no primeiro run
                             first_run.text = total_text
-                            
+
                             placeholder_found = True
                             break
-                        
+
                         if placeholder_found:
                             break
 
