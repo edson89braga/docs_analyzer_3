@@ -431,6 +431,24 @@ def compute_llm_pf_auto_token_limit(prompt_messages: List[Dict[str, str]], extra
 # input real como "at least N", ou seja, um piso — a folga cobre essa imprecisão declarada.
 LLM_PF_RETRY_SAFETY_BUFFER = 512
 
+# Timeout do client HTTP para chamadas llm_pf. Com thinking ativo o Qwen3.5 pode levar vários
+# minutos para esgotar o orçamento de saída (LLM_PF_MAX_OUTPUT_TOKENS_THINKING=24_000): um timeout
+# curto demais interrompe a conexão antes do servidor sequer devolver uma resposta (truncada ou
+# não) — nesse caso o erro chega como APITimeoutError genérico, não como LLMTruncatedResponseError
+# (que exige uma resposta HTTP real e observável; ver incidente de 24-25/ago/2026, reproduzido em
+# ~9min: 3 tentativas de 180s cada). Sem thinking a saída é bem menor (LLM_PF_MAX_OUTPUT_TOKENS) e
+# 180s é suficiente. Timeout é tratado como categoria própria (ver except (APIError,
+# InternalServerError) em analyze_text_with_llm): não aciona a política de retry de
+# LLMTruncatedResponseError, apenas o retry normal da SDK (LLM_PF_CLIENT_MAX_RETRIES).
+LLM_PF_CLIENT_TIMEOUT_THINKING = 600
+LLM_PF_CLIENT_TIMEOUT_DEFAULT = 300
+
+# max_retries da SDK OpenAI para chamadas llm_pf — mesmo valor com ou sem thinking. Erros de timeout/
+# conexão têm o retry normal e silencioso da própria SDK; a política de retry para truncamento real
+# por loop de raciocínio (LLMTruncatedResponseError) é outra, tratada à parte em
+# `_llm_analysis_thread_func` (thinking -> thinking -> sem thinking, com snackbar/log visíveis).
+LLM_PF_CLIENT_MAX_RETRIES = 2
+
 # Trechos que identificam um erro de contexto excedido nas mensagens do vLLM (endpoint PF) e da OpenAI.
 _CONTEXT_LENGTH_ERROR_MARKERS = (
     "longer than the maximum model length",
@@ -775,25 +793,32 @@ class ContextLengthExceededError(Exception):
     pass
 
 
-class LLMThinkingTruncatedError(Exception):
+class LLMTruncatedResponseError(Exception):
     """
-    Levantada quando o endpoint llm_pf trunca a resposta por esgotamento do orçamento de saída
-    durante o raciocínio (finish_reason='length' com 'content' vazio e enable_thinking=True).
+    O LLM interrompeu a geração por atingir o limite de tokens de saída (finish_reason='length')
+    antes de produzir conteúdo útil — endpoint llm_pf, com 'content' vazio e enable_thinking=True,
+    tipicamente com o orçamento de raciocínio (thinking) esgotado.
 
-    É o sintoma de um loop de raciocínio fechado, não de deliberação legítima só longa demais para
-    o orçamento (diagnóstico de outro projeto que consome o mesmo endpoint, em NOTES_LlmAnalysis.md
-    §9: ampliar o teto de tokens não resolve — o loop só repete mais vezes). A mitigação eficaz é
-    repetir a chamada e, persistindo, desativar o thinking; a política de retry fica a cargo do
-    chamador (ver `_llm_analysis_thread_func` em nc_analyze_view.py), não desta função.
+    É sintoma de loop de raciocínio fechado, não de deliberação legítima só longa demais para o
+    orçamento (diagnóstico de outro projeto que consome o mesmo endpoint, NOTES_LlmAnalysis.md §9.4:
+    ampliar o teto de tokens não resolve — o loop só repete mais vezes). Deliberadamente distinta de
+    um timeout de conexão (tratado à parte, com o retry normal da SDK — ver LLM_PF_CLIENT_MAX_RETRIES):
+    aqui o servidor respondeu de fato, com uma resposta observável e truncada.
 
-    Carrega o texto de raciocínio bruto obtido até o corte e o uso de tokens da tentativa
-    descartada — a chamada foi real e cobrada mesmo sem resposta aproveitável, e o chamador soma
-    esse custo ao total reportado ao usuário.
+    Permite ao chamador (`_llm_analysis_thread_func` em nc_analyze_view.py) diferenciar este caso de
+    uma falha de parsing/conteúdo genuína e reagir repetindo a chamada (mesmo teto de saída) antes de
+    cair no fallback sem thinking.
+
+    Attributes:
+        reasoning_text: Texto de raciocínio bruto obtido até o corte, para eventual diagnóstico.
+        token_usage_info: Uso de tokens da tentativa descartada — a chamada foi real e cobrada mesmo
+            sem resposta aproveitável, e o chamador soma esse custo ao total reportado ao usuário.
     """
-    def __init__(self, reasoning_text: Optional[str] = None, token_usage_info: Optional[Dict[str, Any]] = None):
+    def __init__(self, message: str, reasoning_text: Optional[str] = None,
+                 token_usage_info: Optional[Dict[str, Any]] = None) -> None:
+        super().__init__(message)
         self.reasoning_text = reasoning_text
         self.token_usage_info = token_usage_info
-        super().__init__("Resposta truncada durante o raciocínio (finish_reason='length', content vazio).")
 
 
 # --- Função Principal de Análise ---
@@ -843,6 +868,9 @@ def analyze_text_with_llm(
     #chain_result: Optional[Dict[str, Any]] = None
     final_response: Optional[str] = None
     token_usage_info: Optional[Dict[str, Any]] = None
+    # Definido aqui (não só dentro do branch 'llm_pf') para estar sempre disponível nos 'except'
+    # abaixo, inclusive quando o provider não é 'llm_pf' ou a exceção ocorre antes do branch rodar.
+    enable_thinking = False
 
     try:
         if provider == "openai":
@@ -922,6 +950,12 @@ def analyze_text_with_llm(
             raise ValueError("Provedor LangChain OpenAI não implementado.")
 
         elif provider == "llm_pf":
+            # enable_thinking precisa ser conhecido ANTES de instanciar o client: define o timeout da
+            # conexão HTTP (ver LLM_PF_CLIENT_TIMEOUT_* acima — 180s não é suficiente quando o Qwen
+            # raciocina). max_retries da SDK é o mesmo em ambos os casos (LLM_PF_CLIENT_MAX_RETRIES).
+            enable_thinking = is_thinking_enabled(reasoning_effort)
+            client_timeout = LLM_PF_CLIENT_TIMEOUT_THINKING if enable_thinking else LLM_PF_CLIENT_TIMEOUT_DEFAULT
+
             if is_local_mode():
                 # Configurações para o endpoint interno da PF
                 # trust_env=False evita que HTTP_PROXY/HTTPS_PROXY do SO desviem a chamada para o
@@ -933,8 +967,8 @@ def analyze_text_with_llm(
                 client_pf = OpenAI(
                     api_key=api_key_pf,
                     base_url=base_url,
-                    timeout=180,
-                    max_retries=2,
+                    timeout=client_timeout,
+                    max_retries=LLM_PF_CLIENT_MAX_RETRIES,
                     http_client=httpx.Client(trust_env=False)
                 )
             else:
@@ -946,11 +980,11 @@ def analyze_text_with_llm(
                 client_pf = OpenAI(
                     api_key=api_key_pf,
                     base_url=base_url,
-                    timeout=180,
-                    max_retries=2,
+                    timeout=client_timeout,
+                    max_retries=LLM_PF_CLIENT_MAX_RETRIES,
                     http_client=custom_http_client
                 )
-            
+
             if prompt_name == "PROMPT_UNICO_for_INITIAL_ANALYSIS":
                 prompt_list_dicts = prompts[prompt_name]
                 messages = []
@@ -972,8 +1006,11 @@ def analyze_text_with_llm(
 
                 # Qwen3.5 não suporta mais o soft switch '/no_think' no texto (confirmado em teste
                 # manual no endpoint); o controle correto é 'enable_thinking' via chat_template_kwargs.
-                enable_thinking = is_thinking_enabled(reasoning_effort)
-                logger.info(f"Usando {model_pf} com modo de raciocínio {'ativado' if enable_thinking else 'desativado'} (enable_thinking={enable_thinking}).")
+                # (enable_thinking já foi calculado acima, antes de instanciar o client_pf)
+                logger.info(
+                    f"Usando {model_pf} com modo de raciocínio {'ativado' if enable_thinking else 'desativado'} "
+                    f"(enable_thinking={enable_thinking}, timeout={client_timeout}s, max_retries={LLM_PF_CLIENT_MAX_RETRIES})."
+                )
 
                 # Chamada para chat completions (max_tokens limitado ao espaço restante da janela;
                 # em caso de 400 por contexto, a chamada se reajusta e repete uma vez)
@@ -991,7 +1028,7 @@ def analyze_text_with_llm(
 
                 # Uso de tokens é extraído logo após a resposta, antes de qualquer possibilidade de
                 # 'raise' abaixo: precisa estar disponível mesmo quando a tentativa for descartada por
-                # truncamento no raciocínio (LLMThinkingTruncatedError) — a chamada foi real e cobrada,
+                # truncamento no raciocínio (LLMTruncatedResponseError) — a chamada foi real e cobrada,
                 # e o chamador soma esse custo ao total reportado ao usuário mesmo em retry.
                 usage = response.usage
                 if usage:
@@ -1030,16 +1067,21 @@ def analyze_text_with_llm(
 
                     if finish_reason == "length" and enable_thinking:
                         # Sintoma do loop de raciocínio fechado (ver docstring de
-                        # LLMThinkingTruncatedError) — repassa ao chamador para aplicar a política de
+                        # LLMTruncatedResponseError) — repassa ao chamador para aplicar a política de
                         # retry (thinking -> thinking -> sem thinking), em vez de devolver o
                         # raciocínio cru como se fosse a resposta.
+                        _tokens_saida = token_usage_info.get("output_tokens", 0)
                         logger.warning(
                             "Endpoint PF truncou durante o raciocínio (finish_reason=%s, content vazio, "
                             "%d caracteres de raciocínio, %d tokens de saída consumidos). Repassando ao "
                             "chamador para retry.",
-                            finish_reason, len(reasoning_text or ""), token_usage_info.get("output_tokens", 0),
+                            finish_reason, len(reasoning_text or ""), _tokens_saida,
                         )
-                        raise LLMThinkingTruncatedError(reasoning_text, token_usage_info)
+                        raise LLMTruncatedResponseError(
+                            f"LLM interrompeu a geração por limite de tokens (finish_reason={finish_reason}) "
+                            f"antes de produzir conteúdo útil. Orçamento de saída usado: {_tokens_saida} tokens.",
+                            reasoning_text, token_usage_info
+                        )
 
                     # Demais casos (thinking desligado, ou finish_reason != 'length'): aproveitar o
                     # raciocínio como texto bruto é melhor do que devolver nada ao usuário.
@@ -1068,7 +1110,7 @@ def analyze_text_with_llm(
                     final_response = _build_raw_fallback_text(final_response_text, finish_reason)
 
                 # token_usage_info já foi extraído logo após a resposta (ver acima) — precisa estar
-                # disponível mesmo se LLMThinkingTruncatedError for levantada antes deste ponto.
+                # disponível mesmo se LLMTruncatedResponseError for levantada antes deste ponto.
 
             elif prompt_name == "PROMPTS_SEGMENTADOS_for_INITIAL_ANALYSIS":
                 raise ValueError("Modo 'Prompt segmentado' não implementado para provider 'llm_pf'.")
@@ -1107,7 +1149,14 @@ def analyze_text_with_llm(
             else:
                 detail = "O documento filtrado excede o limite de tokens do modelo selecionado."
             raise ContextLengthExceededError(detail) from api_err
-    except LLMThinkingTruncatedError:
+
+        # Timeout de conexão (APITimeoutError, subclasse de APIError) é deliberadamente mantido
+        # específico e à parte de LLMTruncatedResponseError: aqui o servidor não chegou a responder
+        # (a SDK já retentou sozinha até LLM_PF_CLIENT_MAX_RETRIES vezes, com o mesmo timeout, antes
+        # de levantar), então não há resposta truncada observável para diagnosticar como loop de
+        # raciocínio — é engolido abaixo pelo 'except Exception' genérico, como os demais APIError
+        # sem padrão reconhecido.
+    except LLMTruncatedResponseError:
         # Repropaga sem log adicional (já logada no ponto de origem, acima): o chamador decide a
         # política de retry (thinking -> thinking -> sem thinking); aqui seria engolida pelo
         # 'except Exception' genérico abaixo, que não repropaga.

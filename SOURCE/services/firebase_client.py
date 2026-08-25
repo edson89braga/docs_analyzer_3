@@ -670,7 +670,7 @@ class FirebaseClientFirestore:
                 "thinking_habilitado": llm_meta_session.get("thinking_habilitado"),
                 # True apenas quando o thinking foi desativado automaticamente por retry após
                 # truncamento (loop de raciocínio) — distingue de 'thinking_habilitado=False' por
-                # escolha do usuário no nível de reflexão. Ver LLMThinkingTruncatedError.
+                # escolha do usuário no nível de reflexão. Ver LLMTruncatedResponseError.
                 "thinking_desativado_por_erro": llm_meta_session.get("thinking_desativado_por_erro"),
             }
             

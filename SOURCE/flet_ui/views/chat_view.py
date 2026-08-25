@@ -1089,7 +1089,7 @@ class ChatViewContent(ft.Column):
             def _update_ui():
                 if dialog_ref["dialog"] is None:
                     dialog, update_fn = show_cancelable_progress_dialog(
-                        page, "Ocerizando páginas ininteligíveis...", message, ocr_cancel_event.set
+                        page, "Aplicando OCR nas páginas necessárias...", message, ocr_cancel_event.set
                     )
                     dialog_ref["dialog"], dialog_ref["update"] = dialog, update_fn
                 else:

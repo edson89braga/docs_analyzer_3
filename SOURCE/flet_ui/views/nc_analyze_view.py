@@ -51,7 +51,7 @@ _initialize_heavy_utils()
 
 from SOURCE.core.pdf_processor import PDFDocumentAnalyzer, PdfPlumberExtractor
 import SOURCE.core.ai_orchestrator as ai_orchestrator
-from SOURCE.core.ai_orchestrator import ContextLengthExceededError, LLMThinkingTruncatedError
+from SOURCE.core.ai_orchestrator import ContextLengthExceededError, LLMTruncatedResponseError
 from SOURCE.core.doc_generator import DocxExporter
 
 ufs_list = get_lista_ufs_cached()  # TODO: incluir atualização a partir do firestore
@@ -2413,16 +2413,21 @@ class InternalAnalysisController:
         dialog_ref: Dict[str, Any] = {"dialog": None, "update": None}
 
         def _ocr_progress(current: int, total: int, file_name: str, page_num: int):
+            # Chamado diretamente na própria thread de background (não via page.run_thread):
+            # show_cancelable_progress_dialog/update_message já são thread-safe (usam
+            # safe_page_update/safe_control_update, serializados pelo lock global). Despachar via
+            # page.run_thread aqui apenas agenda a atualização de forma assíncrona e sem ordem
+            # garantida em relação ao restante do pipeline, permitindo que o diálogo seja fechado
+            # (ou a página seguinte seja renderizada) fora de ordem — foi o que travava a UI ao
+            # encerrar o diálogo de OCR.
             message = f"Página {current}/{total} — {file_name}, pág. {page_num}"
-            def _update_ui():
-                if dialog_ref["dialog"] is None:
-                    dialog, update_fn = show_cancelable_progress_dialog(
-                        self.page, "Ocerizando páginas ininteligíveis...", message, ocr_cancel_event.set
-                    )
-                    dialog_ref["dialog"], dialog_ref["update"] = dialog, update_fn
-                else:
-                    dialog_ref["update"](message)
-            self.page.run_thread(_update_ui)
+            if dialog_ref["dialog"] is None:
+                dialog, update_fn = show_cancelable_progress_dialog(
+                    self.page, "Aplicando OCR nas páginas necessárias...", message, ocr_cancel_event.set
+                )
+                dialog_ref["dialog"], dialog_ref["update"] = dialog, update_fn
+            else:
+                dialog_ref["update"](message)
 
         recovered_keys, _still_bad_keys = self.pdf_analyzer.apply_ocr_to_unintelligible_pages(
             processed_page_data_combined, all_global_page_keys_ordered, all_texts_to_loop,
@@ -2430,7 +2435,10 @@ class InternalAnalysisController:
         )
 
         if dialog_ref["dialog"] is not None:
-            self.page.run_thread(close_progress_dialog, self.page, dialog_ref["dialog"])
+            # Fechamento síncrono: garante que o diálogo modal esteja de fato fechado no cliente
+            # antes de o pipeline prosseguir para a próxima etapa (TF-IDF) e seu próprio
+            # page.update() final, evitando a corrida com o fechamento agendado assincronamente.
+            close_progress_dialog(self.page, dialog_ref["dialog"])
 
         return recovered_keys
 
@@ -2715,6 +2723,13 @@ class InternalAnalysisController:
         Orquestra a chamada ao modelo de linguagem, gerencia o uso de chaves de API,
         atualiza o estado da UI com os resultados da análise e registra métricas.
 
+        Quando o modo de raciocínio está solicitado (reasoning_effort != 'minimal') e o endpoint
+        llm_pf trunca por loop de raciocínio (LLMTruncatedResponseError — resposta observável com
+        finish_reason='length' e content vazio; timeout de conexão é tratado à parte, com o retry
+        normal da SDK, não entra nesta política), tenta novamente até 3x: thinking -> thinking ->
+        sem thinking, notificando cada retry via snackbar e registrando o resultado final (com/sem
+        thinking) tanto no painel de metadados quanto no Firestore.
+
         Args:
             aggregated_text (str): O texto agregado das páginas relevantes do PDF para análise.
             batch_name (str): Nome do lote de arquivos, usado para identificação nos logs e UI.
@@ -2809,16 +2824,24 @@ class InternalAnalysisController:
                 "input_tokens": 0, "cached_tokens": 0, "output_tokens": 0,
                 "reasoning_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0,
             }
+            logger.info(
+                f"Thread: thinking solicitado={thinking_solicitado} (reasoning_effort='{reasoning_effort}') "
+                f"para '{batch_name}' — até {max_tentativas_llm} tentativa(s) previstas."
+            )
 
             for tentativa_llm in range(1, max_tentativas_llm + 1):
                 try:
+                    logger.info(
+                        f"Thread: análise LLM '{batch_name}' — tentativa {tentativa_llm}/{max_tentativas_llm} "
+                        f"(reasoning_effort='{reasoning_effort_da_tentativa}')."
+                    )
                     llm_response_data, token_usage_info, processing_time_llm = ai_orchestrator.analyze_text_with_llm(
                         key_prompt_group, final_prompts_to_use, aggregated_text,
                         provider, model_name, temperature,
                         decrypted_api_key, loaded_llm_providers,
                         reasoning_effort=reasoning_effort_da_tentativa)
                     break
-                except LLMThinkingTruncatedError as ex_trunc:
+                except LLMTruncatedResponseError as ex_trunc:
                     logger.warning(f"Thread: truncamento por raciocínio na tentativa {tentativa_llm}/"
                                     f"{max_tentativas_llm} para '{batch_name}': {ex_trunc}")
                     if ex_trunc.token_usage_info:
@@ -2847,6 +2870,15 @@ class InternalAnalysisController:
                         thinking_desativado_por_erro = True
 
             thinking_habilitado_na_resposta = thinking_solicitado and not thinking_desativado_por_erro
+
+            # Linha de log incondicional (roda tenha havido retry ou não): é a única forma de
+            # confirmar pelo log, sem depender de reproduzir o erro, se a resposta finalmente usada
+            # veio com o modo de raciocínio ativo ou se caiu no fallback por truncamento.
+            logger.info(
+                f"Thread: análise LLM '{batch_name}' concluída na tentativa {tentativa_llm}/{max_tentativas_llm} "
+                f"— thinking_habilitado={thinking_habilitado_na_resposta}"
+                + (" (FALLBACK sem thinking após truncamento por raciocínio)" if thinking_desativado_por_erro else "")
+            )
 
             if tokens_tentativas_descartadas["total_tokens"] and token_usage_info:
                 # Soma o custo/tokens de tentativas descartadas por truncamento: cada chamada foi

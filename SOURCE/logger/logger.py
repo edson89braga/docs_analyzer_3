@@ -101,6 +101,10 @@ class LoggerSetup:
     _active_cloud_handler_instance: Optional[CloudLogHandler] = None # Para referência
     
     logging.getLogger('httpx').setLevel(logging.WARNING)
+    # O SDK openai loga em DEBUG o payload completo de cada requisição (openai._base_client.log.debug
+    # "Request options: %s"), incluindo as mensagens/prompt inteiros — polui o log em DEBUG sem
+    # necessidade prática. WARNING mantém erros de requisição visíveis e corta esse ruído.
+    logging.getLogger('openai').setLevel(logging.WARNING)
     
     @classmethod
     def _create_file_handler(cls, log_file, formatter, level=logging.DEBUG):
