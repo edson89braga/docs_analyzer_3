@@ -1,26 +1,19 @@
 ## TODO: Próximas Tarefas:
 
-[ ] - Migrar últimos Refactors p/ VM Host
-[ ] - Rafactor admin_streamlit com nova sistemática de logging
-
 [x] - Doc informação padrão
-[.] - Monitorar e corrigir erros de log da versão hospedada
+[x] - Monitorar e corrigir erros de log da versão hospedada
 [x] - Prompt_estruturado editável;
 
 [ ] - Formatar Tipos Penais conforme regex requerido
 
-[ ] - Testes de Score sobre multiplas formas de prompt: modelos, prompts, temperaturas.
 [ ] - endereço customizado: opera-assistente.pf.gov.br
 
-- limite de tokens de 180 e 30k: no analyze e no chat_doc
-- Usar embedding jurídico-brasileiro ?
-- Chunks de conteúdo por contexto em vez de chunks por páginas
 - Refatorar toda arquitetura migrando para modelo de API
 - Usar supabase local em vez de firebase, ou database próprio? 
 - Refazer todo o frontend com React sobre a API desenvolvida
 
 # ----------------------------------
-[ ] - Observalidade com Jaeger + Grafana
+[ ] - Observalidade com Jaeger + Grafana  ?
 
 ===============================================================================================================
 

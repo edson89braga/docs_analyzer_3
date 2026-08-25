@@ -19,10 +19,17 @@ RUN python -m pip install nltk \
 WORKDIR /app
 
 # Copia dependências primeiro para aproveitar o cache do Docker
-COPY pyproject.toml /app/
+COPY pyproject.toml poetry.lock /app/
 
 RUN poetry config virtualenvs.create false \
     && poetry install --no-root --no-interaction --no-ansi
+
+# Troca opencv-python (build com GUI/Qt/X11) pela variante headless: neste container
+# não há display, e o opencv-python "completo" falha ao importar (cv2) por faltar libs
+# X11/Qt na imagem slim (ex.: libxcb.so.1). Não altera pyproject.toml/poetry.lock —
+# ambiente desktop local continua usando opencv-python normal.
+RUN pip uninstall -y opencv-python \
+    && pip install --no-cache-dir opencv-python-headless==5.0.0.93
 
 # Pré-instala os modelos ONNX do RapidOCR (evita download em runtime na VM, que não tem acesso
 # direto à internet — ver NOTES_ocr.md). Os arquivos vêm de modelos_ocr/ (gitignorado, populado

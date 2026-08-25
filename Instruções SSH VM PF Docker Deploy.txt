@@ -5,7 +5,10 @@
 # Para criar a imagem e exportar em .tar:
 
 >>> docker build -t nome_container .
+>>> docker build -t opera_app_image .
+
 >>> docker save -o nome_container.tar nome_container:latest
+>>> docker save -o opera_app_image.tar opera_app_image
 
 ==================================================================================================================
 # Para transferir pastas e arquivos do computador local para a VM:
@@ -115,6 +118,10 @@ exit
 >>> sudo reboot
 
 >>> docker ps # mostra todos os contêineres rodando no Docker
+
+    Se não estiver de pé:
+      >>> cd /home/sti/Deploy_PF && sudo docker-compose up -d
+      >>> docker ps # novamente
 
 ==================================================================================================================
 
