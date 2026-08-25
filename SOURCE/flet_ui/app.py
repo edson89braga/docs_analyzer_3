@@ -35,7 +35,11 @@ from SOURCE.logger.logger import LoggerSetup
 from SOURCE.logger.cloud_logger_handler import context_wrap
 
 # --- Rastreamento Global de Conexões ---
-global_active_sessions = set()
+# Mapeia session_id -> e-mail do usuário (None até a autenticação completar, ver
+# login_view.py:handle_login_click e load_auth_state_from_storage). Espelhado na
+# tabela `active_sessions` do SQLite local (LocalDBManager) para sobreviver a
+# restart do processo e permitir consulta pontual — ver NOTES_monitoramento.md.
+global_active_sessions: dict[str, Optional[str]] = {}
 global_active_sessions_lock = threading.Lock()
 
 auth_manager = FbManagerAuth()
@@ -437,8 +441,10 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
     page.on_view_pop = None # Não usamos a pilha de views padrão com este layout
 
     with global_active_sessions_lock:
-        global_active_sessions.add(page.session_id)
-        logger.info(f"[MONITORIA] Nova sessão. Usuários conectados agora: {len(global_active_sessions)}")
+        global_active_sessions[page.session_id] = None
+        logger.info(f"[MONITORIA] Nova sessão ({page.session_id}). Usuários conectados agora: {len(global_active_sessions)}")
+
+    LocalDBManager().register_session_connect(page.session_id)
 
     LoggerSetup.set_session_context(page.session_id)
 
@@ -507,8 +513,10 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         user_email_disconnected = page.session.get("auth_user_email") or "Anônimo"                                  
 
         with global_active_sessions_lock:
-            global_active_sessions.discard(page.session_id)
+            global_active_sessions.pop(page.session_id, None)
             logger.info(f"[MONITORIA] Sessão encerrada ({user_email_disconnected}). Usuários conectados agora: {len(global_active_sessions)}")
+
+        LocalDBManager().register_session_disconnect(page.session_id)
 
         clear_user_cache(page)
 
@@ -584,6 +592,15 @@ def main(page: ft.Page, dev_mode: bool = DEV_MODE):
         # Se autenticado, carrega as configurações em uma thread
         if page.session.contains_key("auth_id_token"):
             logger.debug("Usuário autenticado. Disparando carregamento de settings em background.")
+
+            # Sessão restaurada do client_storage (reload/reconexão) já vem autenticada
+            # sem passar por login_view.handle_login_click — associa aqui para que o
+            # monitoramento reflita o usuário também nesse caminho.
+            restored_email = page.session.get("auth_user_email")
+            if restored_email:
+                with global_active_sessions_lock:
+                    global_active_sessions[page.session_id] = restored_email
+                LocalDBManager().register_session_user(page.session_id, restored_email)
 
             if not app_cache.heavy_imports_loading_event.is_set():
                 logger.debug("Iniciando pré-carregamento de módulos pesados em background (modo local).")

@@ -33,6 +33,7 @@ context_exports/
 /tests_scripts
 /notebooks
 /docs
+/notes
 extract_pyfiles*.py
 teste_int.py
 pyinstaller_files

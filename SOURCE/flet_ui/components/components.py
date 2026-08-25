@@ -239,11 +239,21 @@ def show_cancelable_progress_dialog(
     return dialog, update_message
 
 def close_progress_dialog(page: ft.Page, dialog: ft.AlertDialog):
-    """Fecha e remove da página um diálogo criado por show_cancelable_progress_dialog."""
+    """Fecha e remove da página um diálogo criado por show_cancelable_progress_dialog.
+
+    Após o `page.update()` que fecha o diálogo, aguarda brevemente antes de retornar: o
+    cliente (Flutter web) ainda está processando a animação de fechamento do modal, e um
+    novo `page.update()`/`page.run_thread` disparado pelo chamador na sequência imediata
+    (como ocorre em `_run_auto_ocr_step`, que emite "Etapa 2/5..." logo em seguida) pode
+    chegar ao cliente antes de a animação terminar e travar a UI (tela cinza, exige
+    refresh) — mesma classe de corrida já mitigada em `close_dialog`
+    (`show_confirmation_dialog`) com `threading.Timer(0.1, ...)`.
+    """
     dialog.open = False
     safe_page_update(page)
     if dialog in page.overlay:
         page.overlay.remove(dialog)
+    time.sleep(0.3)
 
 ### SelectionDialog: ---------------------------------------------------------------------------------------
 

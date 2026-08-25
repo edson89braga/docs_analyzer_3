@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any
 from SOURCE.settings import PATH_IMAGE_LOGO_DEPARTAMENTO, APP_TITLE, APP_VERSION
 
 from SOURCE.services.firebase_client import FbManagerAuth # Ajuste o caminho se FbManagerAuth estiver em outro lugar
+from SOURCE.services.local_db_manager import LocalDBManager
 #from src.flet_ui.layout import show_proxy_settings_dialog
 from SOURCE.flet_ui.components.components import show_snackbar, show_loading_overlay, hide_loading_overlay, ValidatedTextField, show_confirmation_dialog
 from SOURCE.flet_ui import theme # Para cores de erro, etc.
@@ -230,6 +231,14 @@ def create_login_view(page: ft.Page) -> ft.View:
                 page.session.set("auth_id_token_expires_at", id_token_expires_at)
                 page.session.set("auth_user_email", user_email_from_auth)
                 page.session.set("auth_display_name", display_name)
+
+                # Associa a sessão ao usuário para fins de monitoramento (ver
+                # NOTES_monitoramento.md). Import tardio para evitar ciclo com
+                # app.py, que importa o router, que importa esta view.
+                from SOURCE.flet_ui.app import global_active_sessions, global_active_sessions_lock
+                with global_active_sessions_lock:
+                    global_active_sessions[page.session_id] = user_email_from_auth
+                LocalDBManager().register_session_user(page.session_id, user_email_from_auth)
 
                 # Carrega proativamente todas as chaves de API para a sessão
                 from SOURCE.services import credentials_manager

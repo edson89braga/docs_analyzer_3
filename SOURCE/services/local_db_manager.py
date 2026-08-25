@@ -36,6 +36,7 @@ class LocalDBManager:
                 self.conn = sqlite3.connect(DB_FILE, check_same_thread=False)
                 self.cursor = self.conn.cursor()
                 self._create_tables()
+                self.reset_stale_sessions()
                 logger.info(f"Conexão com o banco de dados local estabelecida em: {DB_FILE}")
             except sqlite3.Error as e:
                 logger.critical(f"Erro crítico ao conectar ou criar o banco de dados local: {e}", exc_info=True)
@@ -71,7 +72,20 @@ class LocalDBManager:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 )
-            ''')            
+            ''')
+
+            # Tabela de monitoramento de sessões ativas (ver NOTES_monitoramento.md).
+            # Persiste o que hoje só existe em memória (`global_active_sessions` em
+            # SOURCE/flet_ui/app.py), permitindo consultar "quem está online agora"
+            # via script, sem depender de grep no log.
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS active_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    user_email TEXT,
+                    connected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    disconnected_at TIMESTAMP
+                )
+            ''')
             self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"Erro ao criar tabelas no banco de dados local: {e}")
@@ -158,6 +172,75 @@ class LocalDBManager:
         except (sqlite3.Error, json.JSONDecodeError) as e:
             logger.error(f"Erro ao recuperar ou decodificar configuração '{key}': {e}")
             return None
+
+    def register_session_connect(self, session_id: str) -> None:
+        """
+        Registra o início de uma sessão Flet na tabela `active_sessions`, sem usuário
+        associado ainda (a autenticação acontece depois — ver `register_session_user`).
+
+        Args:
+            session_id: Identificador da sessão Flet (`page.session_id`).
+        """
+        if not self.conn: return
+        try:
+            self.cursor.execute('''
+                INSERT OR REPLACE INTO active_sessions (session_id, user_email, connected_at, disconnected_at)
+                VALUES (?, NULL, CURRENT_TIMESTAMP, NULL)
+            ''', (session_id,))
+            self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Erro ao registrar conexão da sessão '{session_id}': {e}")
+
+    def register_session_user(self, session_id: str, user_email: str) -> None:
+        """Associa o e-mail do usuário autenticado a uma sessão já registrada como conectada."""
+        if not self.conn: return
+        try:
+            self.cursor.execute(
+                "UPDATE active_sessions SET user_email = ? WHERE session_id = ?",
+                (user_email, session_id)
+            )
+            self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Erro ao associar usuário à sessão '{session_id}': {e}")
+
+    def register_session_disconnect(self, session_id: str) -> None:
+        """Marca uma sessão como encerrada, preservando o histórico na tabela."""
+        if not self.conn: return
+        try:
+            self.cursor.execute(
+                "UPDATE active_sessions SET disconnected_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+                (session_id,)
+            )
+            self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error(f"Erro ao registrar desconexão da sessão '{session_id}': {e}")
+
+    def reset_stale_sessions(self) -> int:
+        """
+        Marca como encerradas todas as sessões que ficaram "abertas" (`disconnected_at`
+        nulo) de uma execução anterior do processo.
+
+        Necessário porque um restart do container zera `global_active_sessions` (em
+        memória, em SOURCE/flet_ui/app.py) mas não fecha as linhas correspondentes
+        aqui — sem isso, sessões de antes do restart apareceriam como "ativas" para
+        sempre. Chamado uma vez na inicialização do singleton.
+
+        Returns:
+            Quantidade de sessões órfãs marcadas como encerradas.
+        """
+        if not self.conn: return 0
+        try:
+            self.cursor.execute(
+                "UPDATE active_sessions SET disconnected_at = CURRENT_TIMESTAMP WHERE disconnected_at IS NULL"
+            )
+            self.conn.commit()
+            count = self.cursor.rowcount
+            if count:
+                logger.info(f"Marcada(s) {count} sessão(ões) órfã(s) como encerrada(s) após reinício do processo.")
+            return count
+        except sqlite3.Error as e:
+            logger.error(f"Erro ao limpar sessões órfãs: {e}")
+            return 0
 
     def close(self):
         """Fecha a conexão com o banco de dados."""
