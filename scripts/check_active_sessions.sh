@@ -2,8 +2,9 @@
 # scripts/check_active_sessions.sh
 #
 # Roda LOCALMENTE (Git Bash no Windows, ou qualquer máquina com `ssh`) e conecta na
-# VM via SSH para consultar a tabela `active_sessions` (SQLite dentro do container),
-# mostrando quem está online agora. Não precisa copiar nada para a VM.
+# VM via SSH para consultar a tabela `active_sessions` (SQLite dentro do container):
+# quem acessou, quando desconectou e por quanto tempo ficou conectado. Não precisa
+# copiar nada para a VM.
 #
 # Configuração (variáveis de ambiente; defaults conforme
 # "Instruções SSH VM PF Docker Deploy.txt"):
@@ -12,9 +13,14 @@
 #   CONTAINER   (default: opera-ia-frontend)      -> repassado ao script remoto
 #   DOCKER_CMD  (default: docker; use 'sudo docker' se necessário)
 #
-# Uso:
-#   ./scripts/check_active_sessions.sh          # só sessões ativas agora
-#   ./scripts/check_active_sessions.sh --all    # inclui histórico de sessões encerradas
+# Uso (argumentos repassados direto para SOURCE/scripts/check_active_sessions.py):
+#   ./scripts/check_active_sessions.sh                    # últimos 7 dias (padrão)
+#   ./scripts/check_active_sessions.sh --active            # só sessões ativas agora
+#   ./scripts/check_active_sessions.sh --days 30           # últimos 30 dias
+#   ./scripts/check_active_sessions.sh --all               # todo o histórico
+#   ./scripts/check_active_sessions.sh --user bruna.bpda   # filtra por e-mail (substring, sem diferenciar maiúsc./minúsc.)
+#   ./scripts/check_active_sessions.sh --summary           # resumo por usuário (sessões, tempo total, último acesso)
+#   ./scripts/check_active_sessions.sh --days 30 --summary # os dois combinados
 
 set -euo pipefail
 

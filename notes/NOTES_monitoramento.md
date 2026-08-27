@@ -59,17 +59,26 @@ apontando para a VM de produção conforme `Instruções SSH VM PF Docker Deploy
 - Persiste em SQLite (sobrevive a restart do container) — diferente do dict em memória,
   que continua existindo só para o log `[MONITORIA]` já existente.
 
-Consulta pontual, também via SSH local (mesmo padrão do `watch_logs.sh`):
+Consulta pontual, também via SSH local (mesmo padrão do `watch_logs.sh`). Por padrão
+mostra os últimos 7 dias (não só quem está ativo agora), com duração calculada por
+sessão:
 
 ```bash
-./scripts/check_active_sessions.sh          # sessões ativas agora
-./scripts/check_active_sessions.sh --all    # inclui histórico de sessões encerradas
+./scripts/check_active_sessions.sh                    # últimos 7 dias (padrão)
+./scripts/check_active_sessions.sh --active           # só sessões ativas agora
+./scripts/check_active_sessions.sh --days 30          # janela maior
+./scripts/check_active_sessions.sh --all              # todo o histórico
+./scripts/check_active_sessions.sh --user bruna.bpda  # filtra por e-mail (substring)
+./scripts/check_active_sessions.sh --summary          # resumo por usuário: nº de sessões, tempo total, último acesso
 ```
 
 O script remoto (`scripts/_remote_check_active_sessions.sh`, enviado via stdin) roda
 `docker exec ... python -m SOURCE.scripts.check_active_sessions` dentro da VM — o módulo
 `SOURCE/scripts/check_active_sessions.py` precisa executar dentro do container porque a
-tabela vive no volume nomeado `opera_data` (`/app/data`, não é bind mount).
+tabela vive no volume nomeado `opera_data` (`/app/data`, não é bind mount). A duração é
+calculada em Python (`disconnected_at - connected_at`, ou `agora - connected_at` para
+sessões ainda abertas, marcadas "(em curso)") — não em SQL, para não misturar convenção
+de fuso horário.
 
 ### Padrão dos scripts de operação (`scripts/`)
 

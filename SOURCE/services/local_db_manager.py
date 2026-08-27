@@ -16,6 +16,12 @@ DB_FILE = APP_DATA_DIR / "local_storage.sqlite"
 _TZ_BRASILIA = timezone(timedelta(hours=-3))
 
 
+def now_brasilia() -> datetime:
+    """Datetime atual em Brasília (UTC-3) — usado para timestamps de `active_sessions`
+    e por `SOURCE/scripts/check_active_sessions.py` (janela de dias, cálculo de duração)."""
+    return datetime.now(_TZ_BRASILIA)
+
+
 def _now_brasilia_str() -> str:
     """
     Horário atual em Brasília (UTC-3), formatado como `CURRENT_TIMESTAMP` do SQLite.
@@ -24,7 +30,7 @@ def _now_brasilia_str() -> str:
     do SQLite, que grava em UTC — mesma abordagem já usada pelo logger de arquivo
     (`SOURCE/logger/logger.py`), para não haver descompasso de 3h entre os dois.
     """
-    return datetime.now(_TZ_BRASILIA).strftime("%Y-%m-%d %H:%M:%S")
+    return now_brasilia().strftime("%Y-%m-%d %H:%M:%S")
 
 class LocalDBManager:
     """
