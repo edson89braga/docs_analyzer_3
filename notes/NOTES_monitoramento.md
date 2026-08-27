@@ -79,6 +79,29 @@ próprio comando SSH, então **nada precisa ser copiado manualmente para a VM**:
 alteração nesses arquivos já vale na próxima execução. `VM_HOST`/`VM_PATH` (e
 `CONTAINER`/`DOCKER_CMD` no segundo) são configuráveis via variável de ambiente.
 
+## 3.1 Ajustes de 26/08/2026
+
+- **`anonymous_user`/`-` em log de rota mesmo autenticado**: Flet dispara
+  `on_route_change` numa thread nova a cada evento, que não herda os contextvars de
+  log (`session_id_ctx`/`user_id_ctx`/`user_email_ctx`) — só threads que o próprio
+  código spawna via `context_wrap` herdam. `route_change_content_only`
+  (`SOURCE/flet_ui/router.py`) agora re-hidrata o contexto a partir de `page.session`
+  (que não sofre desse problema) logo no início, antes de logar. Não é um problema de
+  autenticação — `is_user_authenticated`/verificação de JWT continuavam corretos;
+  forçar reautenticação não teria efeito.
+- **`user_short` no log de arquivo**: `SessionContextFilter` (`SOURCE/logger/logger.py`)
+  agora também injeta `user_short` (parte local do e-mail, ex. `edson.eab` de
+  `edson.eab@pf.gov.br`), logo após o nível no formato. `session_id`/`user_id`
+  continuam no arquivo para quem precisar do detalhe completo; `watch_logs.sh` oculta
+  os dois por padrão (mostra só timestamp/nível/usuário/logger/mensagem) — `--full`
+  mostra a linha crua.
+- **Timestamps de `active_sessions` em UTC**: `CURRENT_TIMESTAMP` do SQLite grava em
+  UTC, 3h à frente de Brasília. `local_db_manager.py` agora usa `_now_brasilia_str()`
+  (mesmo fuso fixo UTC-3 do logger de arquivo) em vez do `CURRENT_TIMESTAMP` nativo.
+  Sessões já registradas antes desse ajuste mantêm `connected_at` em UTC até serem
+  encerradas (o `disconnected_at` delas já sai correto) — inconsistência que se
+  resolve sozinha conforme as sessões antigas forem sendo fechadas.
+
 ## 4. O que ficou fora (avaliar se a dor persistir)
 
 - Log estruturado (JSON) no console / handler do console também identificado por

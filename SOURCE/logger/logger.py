@@ -55,8 +55,10 @@ class ModuleFilter(logging.Filter):
 
 class SessionContextFilter(logging.Filter):
     """
-    Filtro que injeta `session_id` e `user_id` (uid Firebase) em cada LogRecord,
-    lendo os contextvars correspondentes (propagados manualmente para threads via
+    Filtro que injeta `session_id`, `user_id` (uid Firebase) e `user_short` (parte
+    local do e-mail, ex. "edson.eab" de "edson.eab@pf.gov.br" — usado para
+    monitoramento visual, ver `scripts/watch_logs.sh`) em cada LogRecord, lendo os
+    contextvars correspondentes (propagados manualmente para threads via
     `cloud_logger_handler.context_wrap`, já que `threading.Thread` não herda
     contextvars automaticamente).
 
@@ -64,9 +66,11 @@ class SessionContextFilter(logging.Filter):
     handler de console permanece sem esses campos.
     """
     def filter(self, record: logging.LogRecord) -> bool:
-        """Injeta session_id/user_id no record e sempre permite a passagem do log."""
+        """Injeta session_id/user_id/user_short no record e sempre permite a passagem do log."""
         record.session_id = session_id_ctx.get() or "-"
         record.user_id = user_id_ctx.get() or "-"
+        user_email = user_email_ctx.get()
+        record.user_short = user_email.split("@")[0] if user_email else "-"
         return True
 
 class LoggerSetup:
@@ -88,9 +92,12 @@ class LoggerSetup:
                 dt = datetime.fromtimestamp(record.created, tz)
                 return dt.strftime(datefmt or '%Y-%m-%d %H:%M:%S')
         
-        # Formato detalhado (arquivo): inclui session_id/user_id, injetados via SessionContextFilter
-        # (anexado apenas aos handlers de arquivo em _create_file_handler, nunca ao console).
-        fmt = '%(asctime)s | %(levelname)-8s | %(session_id)s | %(user_id)s | %(name)s | %(funcName)s:%(lineno)d | %(message)s' if detailed else '%(message)s'
+        # Formato detalhado (arquivo): inclui user_short/session_id/user_id, injetados
+        # via SessionContextFilter (anexado apenas aos handlers de arquivo em
+        # _create_file_handler, nunca ao console). user_short vem logo após o nível
+        # para leitura rápida (ver scripts/watch_logs.sh); session_id/user_id ficam
+        # atrás dele para quem precisar do detalhe completo.
+        fmt = '%(asctime)s | %(levelname)-8s | %(user_short)s | %(session_id)s | %(user_id)s | %(name)s | %(funcName)s:%(lineno)d | %(message)s' if detailed else '%(message)s'
         return LocalFormatter(fmt=fmt, datefmt='%Y-%m-%d %H:%M:%S')
         
     _instance: Optional[logging.Logger] = None

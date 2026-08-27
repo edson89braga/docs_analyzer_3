@@ -13,6 +13,7 @@ from pathlib import Path
 
 from SOURCE.settings import UPLOAD_TEMP_DIR
 from SOURCE.logger.cloud_logger_handler import context_wrap
+from SOURCE.logger.logger import LoggerSetup
 
 from .theme import COLOR_WARNING, COLOR_ERROR, PADDING_L 
 from .layout import create_app_bar, _find_nav_index_for_route, route_to_base_nav_index, icones_navegacao
@@ -241,6 +242,17 @@ def route_change_content_only(
         content_container_for_main_layout (ft.Container): O container onde o conteúdo principal será carregado.
         route (str): A rota para a qual o aplicativo está navegando.
     """
+    # Flet dispara este callback numa thread própria por evento, que não herda os
+    # contextvars de log (session_id_ctx/user_id_ctx/user_email_ctx) setados no
+    # on_connect/login — diferente das threads que o próprio código spawna via
+    # `context_wrap` (ver cloud_logger_handler.py). Sem isto, todo log daqui pra
+    # baixo (incluindo o de _load_and_set_view, spawnado via context_wrap a partir
+    # desta thread) cai no valor default ("anonymous_user"/"-"), mesmo com o usuário
+    # autenticado — `page.session` não sofre desse problema, então é a fonte confiável
+    # para re-hidratar o contexto a cada navegação.
+    LoggerSetup.set_session_context(page.session_id)
+    LoggerSetup.set_cloud_user_context(page.session.get("auth_user_id"), page.session.get("auth_user_email"))
+
     logger.info(f"Navegando para rota (content_only): '{route}'")
 
     user_email_active = page.session.get("auth_user_email")

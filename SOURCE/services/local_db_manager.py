@@ -1,6 +1,7 @@
 # FILE: src\services\local_db_manager.py
 
 import logging, threading, sqlite3, json
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from pathlib import Path
 
@@ -11,6 +12,19 @@ logger = logging.getLogger(__name__)
 
 APP_DATA_DIR = Path(APP_DATA_DIR)
 DB_FILE = APP_DATA_DIR / "local_storage.sqlite"
+
+_TZ_BRASILIA = timezone(timedelta(hours=-3))
+
+
+def _now_brasilia_str() -> str:
+    """
+    Horário atual em Brasília (UTC-3), formatado como `CURRENT_TIMESTAMP` do SQLite.
+
+    Usado nos timestamps de `active_sessions` no lugar do `CURRENT_TIMESTAMP` nativo
+    do SQLite, que grava em UTC — mesma abordagem já usada pelo logger de arquivo
+    (`SOURCE/logger/logger.py`), para não haver descompasso de 3h entre os dois.
+    """
+    return datetime.now(_TZ_BRASILIA).strftime("%Y-%m-%d %H:%M:%S")
 
 class LocalDBManager:
     """
@@ -185,8 +199,8 @@ class LocalDBManager:
         try:
             self.cursor.execute('''
                 INSERT OR REPLACE INTO active_sessions (session_id, user_email, connected_at, disconnected_at)
-                VALUES (?, NULL, CURRENT_TIMESTAMP, NULL)
-            ''', (session_id,))
+                VALUES (?, NULL, ?, NULL)
+            ''', (session_id, _now_brasilia_str()))
             self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"Erro ao registrar conexão da sessão '{session_id}': {e}")
@@ -208,8 +222,8 @@ class LocalDBManager:
         if not self.conn: return
         try:
             self.cursor.execute(
-                "UPDATE active_sessions SET disconnected_at = CURRENT_TIMESTAMP WHERE session_id = ?",
-                (session_id,)
+                "UPDATE active_sessions SET disconnected_at = ? WHERE session_id = ?",
+                (_now_brasilia_str(), session_id)
             )
             self.conn.commit()
         except sqlite3.Error as e:
@@ -231,7 +245,8 @@ class LocalDBManager:
         if not self.conn: return 0
         try:
             self.cursor.execute(
-                "UPDATE active_sessions SET disconnected_at = CURRENT_TIMESTAMP WHERE disconnected_at IS NULL"
+                "UPDATE active_sessions SET disconnected_at = ? WHERE disconnected_at IS NULL",
+                (_now_brasilia_str(),)
             )
             self.conn.commit()
             count = self.cursor.rowcount

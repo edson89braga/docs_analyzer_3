@@ -2283,7 +2283,13 @@ class LLMStructuredResultDisplay(ft.Column):
                 else:
                      final_data_for_pydantic[pydantic_field_name] = None
         try:
-            logger.debug(f"Dados para instanciar FormatAnaliseInicial: {final_data_for_pydantic}")
+            # Loga apenas chaves e tipos (não os valores): final_data_for_pydantic carrega o
+            # conteúdo integral da notícia-crime (descrição, pessoas envolvidas com CPF/CNPJ,
+            # justificativas etc.) e não deve ser exposto em texto pleno no arquivo de log.
+            logger.debug(
+                "Dados para instanciar FormatAnaliseInicial (chaves e tipos, sem conteúdo sensível): "
+                f"{ {k: type(v).__name__ for k, v in final_data_for_pydantic.items()} }"
+            )
  
             self.data = formatted_initial_analysis(**final_data_for_pydantic)  # Atualiza o self.data da instância com os dados atuais da UI, já validados por Pydantic
             logger.debug("Dados do formulário estruturado coletados, validados por Pydantic, e self.data atualizado.")

@@ -16,6 +16,10 @@
 #   ./scripts/watch_logs.sh                    # acompanha tudo, sem filtro
 #   ./scripts/watch_logs.sh usuario@dominio     # filtra por e-mail/session_id/texto
 #   ./scripts/watch_logs.sh -n 200 ERROR        # últimas 200 linhas antes de seguir
+#   ./scripts/watch_logs.sh --full              # linha crua, com session_id/user_id
+#
+# Por padrão a exibição é compacta (timestamp | nível | usuário | logger | mensagem);
+# --full mostra a linha completa do arquivo (útil pra correlacionar com Firestore/UID).
 #
 # Pede a senha da VM a cada execução (mesmo fluxo do SSH manual). Ctrl+C encerra.
 
