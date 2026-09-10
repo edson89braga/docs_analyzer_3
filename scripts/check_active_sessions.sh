@@ -48,3 +48,9 @@ env_prefix=""
 [[ -n "${DOCKER_CMD:-}" ]] && env_prefix+="DOCKER_CMD=$(printf '%q' "$DOCKER_CMD") "
 
 ssh "$VM_HOST" "cd $(printf '%q' "$VM_PATH") && ${env_prefix}bash -s --$quoted_args" < "$REMOTE_SCRIPT"
+
+# Em terminal interativo, dá tempo para ler a saída antes do shell fechar.
+if [[ -t 0 && -t 1 ]]; then
+  printf '\nPressione Enter para sair... '
+  read -r _
+fi

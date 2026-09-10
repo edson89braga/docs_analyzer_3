@@ -12,6 +12,10 @@ from time import sleep
 
 import requests
 import urllib3
+try:
+    import flet  # Usado por SessionContextFilter para ler flet.context.page (ver docstring da classe).
+except ImportError:
+    flet = None  # type: ignore[assignment]
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from rich.logging import RichHandler
@@ -57,19 +61,63 @@ class SessionContextFilter(logging.Filter):
     """
     Filtro que injeta `session_id`, `user_id` (uid Firebase) e `user_short` (parte
     local do e-mail, ex. "edson.eab" de "edson.eab@pf.gov.br" — usado para
-    monitoramento visual, ver `scripts/watch_logs.sh`) em cada LogRecord, lendo os
-    contextvars correspondentes (propagados manualmente para threads via
-    `cloud_logger_handler.context_wrap`, já que `threading.Thread` não herda
-    contextvars automaticamente).
+    monitoramento visual, ver `scripts/watch_logs.sh`) em cada LogRecord.
+
+    Fonte primária: `flet.context.page` (API pública do Flet, resolvida via
+    contextvar interno do próprio framework — `flet/core/page.py::_session_page`).
+    O Flet reatribui esse contextvar a cada despacho de evento de controle
+    (`Page.run_thread`, chamado por `Page.on_event_async` para todo handler síncrono
+    de `on_click`/`on_change`/etc.), inclusive dentro de threads criadas via
+    `cloud_logger_handler.context_wrap` — que faz `contextvars.copy_context()` e por
+    isso também copia o contextvar interno do Flet. Diferente dos nossos próprios
+    contextvars (`user_id_ctx`/`session_id_ctx`/`user_email_ctx`), que só são
+    reatribuídos manualmente em pontos específicos (`app.py`, `router.py`,
+    `login_view.py`) e por isso ficam desatualizados sempre que um evento é
+    despachado sem passar por esses pontos, `flet.context.page` está sempre correto
+    para a sessão/thread em execução no momento do log — sem exigir nenhuma chamada
+    manual adicional em cada handler.
+
+    Motivo raiz do problema original: no modo servidor, o Flet despacha TODOS os
+    handlers síncronos (`on_click` etc., de TODAS as sessões/usuários) através de um
+    único `ThreadPoolExecutor` compartilhado (criado uma vez em `flet/app.py`).
+    `contextvars` setados via `.set()` (nossos `user_id_ctx` etc.) ficam presos ao
+    contexto "ambiente" da thread física do pool — que é reaproveitada entre
+    despachos de sessões/usuários diferentes — e não são recopiados a cada despacho.
+    Resultado: a maioria dos logs saía sem identificação ("-"), e quando saía
+    identificada podia (em tese) estar herdando o contexto de um despacho anterior
+    de OUTRO usuário na mesma thread do pool. `flet.context.page` não sofre disso
+    porque o próprio Flet o reatribui explicitamente a cada despacho, na própria
+    thread do pool, imediatamente antes de chamar o handler.
+
+    Fallback: contextvars manuais (cobre execuções sem página Flet ativa — ex.:
+    `admin_py`/Streamlit, scripts, ou início da app antes do login).
 
     Aplicado apenas aos handlers de arquivo (via `_create_file_handler`) — o
     handler de console permanece sem esses campos.
     """
     def filter(self, record: logging.LogRecord) -> bool:
         """Injeta session_id/user_id/user_short no record e sempre permite a passagem do log."""
-        record.session_id = session_id_ctx.get() or "-"
-        record.user_id = user_id_ctx.get() or "-"
-        user_email = user_email_ctx.get()
+        session_id = None
+        user_id = None
+        user_email = None
+
+        if flet is not None:
+            # Leitura best-effort do contexto "ambiente" do Flet: puramente para
+            # enriquecimento do log, nunca deve derrubar a chamada de log em si (e
+            # logar o próprio erro aqui arriscaria reentrância no filtro).
+            try:
+                page = flet.context.page
+                if page is not None:
+                    session_id = page.session_id
+                    user_id = page.session.get("auth_user_id")
+                    user_email = page.session.get("auth_user_email")
+            except Exception:
+                pass
+
+        record.session_id = session_id or session_id_ctx.get() or "-"
+        record.user_id = user_id or user_id_ctx.get() or "-"
+        if not user_email:
+            user_email = user_email_ctx.get()
         record.user_short = user_email.split("@")[0] if user_email else "-"
         return True
 

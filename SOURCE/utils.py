@@ -771,7 +771,7 @@ def cleanup_old_temp_files(upload_temp_dir: str, max_age_seconds: int = 24 * 60 
         logger.warning(f"Diretório temporário '{upload_temp_dir}' não encontrado. Nada a limpar.")
         return
 
-    logger.info(f"Iniciando limpeza de arquivos antigos em '{upload_temp_dir}' (mais de {max_age_seconds / 3600:.1f} horas).")
+    logger.debug(f"Iniciando limpeza de arquivos antigos em '{upload_temp_dir}' (mais de {max_age_seconds / 3600:.1f} horas).")
     current_time = time()
     items_removed_count = 0
     items_failed_to_remove_count = 0
@@ -810,7 +810,12 @@ def cleanup_old_temp_files(upload_temp_dir: str, max_age_seconds: int = 24 * 60 
             logger.error(f"Erro inesperado ao processar ou remover '{item_path}': {e}")
             items_failed_to_remove_count += 1
 
-    logger.info(f"Limpeza concluída. {items_removed_count} itens removidos, {items_failed_to_remove_count} falhas.")
+    if items_removed_count > 0 or items_failed_to_remove_count > 0:
+        logger.info(f"Limpeza concluída. {items_removed_count} itens removidos, {items_failed_to_remove_count} falhas.")
+    else:
+        # Roda a cada desconexão de sessão; sem nada a remover na grande maioria das
+        # execuções, então fica em DEBUG para não poluir o log em INFO sem necessidade.
+        logger.debug(f"Limpeza concluída em '{upload_temp_dir}'. Nenhum item elegível para remoção.")
 
 def register_temp_files_cleanup(temp_dir_to_clean: str):
     # 2. No seu módulo principal, onde você quer que a limpeza seja registrada:
