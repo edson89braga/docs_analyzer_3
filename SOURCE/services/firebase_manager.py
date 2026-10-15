@@ -348,17 +348,20 @@ class FbManagerAdminAuth:
 
         Retorna:
             Um iterador de página (ListUsersPage) que pode ser percorrido com `.iterate_all()`.
+            Em caso de falha, um objeto vazio cujo `.iterate_all()` retorna `[]`.
         """
+        # `self` é obrigatório no lambda: o método é chamado a partir de uma instância.
+        empty_page = type('empty_iterator', (object,), {'iterate_all': lambda self: []})
+
         if not firebase_admin._apps:
             logger.error("Admin SDK não inicializado. Não é possível listar usuários.")
-            # Retorna um objeto que não falhará em .iterate_all() mas será vazio
-            return type('empty_iterator', (object,), {'iterate_all': lambda: []})()
-        
+            return empty_page()
+
         try:
             return firebase_auth.list_users()
         except Exception as e:
             logger.error(f"Erro ao listar usuários via Admin SDK: {e}", exc_info=True)
-            return type('empty_iterator', (object,), {'iterate_all': lambda: []})()
+            return empty_page()
         
     def set_admin_claim(self, user_email: str, is_admin: bool) -> bool:
         """

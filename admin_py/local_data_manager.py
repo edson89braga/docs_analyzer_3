@@ -6,9 +6,12 @@ import re
 from datetime import date, datetime, timezone
 from typing import List, Dict, Any, Set, Tuple, Optional
 
+from google.api_core.exceptions import GoogleAPICallError, RetryError
+
 from SOURCE.services.firebase_manager import (
-    inicializar_firebase, FbManagerFirestore, FbManagerStorage, FbManagerAdminAuth
+    inicializar_firebase, FbManagerStorage, FbManagerAdminAuth
 )
+from admin_py.firestore_client import novo_cliente_firestore
 
 from SOURCE.logger.logger import LoggerSetup
 logger = LoggerSetup.get_logger(__name__)
@@ -21,6 +24,11 @@ os.makedirs(ADMIN_LOGS_DIR, exist_ok=True)
 os.makedirs(ADMIN_METRICS_DIR, exist_ok=True)
 
 SYNC_METADATA_FILE = os.path.join(ADMIN_DATA_DIR, "sync_metadata.json")
+
+# Leitura de métricas no Firestore: o proxy corporativo derruba conexões de forma
+# intermitente, então limitamos a espera (o padrão do SDK é 300s) e tentamos de novo.
+METRICS_TIMEOUT_S = 60
+METRICS_MAX_TENTATIVAS = 3
 
 def save_last_sync_timestamp():
     """Salva o timestamp da sincronização bem-sucedida em um arquivo local."""
@@ -100,7 +108,7 @@ def sync_cloud_data_to_local() -> Tuple[bool, str]:
     try:
         logger.info("Iniciando a sincronização de dados da nuvem...")
         inicializar_firebase()
-        fs_manager = FbManagerFirestore()
+        db = novo_cliente_firestore()
         storage_manager = FbManagerStorage()
         auth_manager = FbManagerAdminAuth()
         
@@ -155,9 +163,17 @@ def sync_cloud_data_to_local() -> Tuple[bool, str]:
 
             # 2. Verifica as Métricas no Firestore
             metrics_collection_path = f'user_metrics/{user_id}/metrics'
-            metrics_ref = fs_manager.db.collection(metrics_collection_path).stream()
+            for tentativa in range(1, METRICS_MAX_TENTATIVAS + 1):
+                try:
+                    metric_docs = list(db.collection(metrics_collection_path).stream(timeout=METRICS_TIMEOUT_S))
+                    break
+                except (GoogleAPICallError, RetryError) as net_err:
+                    logger.warning(f"[{user_id}] Falha ao ler métricas (tentativa {tentativa}/{METRICS_MAX_TENTATIVAS}): {net_err}")
+                    if tentativa == METRICS_MAX_TENTATIVAS:
+                        raise
+                    db = novo_cliente_firestore()
 
-            for metric_doc in metrics_ref:
+            for metric_doc in metric_docs:
                 local_user_metric_dir = os.path.join(ADMIN_METRICS_DIR, user_id)
                 os.makedirs(local_user_metric_dir, exist_ok=True)
                 local_metric_path = os.path.join(local_user_metric_dir, f"{metric_doc.id}.json")
